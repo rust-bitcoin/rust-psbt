@@ -18,9 +18,7 @@ jobs:
         dep: [minimal, recent]
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: stable
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
       - name: "Run tests"
         run: cargo rbmt test stable --lock-file ${{ matrix.dep }}
 
@@ -33,11 +31,10 @@ jobs:
         dep: [minimal, recent]
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: nightly
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
       - name: "Run tests"
-        run: cargo rbmt test nightly --lock-file ${{ matrix.dep }}
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt test nightly --lock-file ${{ matrix.dep }}
 
   MSRV:                         # 2 jobs, one per lock file.
     name: Test - MSRV toolchain
@@ -48,11 +45,11 @@ jobs:
         dep: [minimal, recent]
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
         with:
-          toolchain: "1.74.0"
+          toolchains: "1.74.0"
       - name: "Run tests"
-        run: cargo rbmt test msrv --lock-file ${{ matrix.dep }}
+        run: cargo +1.74.0 rbmt test msrv --lock-file ${{ matrix.dep }}
 
   Lint:
     name: Lint - nightly toolchain
@@ -61,12 +58,10 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: nightly
-          components: clippy
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
       - name: "Run lint"
-        run: cargo rbmt lint
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt lint
 
   Docs:
     name: Docs - stable toolchain
@@ -75,9 +70,7 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: stable
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
       - name: "Build docs"
         run: cargo rbmt docs
 
@@ -88,11 +81,10 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: nightly
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
       - name: "Build docs.rs docs"
-        run: cargo rbmt docsrs
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt docsrs
 
   Format:                       #  1 job, run cargo fmt directly.
     name: Format - nightly toolchain
@@ -101,20 +93,16 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: nightly
-          components: rustfmt
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
       - name: "Check formatting"
-        run: cargo fmt --all -- --check
+        run: cargo +${{ steps.setup.outputs.nightly-version }} fmt --all -- --check
 
   Integration:                  # 1 job, run bitcoin core integration tests using rbmt.
     name: Integration - against bitcoind
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/prepare
-        with:
-          toolchain: stable
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
       - name: "Run integration tests"
         run: cargo rbmt integration
