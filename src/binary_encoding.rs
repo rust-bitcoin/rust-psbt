@@ -271,7 +271,7 @@ mod tests {
         }
 
         #[test]
-        fn early_end_length() {
+        fn early_end_while_decoding_length() {
             let decoder = KeyDecoder::new();
             let result = decoder.end();
 
@@ -281,7 +281,7 @@ mod tests {
         }
 
         #[test]
-        fn early_end_type() {
+        fn early_end_while_decoding_type() {
             let mut decoder = KeyDecoder::new();
             let mut bytes: &[u8] = &[0x01];
             let _ = decoder.push_bytes(&mut bytes);
@@ -333,7 +333,7 @@ mod tests {
         }
 
         #[test]
-        fn read_limit_after_invalid_type() {
+        fn read_limit_in_keylength_state() {
             let mut decoder = KeyDecoder::new();
             let mut bytes: &[u8] = &[0x01, 0x50];
 
@@ -343,7 +343,7 @@ mod tests {
         }
 
         #[test]
-        fn read_limit_in_keyasbytes_state() {
+        fn read_limit_in_keytype_state() {
             let mut decoder = KeyDecoder::new();
             let mut bytes: &[u8] = &[0x03];
             let _ = decoder.push_bytes(&mut bytes);
