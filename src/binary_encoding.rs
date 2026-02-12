@@ -347,7 +347,12 @@ mod tests {
             let mut bytes: &[u8] = &[0x03];
             let _ = decoder.push_bytes(&mut bytes);
 
-            assert_eq!(decoder.read_limit(), 3);
+            let mut bytes: &[u8] = &[0xfd];
+            let needs_more = decoder.push_bytes(&mut bytes).unwrap();
+            assert!(needs_more); // needs_more should be true, because 0xfd requires 3 bytes
+                                 // (prefix byte + 2 data bytes)
+
+            assert_eq!(decoder.read_limit(), 2);
         }
     }
 }
