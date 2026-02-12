@@ -15,8 +15,8 @@ use crate::prelude::Vec;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Key {
-    /// The `keytype` of this PSBT map key (`keytype`).
-    pub type_value: u8,
+    /// The `keytype` of this PSBT map key.
+    pub type_value: u64,
     /// The `keydata` itself in raw byte form.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
     pub key: Vec<u8>,
@@ -151,11 +151,11 @@ impl Decoder for KeyDecoder {
                         return Err(E(Inner::InvalidType));
                     }
 
-                    let key_type_u8 = u8::try_from(key_type).expect("already validated");
+                    let key_type_u64 = u64::try_from(key_type).expect("the maximum encodable value in a compact size unsigned integer fits within u64");
 
                     let data = (*type_and_data).to_vec();
 
-                    self.state = State::Done(Key { type_value: key_type_u8, key: data });
+                    self.state = State::Done(Key { type_value: key_type_u64, key: data });
                 }
                 State::Done(..) => {
                     return Ok(false);
