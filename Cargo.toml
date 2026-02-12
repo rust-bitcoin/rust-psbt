@@ -27,6 +27,7 @@ silent-payments = [] # Silent Payments support
 
 [dependencies]
 bitcoin = { version = "0.32.8", default-features = false }
+encoding = { package = "bitcoin-consensus-encoding", git = "https://github.com/rust-bitcoin/rust-bitcoin", branch = "master", version = "1.0.0-rc.3", default-features = false, features = [ "alloc" ] }
 
 miniscript = { version = "12.2.0", default-features = false, optional = true }
 serde = { version = "1.0.195", default-features = false, features = ["derive", "alloc"], optional = true }
