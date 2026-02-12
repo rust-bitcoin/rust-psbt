@@ -315,15 +315,6 @@ mod tests {
         }
 
         #[test]
-        fn read_limit_after_done_state() {
-            let mut decoder = KeyDecoder::new();
-            let mut bytes: &[u8] = &[0x01, 0x00];
-            let _ = decoder.push_bytes(&mut bytes);
-
-            assert_eq!(decoder.read_limit(), 0);
-        }
-
-        #[test]
         fn empty_slice() {
             let mut decoder = KeyDecoder::new();
             let mut empty: &[u8] = &[];
@@ -353,6 +344,15 @@ mod tests {
                                  // (prefix byte + 2 data bytes)
 
             assert_eq!(decoder.read_limit(), 2);
+        }
+
+        #[test]
+        fn read_limit_in_done_state() {
+            let mut decoder = KeyDecoder::new();
+            let mut bytes: &[u8] = &[0x01, 0x00];
+            let _ = decoder.push_bytes(&mut bytes);
+
+            assert_eq!(decoder.read_limit(), 0);
         }
     }
 }
