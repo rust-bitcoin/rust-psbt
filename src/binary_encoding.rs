@@ -73,8 +73,6 @@ enum KeyDecoderErrorInner {
     Length(ByteVecDecoderError),
     /// Error while decoding the key type.
     Type(CompactSizeDecoderError),
-    /// The keytype is not listed in BIP 174.
-    InvalidType,
     /// Attempt to call `end()` before the key was complete. Holds
     /// a description of the current state.
     EarlyEnd(&'static str),
@@ -87,11 +85,11 @@ impl alloc::fmt::Display for KeyDecoderError {
         match self.0 {
             E::Length(ref e) => write!(f, "key decoder error: {}", e),
             E::Type(ref e) => write!(f, "key decoder error: {}", e),
-            E::InvalidType => write!(f, "type is not defined in BIP 174"),
             E::EarlyEnd(s) => write!(f, "early end of key (still decoding {})", s),
         }
     }
 }
+
 /// The state of the key decoder.
 pub enum KeyDecoderState {
     /// Decoding the key length.
@@ -144,12 +142,6 @@ impl Decoder for KeyDecoder {
                 }
                 State::KeyType(type_and_data, decoder) => {
                     let key_type = decoder.end().map_err(|e| E(Inner::Type(e)))?;
-
-                    let is_valid = matches!(key_type, 0x00..=0x18 | 0xFB | 0xFC);
-
-                    if !is_valid {
-                        return Err(E(Inner::InvalidType));
-                    }
 
                     let key_type_u64 = u64::try_from(key_type).expect("the maximum encodable value in a compact size unsigned integer fits within u64");
 
@@ -245,19 +237,6 @@ mod tests {
 
             assert_eq!(encoded, vec![0x04, 0x02, 0x01, 0x02, 0x03]);
         }
-
-        #[test]
-        fn empty_keydata_all_valid_keytypes() {
-            let valid_types: Vec<u8> = (0x00..=0x18).chain([0xFB, 0xFC]).collect();
-
-            for type_value in valid_types {
-                let key = Key { type_value, key: vec![] };
-                let encoded = encode_key(key);
-                assert_eq!(encoded.len(), 2);
-                assert_eq!(encoded[0], 1);
-                assert_eq!(encoded[1], type_value);
-            }
-        }
     }
 
     mod decode {
@@ -345,60 +324,12 @@ mod tests {
         }
 
         #[test]
-        fn push_bytes_display_invalid_type_error() {
-            let mut decoder = KeyDecoder::new();
-            let mut bytes: &[u8] = &[0x01, 0x50]; // Invalid type
-            let result = decoder.push_bytes(&mut bytes);
-
-            let err = result.unwrap_err();
-            assert_eq!(format!("{}", err), "type is not defined in BIP 174");
-        }
-
-        #[test]
         fn empty_slice() {
             let mut decoder = KeyDecoder::new();
             let mut empty: &[u8] = &[];
 
             let result = decoder.push_bytes(&mut empty).unwrap();
             assert!(result);
-        }
-
-        #[test]
-        fn push_bytes_error_with_invalid_types() {
-            for type_value in 0x19u8..=0xFA {
-                if type_value == 0xFB || type_value == 0xFC {
-                    continue;
-                }
-                let bytes = vec![0x01, type_value];
-                let mut key_decoder = Key::decoder();
-                let result = key_decoder.push_bytes(&mut bytes.as_slice());
-                assert!(result.is_err(), "type is not defined in BIP 174");
-            }
-        }
-
-        #[test]
-        #[should_panic(expected = "call to push_bytes() after decoder errored")]
-        fn push_bytes_after_invalid_type_panics() {
-            let mut decoder = KeyDecoder::new();
-            let mut bytes: &[u8] = &[0x01, 0x50];
-
-            let result = decoder.push_bytes(&mut bytes);
-
-            assert!(result.is_err());
-
-            let mut more: &[u8] = &[0x00];
-            let _ = decoder.push_bytes(&mut more);
-        }
-
-        #[test]
-        #[should_panic(expected = "call to end() after decoder errored")]
-        fn end_after_invalid_type_panics() {
-            let mut decoder = KeyDecoder::new();
-            let mut bytes: &[u8] = &[0x01, 0x50];
-
-            let _ = decoder.push_bytes(&mut bytes);
-
-            let _ = decoder.end();
         }
 
         #[test]
