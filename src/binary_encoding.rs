@@ -335,11 +335,10 @@ mod tests {
         #[test]
         fn read_limit_in_keylength_state() {
             let mut decoder = KeyDecoder::new();
-            let mut bytes: &[u8] = &[0x01, 0x50];
-
+            let mut bytes: &[u8] = &[0x03];
             let _ = decoder.push_bytes(&mut bytes);
 
-            assert_eq!(decoder.read_limit(), 0);
+            assert_eq!(decoder.read_limit(), 3);
         }
 
         #[test]
