@@ -42,6 +42,11 @@ docsrs *flags:
 @update-lock-files: _install-rbmt
   rustup run {{NIGHTLY_VERSION}} cargo rbmt lock
 
+# Update the exposed API files in api/.
+[group('tools')]
+update-api-files: _install-rbmt
+  cargo +{{NIGHTLY_VERSION}} rbmt api
+
 # Run CI tasks with rbmt.
 [group('ci')]
 @ci task toolchain="stable" lock="recent": _install-rbmt

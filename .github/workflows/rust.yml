@@ -52,7 +52,7 @@ jobs:
         run: cargo +1.74.0 rbmt test msrv --lock-file ${{ matrix.dep }}
 
   Lint:
-    name: Lint - nightly toolchain
+    name: Lint and API check
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,6 +62,8 @@ jobs:
         id: setup
       - name: "Run lint"
         run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt lint
+      - name: "Run API check"
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt api
 
   Docs:
     name: Docs - stable toolchain
