@@ -15,4 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/update-nightly@320a06a6647c90ac97452b20fad5b689905a9791
+        with:
+          token: ${{ secrets.RBMT_PRS }}
       - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/update-stable@320a06a6647c90ac97452b20fad5b689905a9791
+        with:
+          token: ${{ secrets.RBMT_PRS }}
