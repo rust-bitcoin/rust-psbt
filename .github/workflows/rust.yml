@@ -1,12 +1,19 @@
----   # rust-psbt CI: If you edit this file please update README.md
+---
+# rust-psbt CI
+#
+# Keep total parallel jobs under 20, the GitHub free tier limit.
+# Current structure uses matrix strategy for test jobs (Stable/Nightly/MSRV)
+# with 2 lock files each (minimal/recent) which each count as a job.
+#
+# ref: https://docs.github.com/en/actions/learn-github-actions/usage-limits-billing-and-administration
+
 on:   # yamllint disable-line rule:truthy
   push:
     branches:
       - master
-      - 'test-ci/**'
   pull_request:
 
-name: Continuous integration
+name: Continuous Integration
 
 jobs:
   Stable:                       # 2 jobs, one per lock file.
@@ -19,8 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
       - name: "Run tests"
-        run: cargo rbmt test stable --lock-file ${{ matrix.dep }}
+        run: cargo +${{ steps.setup.outputs.stable-version }} rbmt test stable --lock-file ${{ matrix.dep }}
 
   Nightly:                      # 2 jobs, one per lock file.
     name: Test - nightly toolchain
@@ -52,42 +60,7 @@ jobs:
         run: cargo +1.74.0 rbmt test msrv --lock-file ${{ matrix.dep }}
 
   Lint:
-    name: Lint - nightly toolchain
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
-        id: setup
-      - name: "Run lint"
-        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt lint
-
-  Docs:
-    name: Docs - stable toolchain
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
-      - name: "Build docs"
-        run: cargo rbmt docs
-
-  Docsrs:
-    name: Docs - nightly toolchain
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
-        id: setup
-      - name: "Build docs.rs docs"
-        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt docsrs
-
-  Format:                       #  1 job, run cargo fmt directly.
-    name: Format - nightly toolchain
+    name: Format and Lint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -97,6 +70,22 @@ jobs:
         id: setup
       - name: "Check formatting"
         run: cargo +${{ steps.setup.outputs.nightly-version }} fmt --all -- --check
+      - name: "Run lint"
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt lint
+
+  Docs:
+    name: Docs and Docs.rs
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rust-bitcoin/rust-bitcoin-maintainer-tools/.github/actions/setup-rbmt@master
+        id: setup
+      - name: "Build docs"
+        run: cargo +${{ steps.setup.outputs.stable-version }} rbmt docs
+      - name: "Build docs.rs docs"
+        run: cargo +${{ steps.setup.outputs.nightly-version }} rbmt docsrs
 
   Integration:                  # 1 job, run bitcoin core integration tests using rbmt.
     name: Integration - against bitcoind
