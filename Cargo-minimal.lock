@@ -58,7 +58,7 @@ dependencies = [
 [[package]]
 name = "bitcoin-consensus-encoding"
 version = "1.0.0-rc.3"
-source = "git+https://github.com/rust-bitcoin/rust-bitcoin?branch=master#a0c63076791095b35e20162edbea2bd90268527d"
+source = "git+https://github.com/rust-bitcoin/rust-bitcoin?branch=master#9ad3bbdb9202bc46a6047b4a684f813298c2396a"
 dependencies = [
  "bitcoin-internals 0.5.0",
 ]
@@ -75,7 +75,7 @@ dependencies = [
 [[package]]
 name = "bitcoin-internals"
 version = "0.5.0"
-source = "git+https://github.com/rust-bitcoin/rust-bitcoin?branch=master#a0c63076791095b35e20162edbea2bd90268527d"
+source = "git+https://github.com/rust-bitcoin/rust-bitcoin?branch=master#9ad3bbdb9202bc46a6047b4a684f813298c2396a"
 dependencies = [
  "hex-conservative 0.3.0",
 ]
