@@ -290,8 +290,7 @@ impl Input {
         TxIn {
             previous_output: self.out_point(),
             script_sig: ScriptBuf::default(),
-            // TODO: Check this ZERO is correct.
-            sequence: self.sequence.unwrap_or(Sequence::ZERO),
+            sequence: self.sequence.unwrap_or(Sequence::MAX),
             witness: Witness::default(),
         }
     }
@@ -310,7 +309,6 @@ impl Input {
         TxIn {
             previous_output: self.out_point(),
             script_sig,
-            // TODO: Check this MAX is correct.
             sequence: self.sequence.unwrap_or(Sequence::MAX),
             witness,
         }
@@ -1311,5 +1309,27 @@ mod test {
         assert!(finalized.partial_sigs.is_empty());
         assert!(finalized.sighash_type.is_none());
         assert!(finalized.bip32_derivations.is_empty());
+    }
+
+    #[test]
+    fn tx_in_defaults_a_missing_sequence_to_final() {
+        // An omitted PSBT_IN_SEQUENCE means the final sequence number for the unsigned and
+        // signed transaction inputs.
+        let mut input = Input::new(&out_point());
+        input.final_script_witness = Some(Witness::from_slice(&[vec![1u8]]));
+
+        assert!(input.sequence.is_none());
+        assert_eq!(input.unsigned_tx_in().sequence, Sequence::MAX);
+        assert_eq!(input.signed_tx_in().sequence, Sequence::MAX);
+    }
+
+    #[test]
+    fn tx_in_preserves_an_explicit_sequence() {
+        let mut input = Input::new(&out_point());
+        input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+        input.final_script_witness = Some(Witness::from_slice(&[vec![1u8]]));
+
+        assert_eq!(input.unsigned_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
+        assert_eq!(input.signed_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
     }
 }
