@@ -40,6 +40,8 @@ mod raw;
 #[cfg(feature = "serde")]
 mod serde_utils;
 mod sighash_type;
+#[cfg(feature = "silent-payments")]
+mod silent_payments;
 mod v0;
 mod version;
 
@@ -55,6 +57,9 @@ pub use crate::finalizer::{
     FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
     InterpreterCheckInputError,
 };
+#[cfg(feature = "silent-payments")]
+#[doc(inline)]
+pub use crate::silent_payments::SpV0Info;
 #[doc(inline)]
 pub use crate::{
     encoding::{

@@ -34,6 +34,8 @@ use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
 use crate::raw::{self, ProprietaryKeyValueIter, UnknownKeyValueIter};
+#[cfg(feature = "silent-payments")]
+use crate::SpV0Info;
 
 /// A key-value map for an output of the corresponding index in the unsigned
 /// transaction.
@@ -64,7 +66,7 @@ pub struct Output {
 
     /// BIP-375: Silent payment v0 address info (66 bytes: scan_key || spend_key).
     #[cfg(feature = "silent-payments")]
-    pub sp_v0_info: Option<Vec<u8>>,
+    pub sp_v0_info: Option<SpV0Info>,
 
     /// BIP-375: Silent payment v0 label (4-byte little-endian u32).
     #[cfg(feature = "silent-payments")]
@@ -174,7 +176,7 @@ pub struct OutputDecoder {
     tap_tree: Option<TapTree>,
     tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     #[cfg(feature = "silent-payments")]
-    sp_v0_info: Option<Vec<u8>>,
+    sp_v0_info: Option<SpV0Info>,
     #[cfg(feature = "silent-payments")]
     sp_v0_label: Option<u32>,
     proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
@@ -591,7 +593,9 @@ impl Decoder for OutputDecoder {
                             InsertPairError::InvalidKeyDataNotEmpty(key),
                         ));
                     }
-                    self.sp_v0_info = Some(bytes.to_vec());
+                    self.sp_v0_info = Some(SpV0Info::from_byte_array(&bytes).map_err(|e| {
+                        DecodeError::InsertPair(InsertPairError::InvalidPublicKey(e.into()))
+                    })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 #[cfg(feature = "silent-payments")]
@@ -829,13 +833,10 @@ impl<'e> OutputMapEncoder<'e> {
 
     #[cfg(feature = "silent-payments")]
     fn sp_v0_info_state(&self) -> Option<EncoderState<'e>> {
-        // Importing inside method to avoid linting issues because feature is disabled
-        use bitcoin_consensus_encoding::BytesEncoder;
-
         match &self.output.sp_v0_info {
             Some(info) => Some(EncoderState::SpV0Info(KeyValueEncoder::from_sized_kv(
                 CompactSizeEncoder::new_u64(PSBT_OUT_SP_V0_INFO),
-                BytesEncoder::without_length_prefix(info.as_slice()),
+                info.psbt_encoder(),
             ))),
             None => self.sp_v0_label_state(),
         }
@@ -1258,8 +1259,6 @@ mod tests {
     #[cfg(feature = "silent-payments")]
     #[test]
     fn silent_payment_output_script_pair() {
-        use alloc::vec;
-
         // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so
         // inspect the encoded key-value pairs directly.
         fn has_script_pair(output: &Output) -> bool {
@@ -1287,7 +1286,7 @@ mod tests {
         assert!(has_script_pair(&ordinary));
 
         let mut derived_sp = ordinary;
-        derived_sp.sp_v0_info = Some(vec![0; 66]);
+        derived_sp.sp_v0_info = Some(sp_v0_info());
         assert!(has_script_pair(&derived_sp));
 
         let mut underived_sp = derived_sp;
@@ -1344,10 +1343,17 @@ mod tests {
     }
 
     #[cfg(feature = "silent-payments")]
+    fn sp_v0_info() -> SpV0Info {
+        let key = bitcoin::CompressedPublicKey::from_slice(&[2; 33])
+            .expect("valid compressed public key");
+        SpV0Info::new(key, key)
+    }
+
+    #[cfg(feature = "silent-payments")]
     #[test]
     fn roundtrip_silent_payment_encoding() {
         let mut output = Output::new(tx_out());
-        output.sp_v0_info = Some(vec![0xAA; 66]);
+        output.sp_v0_info = Some(sp_v0_info());
         output.sp_v0_label = Some(0x1234_5678);
 
         let encoded = crate::encoding::encode_to_vec(&output);

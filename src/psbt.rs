@@ -1981,6 +1981,16 @@ mod tests {
         Output::new(TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() })
     }
 
+    /// A silent payment info whose keys are 0x02 followed by `x` repeated, valid for 1 and 2.
+    #[cfg(feature = "silent-payments")]
+    fn sp_v0_info(x: u8) -> crate::SpV0Info {
+        let mut bytes = [x; 33];
+        bytes[0] = 0x02;
+        let key =
+            bitcoin::CompressedPublicKey::from_slice(&bytes).expect("valid compressed public key");
+        crate::SpV0Info::new(key, key)
+    }
+
     #[test]
     fn constructor_accepts_output_with_script() {
         let constructor = Constructor::<Modifiable>::default()
@@ -2029,7 +2039,7 @@ mod tests {
     fn constructor_accepts_underived_silent_payment_output() {
         // BIP-375: the silent payment info stands in for the script until it is derived.
         let mut output = output_without_script();
-        output.sp_v0_info = Some(vec![0; 66]);
+        output.sp_v0_info = Some(sp_v0_info(2));
 
         assert!(Constructor::<Modifiable>::default().output(output.clone()).is_ok());
         assert!(Constructor::<OutputsOnlyModifiable>::default().output(output).is_ok());
@@ -2059,7 +2069,7 @@ mod tests {
         use crate::raw;
 
         let mut output = output_without_script();
-        output.sp_v0_info = Some(vec![0; 66]);
+        output.sp_v0_info = Some(sp_v0_info(2));
 
         let mut psbt = single_input_psbt();
         // An all-zeros txid and a zero output index are the "not set yet" sentinels, so a

@@ -41,6 +41,8 @@ use crate::consts::{
 use crate::dleq::DleqProof;
 use crate::encoding::KeyValueEncoder;
 use crate::sighash_type::PsbtSighashType;
+#[cfg(feature = "silent-payments")]
+use crate::SpV0Info;
 
 /// Encoder for the PSBT record separator.
 pub struct SeparatorEncoder(ArrayEncoder<1>);
@@ -633,7 +635,29 @@ impl PsbtEncode for DleqProof {
 }
 
 #[cfg(feature = "silent-payments")]
-pub(crate) type SpV0InfoPair<'e> = KeyValueEncoder<CompactSizeEncoder, BytesEncoder<'e>>;
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a [`SpV0Info`]: the scan key followed by the spend key (33 byte + 33 byte).
+    pub struct SpV0InfoEncoder<'e>(Encoder2<ArrayEncoder<33>, ArrayEncoder<33>>);
+}
+
+#[cfg(feature = "silent-payments")]
+impl PsbtEncode for SpV0Info {
+    type Encoder<'e>
+        = SpV0InfoEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        SpV0InfoEncoder::new(Encoder2::new(
+            self.scan_key().psbt_encoder(),
+            self.spend_key().psbt_encoder(),
+        ))
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0InfoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
 
 #[cfg(feature = "silent-payments")]
 pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
