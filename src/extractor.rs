@@ -30,11 +30,27 @@ impl Extractor {
     /// Creates an `Extractor`.
     ///
     /// An extractor can only accept a PSBT that has been finalized.
+    ///
+    /// # Silent payments
+    ///
+    /// BIP-375 has the extractor derive every silent payment output script and verify it against
+    /// the ECDH shares and DLEQ proofs. That needs BIP-352 output derivation and BIP-374 proof
+    /// verification, which this crate does not implement, so with the `silent-payments` feature
+    /// it only rejects a silent payment output whose script has not been computed.
+    ///
+    /// Callers must perform the full verification on the [`Psbt`] before calling this. The
+    /// finalizer keeps the ECDH shares and DLEQ proofs but clears the fields that name input
+    /// public keys, so those keys have to be recovered as a BIP-352 receiver does, from the
+    /// spent outputs and the final scriptSig and witness.
     pub fn new(psbt: Psbt) -> Result<Self, ExtractError> {
         if psbt.inputs.iter().any(|input| !input.is_finalized()) {
             return Err(ExtractError::PsbtNotFinalized);
         }
         let _ = psbt.determine_lock_time()?;
+        #[cfg(feature = "silent-payments")]
+        if let Some(index) = uncomputed_silent_payment_output(&psbt) {
+            return Err(ExtractError::SilentPaymentOutputScriptNotComputed { index });
+        }
 
         Ok(Self(psbt))
     }
@@ -115,6 +131,11 @@ impl Extractor {
 
         let lock_time = self.0.determine_lock_time()?;
 
+        #[cfg(feature = "silent-payments")]
+        if let Some(index) = uncomputed_silent_payment_output(&self.0) {
+            return Err(ExtractTxError::SilentPaymentOutputScriptNotComputed { index });
+        }
+
         let tx = Transaction {
             version: self.0.global.tx_version,
             lock_time,
@@ -126,6 +147,21 @@ impl Extractor {
     }
 }
 
+// BIP-375: "For silent payment capable PSBTs, the transaction extractor should compute all
+// output scripts for silent payment codes and verify they are correct using the ECDH shares
+// and DLEQ proofs, otherwise fail."
+//
+// This is the part of that requirement which needs no cryptography: an output carrying
+// PSBT_OUT_SP_V0_INFO must have its PSBT_OUT_SCRIPT computed, otherwise extraction would
+// produce a transaction with an empty output script. See `Extractor::new` for what callers
+// must verify themselves.
+#[cfg(feature = "silent-payments")]
+fn uncomputed_silent_payment_output(psbt: &Psbt) -> Option<usize> {
+    psbt.outputs
+        .iter()
+        .position(|output| output.sp_v0_info.is_some() && output.script_pubkey.is_empty())
+}
+
 /// Error constructing an `Extractor`.
 #[derive(Debug)]
 pub enum ExtractError {
@@ -133,6 +169,12 @@ pub enum ExtractError {
     PsbtNotFinalized,
     /// Finalizer must be able to determine the lock time.
     DetermineLockTime(DetermineLockTimeError),
+    /// A silent payment output still has no computed output script.
+    #[cfg(feature = "silent-payments")]
+    SilentPaymentOutputScriptNotComputed {
+        /// Index of the offending output.
+        index: usize,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -141,6 +183,9 @@ impl fmt::Display for ExtractError {
             Self::PsbtNotFinalized => write!(f, "attempted to extract tx from an unfinalized PSBT"),
             Self::DetermineLockTime(ref e) =>
                 write_err!(f, "extractor must be able to determine the lock time"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { index } =>
+                write!(f, "silent payment output {} has no computed output script", index),
         }
     }
 }
@@ -151,6 +196,8 @@ impl std::error::Error for ExtractError {
         match self {
             Self::DetermineLockTime(ref e) => Some(e),
             Self::PsbtNotFinalized => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { .. } => None,
         }
     }
 }
@@ -213,6 +260,12 @@ pub enum ExtractTxError {
     Unfinalized,
     /// Failed to determine lock time.
     DetermineLockTime(DetermineLockTimeError),
+    /// A silent payment output still has no computed output script.
+    #[cfg(feature = "silent-payments")]
+    SilentPaymentOutputScriptNotComputed {
+        /// Index of the offending output.
+        index: usize,
+    },
 }
 
 impl fmt::Display for ExtractTxError {
@@ -226,4 +279,80 @@ impl std::error::Error for ExtractTxError {
 
 impl From<DetermineLockTimeError> for ExtractTxError {
     fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
+}
+
+#[cfg(test)]
+#[cfg(feature = "silent-payments")]
+mod tests {
+    use alloc::vec;
+
+    use bitcoin::hashes::Hash;
+    use bitcoin::{Amount, CompressedPublicKey, OutPoint, ScriptBuf, TxOut, Txid, Witness};
+
+    use super::*;
+    use crate::{Global, Input, Output};
+
+    fn finalized_input() -> Input {
+        let mut input = Input::new(&OutPoint { txid: Txid::all_zeros(), vout: 0 });
+        input.witness_utxo =
+            Some(TxOut { value: Amount::from_sat(50_000), script_pubkey: ScriptBuf::new() });
+        let mut witness = Witness::new();
+        witness.push(vec![0x01; 64]);
+        input.final_script_witness = Some(witness);
+        input
+    }
+
+    fn sp_output(script_pubkey: ScriptBuf) -> Output {
+        let mut output = Output::new(TxOut { value: Amount::from_sat(40_000), script_pubkey });
+        let key = CompressedPublicKey::from_slice(&[2; 33]).expect("valid compressed public key");
+        output.sp_v0_info = Some(crate::SpV0Info::new(key, key));
+        output
+    }
+
+    fn psbt_with(output: Output) -> Psbt {
+        Psbt {
+            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            inputs: vec![finalized_input()],
+            outputs: vec![output],
+        }
+    }
+
+    #[test]
+    fn extractor_rejects_uncomputed_silent_payment_output_script() {
+        let psbt = psbt_with(sp_output(ScriptBuf::new()));
+
+        match Extractor::new(psbt) {
+            Err(ExtractError::SilentPaymentOutputScriptNotComputed { index }) =>
+                assert_eq!(index, 0),
+            other =>
+                panic!("expected SilentPaymentOutputScriptNotComputed, got {:?}", other.map(|_| ())),
+        }
+    }
+
+    #[test]
+    fn extract_tx_rejects_uncomputed_silent_payment_output_script() {
+        // An `Extractor` deserialized through serde is built without `Extractor::new`.
+        let extractor = Extractor(psbt_with(sp_output(ScriptBuf::new())));
+
+        assert_eq!(
+            extractor.extract_tx_unchecked_fee_rate(),
+            Err(ExtractTxError::SilentPaymentOutputScriptNotComputed { index: 0 })
+        );
+    }
+
+    #[test]
+    fn extractor_accepts_computed_silent_payment_output_script() {
+        let script = ScriptBuf::from_hex(
+            "51201111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .expect("failed to parse script from hex");
+        let psbt = psbt_with(sp_output(script.clone()));
+
+        let tx = Extractor::new(psbt)
+            .expect("extractor must accept a computed silent payment output")
+            .extract_tx_unchecked_fee_rate()
+            .expect("extraction must succeed");
+
+        assert_eq!(tx.output[0].script_pubkey, script);
+    }
 }
