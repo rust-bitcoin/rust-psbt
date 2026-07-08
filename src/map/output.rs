@@ -133,6 +133,22 @@ impl Output {
         Ok(())
     }
 
+    /// Creates the [`TxOut`] used for PSBT unique identification.
+    pub(crate) fn id_tx_out(&self) -> TxOut {
+        #[cfg(feature = "silent-payments")]
+        if let Some(info) = self.sp_v0_info {
+            // BIP-375: "a zero byte for the version, followed by the 33 bytes of the scan key
+            // and then 33 bytes for the spend key."
+            let mut bytes = Vec::with_capacity(67);
+            bytes.push(0);
+            bytes.extend_from_slice(&info.scan_key().to_bytes());
+            bytes.extend_from_slice(&info.spend_key().to_bytes());
+            return TxOut { value: self.amount, script_pubkey: ScriptBuf::from_bytes(bytes) };
+        }
+
+        self.tx_out()
+    }
+
     /// Combines this [`Output`] with `other` `Output` (as described by BIP 174).
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         if self.amount != other.amount {
