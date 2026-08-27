@@ -13,6 +13,8 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::{ExactSliceEncoder, PsbtDecode, PsbtEncode};
+#[cfg(feature = "silent-payments")]
+use crate::dleq::DleqProof;
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -135,6 +137,18 @@ impl PsbtEncode for CompressedPublicKey {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         ArrayEncoder::without_length_prefix(self.to_bytes())
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+impl PsbtEncode for DleqProof {
+    type Encoder<'e>
+        = BytesEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
 
