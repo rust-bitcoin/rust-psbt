@@ -6,6 +6,8 @@
 use core::fmt;
 
 use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+#[cfg(feature = "silent-payments")]
+use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder2, UnexpectedEofError,
 };
@@ -121,6 +123,18 @@ impl PsbtEncode for KeySource {
             BytesEncoder::without_length_prefix(self.0.as_bytes()),
             <ExactSliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
         ))
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+impl PsbtEncode for CompressedPublicKey {
+    type Encoder<'e>
+        = ArrayEncoder<33>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_bytes())
     }
 }
 
