@@ -15,7 +15,7 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::consensus::encode as consensus;
-use bitcoin::consensus::encode::{serialize, Decodable, Encodable, VarInt, MAX_VEC_SIZE};
+use bitcoin::consensus::encode::{Decodable, Encodable, VarInt, MAX_VEC_SIZE};
 use bitcoin::hex::DisplayHex;
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, ByteVecDecoderError, BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder,
@@ -171,7 +171,9 @@ where
     Subtype: Copy + From<u64> + Into<u64>,
 {
     /// Constructs full [Key] corresponding to this proprietary key type
-    pub fn to_key(&self) -> Key { Key { type_value: 0xFC, key: serialize(self) } }
+    pub fn to_key(&self) -> Key {
+        Key { type_value: 0xFC, key: crate::encoding::encode_to_vec(self) }
+    }
 }
 
 impl<Subtype> TryFrom<Key> for ProprietaryKey<Subtype>
