@@ -13,8 +13,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use bitcoin_consensus_encoding::{
-    CompactSizeEncoder, DecodeError, Decoder, DecoderStatus, Encoder, Encoder2, EncoderStatus,
-    ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
+    CompactSizeEncoder, DecodeError, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4,
+    EncoderStatus, ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
 };
 
 /// Types that can be PSBT-decoded.
@@ -88,6 +88,68 @@ pub fn encode_to_hex<T: PsbtEncode + ?Sized>(
 ) -> String {
     let encoder = value.psbt_encoder();
     bitcoin_consensus_encoding::drain_to_hex(encoder, case)
+}
+
+/// Framing for a single PSBT `<keypair>`.
+///
+/// - `<keypair> := <keylen> <key body> <valuelen> <value body>`
+///
+/// The length prefixes are pulled before the bodies, so both bodies must expose
+/// their statically known length via [`ExactSizeEncoder`].
+pub(crate) struct KeyValueEncoder<K, V> {
+    inner: Encoder4<CompactSizeEncoder, K, CompactSizeEncoder, V>,
+}
+
+impl<K: Encoder, V: Encoder> Encoder for KeyValueEncoder<K, V> {
+    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus { self.inner.advance() }
+}
+
+impl<K: ExactSizeEncoder, V: ExactSizeEncoder> KeyValueEncoder<K, V> {
+    pub fn from_sized_kv(key: K, value: V) -> Self {
+        let key_len = key.len();
+        let value_len = value.len();
+        let inner = Encoder4::new(
+            CompactSizeEncoder::new(key_len),
+            key,
+            CompactSizeEncoder::new(value_len),
+            value,
+        );
+        Self { inner }
+    }
+}
+
+/// Iterator yielding [`PairEncoder`]s for a map, prefixing each key's encoder
+/// with the constant compact-size type value `TYPE`.
+///
+/// Works with any iterator of borrowed `(key, value)` pairs (e.g.
+/// `btree_map::Iter`); the yielded items implement [`ExactSizeEncoder`] when
+/// both key and value encoders do.
+pub(crate) struct KeyValueIter<I, const TYPE: u64>(I);
+
+impl<I, const TYPE: u64> KeyValueIter<I, TYPE> {
+    /// Constructs a pair iterator from the given underlying iterator.
+    pub(crate) fn new(iter: I) -> Self { Self(iter) }
+}
+
+impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE>
+where
+    I: Iterator<Item = (&'e K, &'e V)>,
+    K: PsbtEncode + 'e,
+    V: PsbtEncode + 'e,
+    for<'a> K::Encoder<'a>: ExactSizeEncoder,
+    for<'a> V::Encoder<'a>: ExactSizeEncoder,
+{
+    type Item = KeyValueEncoder<Encoder2<CompactSizeEncoder, K::Encoder<'e>>, V::Encoder<'e>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.0.next()?;
+        Some(KeyValueEncoder::from_sized_kv(
+            Encoder2::new(CompactSizeEncoder::new_u64(TYPE), key.psbt_encoder()),
+            value.psbt_encoder(),
+        ))
+    }
 }
 
 /// An iterator bridge which maps PSBT encodable items to their encoders.

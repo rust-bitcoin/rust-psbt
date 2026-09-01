@@ -9,6 +9,7 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+use alloc::collections::btree_map;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
@@ -23,7 +24,8 @@ use bitcoin_consensus_encoding::{
     ExactSizeEncoder, PrefixedBytesEncoder,
 };
 
-use crate::encoding::{PsbtDecode, PsbtEncode};
+use crate::consts::PSBT_GLOBAL_PROPRIETARY;
+use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 use crate::io::{self, Write};
 use crate::serialize;
 use crate::serialize::{Deserialize, Serialize};
@@ -264,6 +266,24 @@ bitcoin_consensus_encoding::encoder_newtype_exact! {
     pub struct ProprietaryKeyEncoder<'e>(Encoder3<PrefixedBytesEncoder<'e>, CompactSizeEncoder, BytesEncoder<'e>>);
 }
 
+/// Iterator yielding proprietary key-value pair encoders.
+pub(crate) struct ProprietaryKeyValueIter<'e>(
+    pub(crate) btree_map::Iter<'e, ProprietaryKey, Vec<u8>>,
+);
+
+impl<'e> Iterator for ProprietaryKeyValueIter<'e> {
+    type Item =
+        KeyValueEncoder<Encoder2<CompactSizeEncoder, ProprietaryKeyEncoder<'e>>, BytesEncoder<'e>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.0.next()?;
+        Some(KeyValueEncoder::from_sized_kv(
+            Encoder2::new(CompactSizeEncoder::new_u64(PSBT_GLOBAL_PROPRIETARY), key.psbt_encoder()),
+            BytesEncoder::without_length_prefix(value),
+        ))
+    }
+}
+
 /// Error returned when decoding a raw PSBT [`Key`] fails.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyDecodeError {
@@ -347,6 +367,24 @@ impl<'e> KeyEncoder<'e> {
             CompactSizeEncoder::new(body_len),
             type_value_encoder,
             BytesEncoder::without_length_prefix(&key.key),
+        ))
+    }
+}
+
+/// Iterator yielding unknown key-value pair encoders.
+pub(crate) struct UnknownKeyValueIter<'e>(pub(crate) btree_map::Iter<'e, Key, Vec<u8>>);
+
+impl<'e> Iterator for UnknownKeyValueIter<'e> {
+    type Item = KeyValueEncoder<Encoder2<CompactSizeEncoder, BytesEncoder<'e>>, BytesEncoder<'e>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.0.next()?;
+        Some(KeyValueEncoder::from_sized_kv(
+            Encoder2::new(
+                CompactSizeEncoder::new_u64(key.type_value),
+                BytesEncoder::without_length_prefix(&key.key),
+            ),
+            BytesEncoder::without_length_prefix(value),
         ))
     }
 }

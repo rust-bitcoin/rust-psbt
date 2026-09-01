@@ -3,6 +3,7 @@
 //! This module contains [`PsbtEncode`] implementations for types which live outside of rust-psbt
 //! but are not consensus encodable.
 
+use alloc::collections::btree_map;
 use core::fmt;
 
 use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
@@ -12,7 +13,10 @@ use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder2, UnexpectedEofError,
 };
 
-use super::{ExactSliceEncoder, PsbtDecode, PsbtEncode};
+use super::{ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
+use crate::consts::PSBT_GLOBAL_XPUB;
+#[cfg(feature = "silent-payments")]
+use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
 
@@ -31,6 +35,9 @@ impl PsbtEncode for Xpub {
         XpubEncoder::new(ArrayEncoder::without_length_prefix(self.encode()))
     }
 }
+
+pub(crate) type XpubKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
 
 /// Decoder for a serialized [`Xpub`].
 #[derive(Debug, Default)]
@@ -141,6 +148,12 @@ impl PsbtEncode for CompressedPublicKey {
 }
 
 #[cfg(feature = "silent-payments")]
+pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
+    PSBT_GLOBAL_SP_ECDH_SHARE,
+>;
+
+#[cfg(feature = "silent-payments")]
 impl PsbtEncode for DleqProof {
     type Encoder<'e>
         = BytesEncoder<'e>
@@ -151,6 +164,10 @@ impl PsbtEncode for DleqProof {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type DleqKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
 
 #[cfg(test)]
 mod tests {

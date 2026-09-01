@@ -6,10 +6,10 @@ use core::fmt;
 
 use bitcoin::consensus::encode as consensus;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
-use crate::encoding::{PsbtDecode, PsbtEncode};
+use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 use crate::serialize::{self, Deserialize, Serialize};
 
 /// The PSBT version.
@@ -28,6 +28,9 @@ impl Version {
     /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
     pub const TWO: Self = Self(2);
 }
+
+pub(crate) type VersionKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, VersionEncoder<'e>>;
 
 impl Version {
     /// Returns the version number as a `u32`.

@@ -8,9 +8,9 @@
 
 use bitcoin::locktime::absolute;
 use bitcoin::{transaction, Sequence};
-use bitcoin_consensus_encoding::{Decode, Encode};
+use bitcoin_consensus_encoding::{CompactSizeEncoder, Decode, Encode};
 
-use super::{PsbtDecode, PsbtEncode};
+use super::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 
 /// Marker trait for types that delegate consensus encoding and decoding to PSBT.
 ///
@@ -37,8 +37,14 @@ impl<T: PsbtDelegate> PsbtDecode for T {
 /// [`absolute::LockTime`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for absolute::LockTime {}
 
+pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
+
 /// [`Sequence`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Sequence {}
 
 /// [`transaction::Version`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for transaction::Version {}
+
+pub(crate) type TxVersionKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <transaction::Version as PsbtEncode>::Encoder<'e>>;
