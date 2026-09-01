@@ -10,8 +10,10 @@ use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
 use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
+use bitcoin::{ecdsa, PublicKey};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder2, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder, Encoder2,
+    EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
 };
 
 use super::{ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
@@ -169,6 +171,81 @@ impl PsbtEncode for PsbtSighashType {
         ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
     }
 }
+
+/// Encoder for a [`PublicKey`].
+pub enum PublicKeyEncoder {
+    /// Compressed form (33 bytes).
+    Compressed(ArrayEncoder<33>),
+    /// Uncompressed form (65 bytes).
+    Uncompressed(ArrayEncoder<65>),
+}
+
+impl PublicKeyEncoder {
+    fn new(key: &PublicKey) -> Self {
+        if key.compressed {
+            Self::Compressed(ArrayEncoder::without_length_prefix(key.inner.serialize()))
+        } else {
+            Self::Uncompressed(ArrayEncoder::without_length_prefix(
+                key.inner.serialize_uncompressed(),
+            ))
+        }
+    }
+}
+
+impl Encoder for PublicKeyEncoder {
+    fn current_chunk(&self) -> &[u8] {
+        match self {
+            Self::Compressed(e) => e.current_chunk(),
+            Self::Uncompressed(e) => e.current_chunk(),
+        }
+    }
+
+    fn advance(&mut self) -> EncoderStatus {
+        match self {
+            Self::Compressed(e) => e.advance(),
+            Self::Uncompressed(e) => e.advance(),
+        }
+    }
+}
+
+impl ExactSizeEncoder for PublicKeyEncoder {
+    fn len(&self) -> usize {
+        match self {
+            Self::Compressed(e) => e.len(),
+            Self::Uncompressed(e) => e.len(),
+        }
+    }
+}
+
+impl PsbtEncode for PublicKey {
+    type Encoder<'e> = PublicKeyEncoder;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { PublicKeyEncoder::new(self) }
+}
+
+/// Encoder for a [`ecdsa::SerializedSignature`].
+pub struct EcdsaSigEncoder(ecdsa::SerializedSignature);
+
+impl EcdsaSigEncoder {
+    fn new(sig: ecdsa::SerializedSignature) -> Self { Self(sig) }
+}
+
+impl Encoder for EcdsaSigEncoder {
+    fn current_chunk(&self) -> &[u8] { &self.0 }
+
+    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+}
+
+impl ExactSizeEncoder for EcdsaSigEncoder {
+    fn len(&self) -> usize { self.0.len() }
+}
+
+impl PsbtEncode for ecdsa::Signature {
+    type Encoder<'e> = EcdsaSigEncoder;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
+}
+
 #[cfg(feature = "silent-payments")]
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
@@ -206,6 +283,7 @@ pub(crate) type DleqKeyValueIter<'e> =
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use bitcoin::bip32::Fingerprint;
 
@@ -313,5 +391,118 @@ mod tests {
     fn sighash_type_matches_serialize() {
         let v = PsbtSighashType::from_u32(0x01u32);
         assert_eq!(encode_to_vec(&v), v.serialize());
+    }
+
+    #[test]
+    fn public_key_matches_serialize() {
+        use core::str::FromStr;
+
+        let pk = PublicKey::from_str(
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        assert_eq!(encode_to_vec(&pk), Serialize::serialize(&pk));
+
+        // Uncompressed key exercises the 65-byte branch of PublicKeyEncoder.
+        let pk_uc = PublicKey { compressed: false, inner: pk.inner };
+        assert_eq!(encode_to_vec(&pk_uc), Serialize::serialize(&pk_uc));
+    }
+
+    #[test]
+    fn public_key_encoder_len_is_key_size() {
+        use core::str::FromStr;
+
+        let pk = PublicKey::from_str(
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        assert_eq!(pk.psbt_encoder().len(), 33, "compressed public key");
+
+        let pk_uc = PublicKey { compressed: false, inner: pk.inner };
+        assert_eq!(pk_uc.psbt_encoder().len(), 65, "uncompressed public key");
+    }
+
+    #[test]
+    fn ecdsa_signature_matches_serialize() {
+        let der = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
+        let der_sig = bitcoin::secp256k1::ecdsa::Signature::from_der(&der).unwrap();
+        let sighash_enum: bitcoin::EcdsaSighashType = bitcoin::EcdsaSighashType::All;
+        let sig = ecdsa::Signature { signature: der_sig, sighash_type: sighash_enum };
+        assert_eq!(encode_to_vec(&sig), Serialize::serialize(&sig));
+    }
+
+    // Exercises `PsbtEncode for bitcoin::ecdsa::SerializedSignature` (the `BytesEncoder` impl).
+    // DER is variable-length: strict DER pads a scalar with a leading 0x00 when its high bit is
+    // set, so differently-sized signatures must encode to differently-sized values.
+    #[test]
+    fn serialized_ecdsa_signature_encoded_size_varies_with_der_size() {
+        // Builds a `SerializedSignature` (DER bytes + the SIGHASH_ALL byte) from raw DER.
+        fn serialized(der: &[u8]) -> bitcoin::ecdsa::Signature {
+            let sig = bitcoin::secp256k1::ecdsa::Signature::from_der(der).unwrap();
+            ecdsa::Signature { signature: sig, sighash_type: bitcoin::EcdsaSighashType::All }
+        }
+
+        // r = 1, s = 1 -> minimal DER (8 bytes), +1 sighash byte = 9.
+        let minimal = serialized(&[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+
+        // r, s each 32 bytes, high bits clear -> no padding (70-byte DER), +1 = 71.
+        let mid = serialized(&der_with_scalars(&[0x01; 32], &[0x01; 32]));
+
+        // r padded (high bit set), s not -> 71-byte DER, +1 = 72.
+        let one_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x01; 32]));
+
+        // r, s both padded -> 72-byte DER, +1 = 73.
+        let both_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x80; 32]));
+
+        // Use encoder to check len and remove mutants
+        let minimal_enc = EcdsaSigEncoder::new(minimal.serialize());
+        let minimal_len = minimal_enc.len();
+        let mid_enc = EcdsaSigEncoder::new(mid.serialize());
+        let mid_len = mid_enc.len();
+        // Use encode_to_vec for the rest to also exercise PsbtEncode interface
+        let one_pad_len = encode_to_vec(&one_pad).len();
+        let both_pad_len = encode_to_vec(&both_pad).len();
+
+        assert_eq!(minimal_len, 9, "minimal r=s=1 signature");
+        assert_eq!(mid_len, 71, "two unpadded 32-byte scalars");
+        assert_eq!(one_pad_len, 72, "one padded scalar");
+        assert_eq!(both_pad_len, 73, "two padded scalars");
+
+        // The core claim: differently-sized signatures encode to differently-sized values.
+        let mut sizes = vec![minimal_len, mid_len, one_pad_len, both_pad_len];
+        sizes.sort_unstable();
+        sizes.dedup();
+        assert_eq!(sizes.len(), 4, "encoded sizes must all be distinct");
+    }
+
+    // Encodes two big-endian scalars as strict DER: `0x30 <len> 0x02 <rlen> <r> 0x02 <slen> <s>`,
+    // prepending a 0x00 to either scalar whose high bit is set (strict DER minimal encoding).
+    fn der_with_scalars(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
+        let r = padded(r);
+        let s = padded(s);
+        let mut body = Vec::with_capacity(2 + r.len() + 2 + s.len());
+        body.push(0x02);
+        body.push(r.len() as u8);
+        body.extend_from_slice(&r);
+        body.push(0x02);
+        body.push(s.len() as u8);
+        body.extend_from_slice(&s);
+        let mut der = Vec::with_capacity(2 + body.len());
+        der.push(0x30);
+        der.push(body.len() as u8);
+        der.extend_from_slice(&body);
+        der
+    }
+
+    // Prepends a 0x00 byte iff the scalar's high bit is set, per strict DER.
+    fn padded(scalar: &[u8; 32]) -> Vec<u8> {
+        if scalar[0] & 0x80 != 0 {
+            let mut v = Vec::with_capacity(33);
+            v.push(0x00);
+            v.extend_from_slice(scalar);
+            v
+        } else {
+            scalar.to_vec()
+        }
     }
 }
