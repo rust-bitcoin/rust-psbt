@@ -21,7 +21,8 @@ use bitcoin::{
     ecdsa, hashes, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    Decoder, DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith,
+    ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder,
 };
 
 use crate::consts::{
@@ -37,11 +38,23 @@ use crate::consts::{
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
-use crate::encoding::PsbtEncode;
+use crate::encoding::delegates::{
+    FinalScriptWitnessPair, NonWitnessUtxoPair, SequencePair, WitnessUtxoPair,
+};
+use crate::encoding::native::{
+    Bip32DerivationIter, Hash160Iter, Hash256Iter, MinHeightPair, MinTimePair, PartialSigIter,
+    PreviousTxidPair, Ripemd160Iter, ScriptPair, SeparatorEncoder, Sha256Iter, SighashPair,
+    TapInternalKeyPair, TapKeyOriginIter, TapKeySigPair, TapMerkleRootPair, TapScriptIter,
+    TapScriptSigIter,
+};
+#[cfg(feature = "silent-payments")]
+use crate::encoding::native::{DleqPairIter, EcdhPairIter};
+use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode};
 use crate::error::{write_err, FundingUtxoError};
 use crate::io::Cursor;
 use crate::map::Map;
 use crate::psbt::{OutputType, SigningAlgorithm};
+use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::serialize::{Deserialize, Serialize};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 use crate::{raw, serialize, SignError};
@@ -825,21 +838,422 @@ impl Decoder for InputDecoder {
 /// Decodes a sequence of input maps, one per input.
 pub(crate) type InputsDecoder = ExactVecDecoderWith<InputDecoder>;
 
-/// Encoder for a PSBT input map.
-pub struct InputMapEncoder(Vec<u8>);
+type OutputIndexPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
 
-impl Encoder for InputMapEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0[..] }
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+/// State of the input map encoder, one key-value pair per variant.
+enum EncoderState<'e> {
+    PreviousTxid(PreviousTxidPair<'e>),
+    OutputIndex(OutputIndexPair),
+    Sequence(SequencePair<'e>),
+    MinTime(MinTimePair<'e>),
+    MinHeight(MinHeightPair<'e>),
+    NonWitnessUtxo(NonWitnessUtxoPair<'e>),
+    WitnessUtxo(WitnessUtxoPair<'e>),
+    PartialSigs(IterEncoder<PartialSigIter<'e>>),
+    SighashType(SighashPair<'e>),
+    RedeemScript(ScriptPair<'e>),
+    WitnessScript(ScriptPair<'e>),
+    Bip32Derivations(IterEncoder<Bip32DerivationIter<'e>>),
+    FinalScriptSig(ScriptPair<'e>),
+    FinalScriptWitness(FinalScriptWitnessPair<'e>),
+    Ripemd160Preimages(IterEncoder<Ripemd160Iter<'e>>),
+    Sha256Preimages(IterEncoder<Sha256Iter<'e>>),
+    Hash160Preimages(IterEncoder<Hash160Iter<'e>>),
+    Hash256Preimages(IterEncoder<Hash256Iter<'e>>),
+    TapKeySig(TapKeySigPair<'e>),
+    TapScriptSigs(IterEncoder<TapScriptSigIter<'e>>),
+    TapScripts(IterEncoder<TapScriptIter<'e>>),
+    TapKeyOrigins(IterEncoder<TapKeyOriginIter<'e>>),
+    TapInternalKey(TapInternalKeyPair<'e>),
+    TapMerkleRoot(TapMerkleRootPair<'e>),
+    #[cfg(feature = "silent-payments")]
+    Ecdh(IterEncoder<EcdhPairIter<'e>>),
+    #[cfg(feature = "silent-payments")]
+    Dleq(IterEncoder<DleqPairIter<'e>>),
+    Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
+    Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
+    Separator(SeparatorEncoder),
+}
+
+/// Encoder for a PSBT input map.
+///
+/// Walks the map's fields in canonical order without materializing raw `Pair` buffers.
+pub struct InputMapEncoder<'e> {
+    input: &'e Input,
+    state: EncoderState<'e>,
+}
+
+impl<'e> InputMapEncoder<'e> {
+    fn new(input: &'e Input) -> Self {
+        let state = EncoderState::PreviousTxid(KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_IN_PREVIOUS_TXID),
+            input.previous_txid.psbt_encoder(),
+        ));
+        Self { input, state }
+    }
+
+    /// Constructs the next state in field order after the current one, if any.
+    fn next_state(&self) -> Option<EncoderState<'e>> {
+        match &self.state {
+            EncoderState::PreviousTxid(_) =>
+                Some(EncoderState::OutputIndex(self.output_index_pair())),
+            EncoderState::OutputIndex(_) => self.sequence_state(),
+            EncoderState::Sequence(_) => self.min_time_state(),
+            EncoderState::MinTime(_) => self.min_height_state(),
+            EncoderState::MinHeight(_) => self.non_witness_utxo_state(),
+            EncoderState::NonWitnessUtxo(_) => self.witness_utxo_state(),
+            EncoderState::WitnessUtxo(_) => Some(self.partial_sigs_state()),
+            EncoderState::PartialSigs(_) => self.sighash_type_state(),
+            EncoderState::SighashType(_) => self.redeem_script_state(),
+            EncoderState::RedeemScript(_) => self.witness_script_state(),
+            EncoderState::WitnessScript(_) => Some(self.bip32_derivations_state()),
+            EncoderState::Bip32Derivations(_) => self.final_script_sig_state(),
+            EncoderState::FinalScriptSig(_) => self.final_script_witness_state(),
+            EncoderState::FinalScriptWitness(_) => Some(self.ripemd160_state()),
+            EncoderState::Ripemd160Preimages(_) => Some(self.sha256_state()),
+            EncoderState::Sha256Preimages(_) => Some(self.hash160_state()),
+            EncoderState::Hash160Preimages(_) => Some(self.hash256_state()),
+            EncoderState::Hash256Preimages(_) => self.tap_key_sig_state(),
+            EncoderState::TapKeySig(_) => Some(self.tap_script_sigs_state()),
+            EncoderState::TapScriptSigs(_) => Some(self.tap_scripts_state()),
+            EncoderState::TapScripts(_) => Some(self.tap_key_origins_state()),
+            EncoderState::TapKeyOrigins(_) => self.tap_internal_key_state(),
+            EncoderState::TapInternalKey(_) => self.tap_merkle_root_state(),
+            EncoderState::TapMerkleRoot(_) => self.first_collection_after_tap_merkle_root(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Ecdh(_) => Some(self.dleq_state()),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Dleq(_) => Some(self.proprietaries_state()),
+            EncoderState::Proprietaries(_) => Some(self.unknowns_state()),
+            EncoderState::Unknowns(_) => Some(EncoderState::Separator(SeparatorEncoder::new())),
+            EncoderState::Separator(_) => None,
+        }
+    }
+
+    fn first_collection_after_tap_merkle_root(&self) -> Option<EncoderState<'e>> {
+        #[cfg(feature = "silent-payments")]
+        {
+            Some(self.ecdh_state())
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            Some(self.proprietaries_state())
+        }
+    }
+
+    fn output_index_pair(&self) -> OutputIndexPair {
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_IN_OUTPUT_INDEX),
+            ArrayEncoder::without_length_prefix(self.input.spent_output_index.to_le_bytes()),
+        )
+    }
+
+    fn sequence_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.sequence {
+            Some(seq) => Some(EncoderState::Sequence(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_SEQUENCE),
+                seq.psbt_encoder(),
+            ))),
+            None => self.min_time_state(),
+        }
+    }
+
+    fn min_time_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.min_time {
+            Some(min_time) => Some(EncoderState::MinTime(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_REQUIRED_TIME_LOCKTIME),
+                min_time.psbt_encoder(),
+            ))),
+            None => self.min_height_state(),
+        }
+    }
+
+    fn min_height_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.min_height {
+            Some(min_height) => Some(EncoderState::MinHeight(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_REQUIRED_HEIGHT_LOCKTIME),
+                min_height.psbt_encoder(),
+            ))),
+            None => self.non_witness_utxo_state(),
+        }
+    }
+
+    fn non_witness_utxo_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.non_witness_utxo {
+            Some(tx) => {
+                let exact = ExactLenEncoder::new(tx, tx.total_size());
+                Some(EncoderState::NonWitnessUtxo(KeyValueEncoder::from_sized_kv(
+                    CompactSizeEncoder::new_u64(PSBT_IN_NON_WITNESS_UTXO),
+                    exact,
+                )))
+            }
+            None => self.witness_utxo_state(),
+        }
+    }
+
+    fn witness_utxo_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.witness_utxo {
+            Some(tx_out) => Some(EncoderState::WitnessUtxo(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_WITNESS_UTXO),
+                tx_out.psbt_encoder(),
+            ))),
+            None => Some(self.partial_sigs_state()),
+        }
+    }
+
+    fn partial_sigs_state(&self) -> EncoderState<'e> {
+        EncoderState::PartialSigs(IterEncoder::new(PartialSigIter::new(
+            self.input.partial_sigs.iter(),
+        )))
+    }
+
+    fn sighash_type_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.sighash_type {
+            Some(sighash) => Some(EncoderState::SighashType(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_SIGHASH_TYPE),
+                sighash.psbt_encoder(),
+            ))),
+            None => self.redeem_script_state(),
+        }
+    }
+
+    fn redeem_script_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.redeem_script {
+            Some(script) => Some(EncoderState::RedeemScript(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_REDEEM_SCRIPT),
+                script.psbt_encoder(),
+            ))),
+            None => self.witness_script_state(),
+        }
+    }
+
+    fn witness_script_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.witness_script {
+            Some(script) => Some(EncoderState::WitnessScript(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_WITNESS_SCRIPT),
+                script.psbt_encoder(),
+            ))),
+            None => Some(self.bip32_derivations_state()),
+        }
+    }
+
+    fn bip32_derivations_state(&self) -> EncoderState<'e> {
+        EncoderState::Bip32Derivations(IterEncoder::new(Bip32DerivationIter::new(
+            self.input.bip32_derivations.iter(),
+        )))
+    }
+
+    fn final_script_sig_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.final_script_sig {
+            Some(script) => Some(EncoderState::FinalScriptSig(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_FINAL_SCRIPTSIG),
+                script.psbt_encoder(),
+            ))),
+            None => self.final_script_witness_state(),
+        }
+    }
+
+    fn final_script_witness_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.final_script_witness {
+            Some(witness) => {
+                let exact = ExactLenEncoder::new(witness, witness.size());
+                Some(EncoderState::FinalScriptWitness(KeyValueEncoder::from_sized_kv(
+                    CompactSizeEncoder::new_u64(PSBT_IN_FINAL_SCRIPTWITNESS),
+                    exact,
+                )))
+            }
+            None => Some(self.ripemd160_state()),
+        }
+    }
+
+    fn ripemd160_state(&self) -> EncoderState<'e> {
+        EncoderState::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new_bytes(
+            self.input.ripemd160_preimages.iter(),
+        )))
+    }
+
+    fn sha256_state(&self) -> EncoderState<'e> {
+        EncoderState::Sha256Preimages(IterEncoder::new(Sha256Iter::new_bytes(
+            self.input.sha256_preimages.iter(),
+        )))
+    }
+
+    fn hash160_state(&self) -> EncoderState<'e> {
+        EncoderState::Hash160Preimages(IterEncoder::new(Hash160Iter::new_bytes(
+            self.input.hash160_preimages.iter(),
+        )))
+    }
+
+    fn hash256_state(&self) -> EncoderState<'e> {
+        EncoderState::Hash256Preimages(IterEncoder::new(Hash256Iter::new_bytes(
+            self.input.hash256_preimages.iter(),
+        )))
+    }
+
+    fn tap_key_sig_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.tap_key_sig {
+            Some(sig) => Some(EncoderState::TapKeySig(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_TAP_KEY_SIG),
+                sig.psbt_encoder(),
+            ))),
+            None => Some(self.tap_script_sigs_state()),
+        }
+    }
+
+    fn tap_script_sigs_state(&self) -> EncoderState<'e> {
+        EncoderState::TapScriptSigs(IterEncoder::new(TapScriptSigIter::new(
+            self.input.tap_script_sigs.iter(),
+        )))
+    }
+
+    fn tap_scripts_state(&self) -> EncoderState<'e> {
+        EncoderState::TapScripts(IterEncoder::new(TapScriptIter::new(
+            self.input.tap_scripts.iter(),
+        )))
+    }
+
+    fn tap_key_origins_state(&self) -> EncoderState<'e> {
+        EncoderState::TapKeyOrigins(IterEncoder::new(TapKeyOriginIter::new(
+            self.input.tap_key_origins.iter(),
+        )))
+    }
+
+    fn tap_internal_key_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.tap_internal_key {
+            Some(key) => Some(EncoderState::TapInternalKey(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_TAP_INTERNAL_KEY),
+                key.psbt_encoder(),
+            ))),
+            None => self.tap_merkle_root_state(),
+        }
+    }
+
+    fn tap_merkle_root_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.tap_merkle_root {
+            Some(root) => Some(EncoderState::TapMerkleRoot(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_TAP_MERKLE_ROOT),
+                root.psbt_encoder(),
+            ))),
+            None => self.first_collection_after_tap_merkle_root(),
+        }
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn ecdh_state(&self) -> EncoderState<'e> {
+        EncoderState::Ecdh(IterEncoder::new(EcdhPairIter::new(self.input.sp_ecdh_shares.iter())))
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn dleq_state(&self) -> EncoderState<'e> {
+        use crate::encoding::native::DleqPairIter;
+
+        EncoderState::Dleq(IterEncoder::new(DleqPairIter::new(self.input.sp_dleq_proofs.iter())))
+    }
+
+    fn proprietaries_state(&self) -> EncoderState<'e> {
+        EncoderState::Proprietaries(IterEncoder::new(ProprietaryKeyValueIter(
+            self.input.proprietaries.iter(),
+        )))
+    }
+
+    fn unknowns_state(&self) -> EncoderState<'e> {
+        EncoderState::Unknowns(IterEncoder::new(UnknownKeyValueIter(self.input.unknowns.iter())))
+    }
+}
+
+impl Encoder for InputMapEncoder<'_> {
+    fn current_chunk(&self) -> &[u8] {
+        match &self.state {
+            EncoderState::PreviousTxid(e) => e.current_chunk(),
+            EncoderState::OutputIndex(e) => e.current_chunk(),
+            EncoderState::Sequence(e) => e.current_chunk(),
+            EncoderState::MinTime(e) => e.current_chunk(),
+            EncoderState::MinHeight(e) => e.current_chunk(),
+            EncoderState::NonWitnessUtxo(e) => e.current_chunk(),
+            EncoderState::WitnessUtxo(e) => e.current_chunk(),
+            EncoderState::PartialSigs(e) => e.current_chunk(),
+            EncoderState::SighashType(e) => e.current_chunk(),
+            EncoderState::RedeemScript(e) => e.current_chunk(),
+            EncoderState::WitnessScript(e) => e.current_chunk(),
+            EncoderState::Bip32Derivations(e) => e.current_chunk(),
+            EncoderState::FinalScriptSig(e) => e.current_chunk(),
+            EncoderState::FinalScriptWitness(e) => e.current_chunk(),
+            EncoderState::Ripemd160Preimages(e) => e.current_chunk(),
+            EncoderState::Sha256Preimages(e) => e.current_chunk(),
+            EncoderState::Hash160Preimages(e) => e.current_chunk(),
+            EncoderState::Hash256Preimages(e) => e.current_chunk(),
+            EncoderState::TapKeySig(e) => e.current_chunk(),
+            EncoderState::TapScriptSigs(e) => e.current_chunk(),
+            EncoderState::TapScripts(e) => e.current_chunk(),
+            EncoderState::TapKeyOrigins(e) => e.current_chunk(),
+            EncoderState::TapInternalKey(e) => e.current_chunk(),
+            EncoderState::TapMerkleRoot(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Ecdh(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Dleq(e) => e.current_chunk(),
+            EncoderState::Proprietaries(e) => e.current_chunk(),
+            EncoderState::Unknowns(e) => e.current_chunk(),
+            EncoderState::Separator(e) => e.current_chunk(),
+        }
+    }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let finished = match &mut self.state {
+            EncoderState::PreviousTxid(e) => e.advance().has_finished(),
+            EncoderState::OutputIndex(e) => e.advance().has_finished(),
+            EncoderState::Sequence(e) => e.advance().has_finished(),
+            EncoderState::MinTime(e) => e.advance().has_finished(),
+            EncoderState::MinHeight(e) => e.advance().has_finished(),
+            EncoderState::NonWitnessUtxo(e) => e.advance().has_finished(),
+            EncoderState::WitnessUtxo(e) => e.advance().has_finished(),
+            EncoderState::PartialSigs(e) => e.advance().has_finished(),
+            EncoderState::SighashType(e) => e.advance().has_finished(),
+            EncoderState::RedeemScript(e) => e.advance().has_finished(),
+            EncoderState::WitnessScript(e) => e.advance().has_finished(),
+            EncoderState::Bip32Derivations(e) => e.advance().has_finished(),
+            EncoderState::FinalScriptSig(e) => e.advance().has_finished(),
+            EncoderState::FinalScriptWitness(e) => e.advance().has_finished(),
+            EncoderState::Ripemd160Preimages(e) => e.advance().has_finished(),
+            EncoderState::Sha256Preimages(e) => e.advance().has_finished(),
+            EncoderState::Hash160Preimages(e) => e.advance().has_finished(),
+            EncoderState::Hash256Preimages(e) => e.advance().has_finished(),
+            EncoderState::TapKeySig(e) => e.advance().has_finished(),
+            EncoderState::TapScriptSigs(e) => e.advance().has_finished(),
+            EncoderState::TapScripts(e) => e.advance().has_finished(),
+            EncoderState::TapKeyOrigins(e) => e.advance().has_finished(),
+            EncoderState::TapInternalKey(e) => e.advance().has_finished(),
+            EncoderState::TapMerkleRoot(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Ecdh(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::Dleq(e) => e.advance().has_finished(),
+            EncoderState::Proprietaries(e) => e.advance().has_finished(),
+            EncoderState::Unknowns(e) => e.advance().has_finished(),
+            EncoderState::Separator(e) => e.advance().has_finished(),
+        };
+        if finished {
+            loop {
+                match self.next_state() {
+                    Some(next) => self.state = next,
+                    None => return EncoderStatus::Finished,
+                }
+                // Hop past any empty groups (e.g. an empty collection iterator).
+                if !self.current_chunk().is_empty() {
+                    return EncoderStatus::HasMore;
+                }
+            }
+        }
+        EncoderStatus::HasMore
+    }
 }
 
 impl PsbtEncode for Input {
-    type Encoder<'e> = InputMapEncoder;
+    type Encoder<'e> = InputMapEncoder<'e>;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        // TODO: swap out with native pull encoding.
         // `<input-map> := <keypair>* 0x00`
-        InputMapEncoder(self.serialize_map())
+        InputMapEncoder::new(self)
     }
 }
 
@@ -1393,6 +1807,58 @@ mod test {
         match decoder.end() {
             Err(DecodeError::IncorrectNonWitnessUtxo { .. }) => {}
             other => panic!("expected IncorrectNonWitnessUtxo, got {other:?}"),
+        }
+    }
+
+    // Asserts byte-equality between the native pull-encoder and `Map::serialize_map`, and
+    // decodability of that output through the legacy `Input::decode(Read)` waiter.
+    fn check_input(input: &Input) {
+        let encoded = crate::encoding::encode_to_vec(input);
+        assert_eq!(encoded, input.serialize_map());
+        assert_eq!(encoded.last(), Some(&0x00), "input map must end with separator");
+
+        let mut slice: &[u8] = &encoded;
+        let decoded = Input::decode(&mut slice).expect("failed to decode");
+        assert_eq!(decoded, input.clone());
+    }
+
+    #[test]
+    fn encode_default() {
+        let input = Input::new(&out_point());
+        check_input(&input);
+    }
+
+    #[test]
+    fn encode_with_sequence_and_lock_times() {
+        let mut input = Input::new(&out_point());
+        input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+        input.min_time =
+            Some(bitcoin::locktime::absolute::Time::from_consensus(1_700_000_000).unwrap());
+        input.min_height =
+            Some(bitcoin::locktime::absolute::Height::from_consensus(800_000).unwrap());
+        check_input(&input);
+    }
+
+    #[test]
+    fn encode_with_scripts_and_sighash() {
+        let mut input = Input::new(&out_point());
+        input.redeem_script = Some(ScriptBuf::from_bytes(Vec::from([0x51u8])));
+        input.witness_script = Some(ScriptBuf::from_bytes(Vec::from([0x51u8, 0x52])));
+        input.final_script_sig = Some(ScriptBuf::from_bytes(Vec::from([0x51u8])));
+        input.sighash_type = Some(PsbtSighashType::ALL);
+        check_input(&input);
+    }
+
+    #[test]
+    fn encode_with_sighash_types() {
+        for sigh in [
+            PsbtSighashType::ALL,
+            EcdsaSighashType::All.into(),
+            EcdsaSighashType::AllPlusAnyoneCanPay.into(),
+        ] {
+            let mut input = Input::new(&out_point());
+            input.sighash_type = Some(sigh);
+            check_input(&input);
         }
     }
 
