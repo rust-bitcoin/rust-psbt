@@ -7,6 +7,7 @@ use alloc::collections::btree_map;
 use core::fmt;
 
 use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
@@ -132,6 +133,28 @@ impl PsbtEncode for KeySource {
             BytesEncoder::without_length_prefix(self.0.as_bytes()),
             <ExactSliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
         ))
+    }
+}
+
+impl PsbtEncode for absolute::Time {
+    type Encoder<'e>
+        = ArrayEncoder<4>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_consensus_u32().to_le_bytes())
+    }
+}
+
+impl PsbtEncode for absolute::Height {
+    type Encoder<'e>
+        = ArrayEncoder<4>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_consensus_u32().to_le_bytes())
     }
 }
 
