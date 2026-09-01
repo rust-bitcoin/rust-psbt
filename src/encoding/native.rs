@@ -5,12 +5,13 @@
 
 use alloc::collections::btree_map;
 use core::fmt;
+use core::ops::BitOr as _;
 
 use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
-use bitcoin::taproot::{self, LeafVersion, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{self, ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{ecdsa, ScriptBuf, Txid};
@@ -365,6 +366,46 @@ impl PsbtEncode for taproot::Signature {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
 }
 
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a `(ScriptBuf, LeafVersion)` composite (`script bytes + 1 byte for version tag`).
+    pub struct ScriptBufLeafPairEncoder<'e>(Encoder2<BytesEncoder<'e>, ArrayEncoder<1>>);
+}
+
+impl PsbtEncode for (ScriptBuf, LeafVersion) {
+    type Encoder<'e>
+        = ScriptBufLeafPairEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ScriptBufLeafPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
+    }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a serialized [`ControlBlock`] (1 byte parity/version, 32 bytes key, then 32 bytes per merkle node, borrowed without copies).
+    pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, ExactSliceEncoder<'e, TapNodeHash>>);
+}
+
+impl PsbtEncode for ControlBlock {
+    type Encoder<'e> = ControlBlockEncoder<'e>;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        // Method form (bitor) chosen over the | operator: parity contributes bit 0 only and
+        // LeafVersion::to_consensus is always even (soft invariant enforced by the
+        // bitcoin crate), making | vs ^ equivalent and the operator mutation un-killable.
+        // The method form removes the mutation entirely.
+        let first = self.leaf_version.to_consensus().bitor(i32::from(self.output_key_parity) as u8);
+        let head = Encoder2::new(
+            ArrayEncoder::without_length_prefix([first]),
+            ArrayEncoder::without_length_prefix(self.internal_key.serialize()),
+        );
+        let nodes = <ExactSliceEncoder<'_, TapNodeHash>>::without_length_prefix(
+            self.merkle_branch.as_ref(),
+        );
+        ControlBlockEncoder::new(Encoder2::new(head, nodes))
+    }
+}
 #[cfg(feature = "silent-payments")]
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
@@ -711,11 +752,33 @@ mod tests {
     }
 
     #[test]
+    fn control_block_matches_serialize() {
+        use bitcoin::taproot::TaprootBuilder;
+
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let xonly_key = bitcoin::secp256k1::XOnlyPublicKey::from_slice(&[0x51; 32]).unwrap();
+        let builder = TaprootBuilder::new()
+            .add_leaf(0x00, bitcoin::ScriptBuf::from_bytes(Vec::from([0x51])))
+            .expect("leaf");
+        let info = builder.finalize(&secp, xonly_key).expect("finalize succeeds");
+        let script_vec = bitcoin::ScriptBuf::from_bytes(Vec::from([0x51]));
+        let ctrl = info.control_block(&(script_vec, LeafVersion::TapScript)).expect("gets ctrl");
+        assert_eq!(encode_to_vec(&ctrl), Serialize::serialize(&ctrl));
+    }
+
+    #[test]
     fn xonly_leaf_hash_pair_matches_serialize() {
         let key_raw = [0x51u8; 32];
         let leaf = TapLeafHash::hash(&[0x51]);
         let xkey = XOnlyPublicKey::from_slice(&key_raw).unwrap();
         let pair = (xkey, leaf);
+        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
+    }
+
+    #[test]
+    fn scriptbuf_leaf_version_matches_serialize() {
+        let script = ScriptBuf::from_bytes(Vec::from([0x51, 0xac]));
+        let pair = (script, LeafVersion::TapScript);
         assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
     }
 }
