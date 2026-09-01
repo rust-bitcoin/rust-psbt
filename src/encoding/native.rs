@@ -17,12 +17,36 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::{ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
-use crate::consts::PSBT_GLOBAL_XPUB;
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
+use crate::consts::{PSBT_GLOBAL_XPUB, PSBT_SEPARATOR};
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
 use crate::sighash_type::PsbtSighashType;
+
+/// Encoder for the PSBT record separator.
+pub struct SeparatorEncoder(ArrayEncoder<1>);
+
+impl Default for SeparatorEncoder {
+    fn default() -> Self { Self::new() }
+}
+
+impl SeparatorEncoder {
+    /// Encoder for the key-value separator
+    pub fn new() -> Self { Self(ArrayEncoder::without_length_prefix([PSBT_SEPARATOR])) }
+}
+
+impl Encoder for SeparatorEncoder {
+    fn current_chunk(&self) -> &[u8] { self.0.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus { self.0.advance() }
+}
+
+impl ExactSizeEncoder for SeparatorEncoder {
+    // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
+    // former does not
+    fn len(&self) -> usize { 1 }
+}
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -504,5 +528,14 @@ mod tests {
         } else {
             scalar.to_vec()
         }
+    }
+
+    #[test]
+    fn separator_encoder_len_is_always_1() {
+        let mut enc = SeparatorEncoder::new();
+        assert_eq!(enc.len(), 1);
+        assert!(enc.advance().has_finished());
+        // Should not happend in non testing code
+        assert_eq!(enc.len(), 1);
     }
 }
