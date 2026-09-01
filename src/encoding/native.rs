@@ -4,6 +4,7 @@
 //! but are not consensus encodable.
 
 use alloc::collections::btree_map;
+use alloc::vec::Vec;
 use core::fmt;
 use core::ops::BitOr as _;
 
@@ -20,7 +21,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
 };
 
-use super::{ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
+use super::{ExactPrefixedSliceEncoder, ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::consts::{PSBT_GLOBAL_XPUB, PSBT_SEPARATOR};
@@ -379,6 +380,27 @@ impl PsbtEncode for (ScriptBuf, LeafVersion) {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         ScriptBufLeafPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
+    }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
+    pub struct LeafHashVecKeySourceEncoder<'e>(
+        Encoder2<ExactPrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
+    );
+}
+
+impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
+    type Encoder<'e>
+        = LeafHashVecKeySourceEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        LeafHashVecKeySourceEncoder::new(Encoder2::new(
+            <ExactPrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
+            self.1.psbt_encoder(),
+        ))
     }
 }
 
@@ -779,6 +801,15 @@ mod tests {
     fn scriptbuf_leaf_version_matches_serialize() {
         let script = ScriptBuf::from_bytes(Vec::from([0x51, 0xac]));
         let pair = (script, LeafVersion::TapScript);
+        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
+    }
+
+    #[test]
+    fn leafhash_vec_keysource_matches_serialize() {
+        let hashes = vec![TapLeafHash::hash(&[0x01]), TapLeafHash::hash(&[0x02])];
+        let key_source: KeySource =
+            (Fingerprint::from([0x12, 0x34, 0x56, 0x78]), Default::default());
+        let pair = (hashes, key_source);
         assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
     }
 }
