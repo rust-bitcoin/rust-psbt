@@ -20,6 +20,7 @@ use crate::consts::PSBT_GLOBAL_XPUB;
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
+use crate::sighash_type::PsbtSighashType;
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -158,6 +159,16 @@ impl PsbtEncode for absolute::Height {
     }
 }
 
+impl PsbtEncode for PsbtSighashType {
+    type Encoder<'e>
+        = ArrayEncoder<4>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
+    }
+}
 #[cfg(feature = "silent-payments")]
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
@@ -200,6 +211,9 @@ mod tests {
 
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
+    // Byte-equality gates against the legacy `Serialize::serialize`/consensus path that the
+    // current `Map::get_pairs` implementations emit for these field value types.
+    use crate::serialize::Serialize;
 
     fn sample_xpub() -> Xpub {
         use core::str::FromStr;
@@ -293,5 +307,11 @@ mod tests {
             expected.extend(u32::from(*n).to_le_bytes());
         }
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn sighash_type_matches_serialize() {
+        let v = PsbtSighashType::from_u32(0x01u32);
+        assert_eq!(encode_to_vec(&v), v.serialize());
     }
 }
