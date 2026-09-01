@@ -7,10 +7,13 @@ use alloc::collections::btree_map;
 use core::fmt;
 
 use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
+use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
+use bitcoin::taproot::{self, LeafVersion, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
-use bitcoin::{ecdsa, PublicKey};
+use bitcoin::{ecdsa, ScriptBuf, Txid};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder, Encoder2,
     EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
@@ -195,6 +198,59 @@ impl PsbtEncode for PsbtSighashType {
         ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
     }
 }
+impl PsbtEncode for XOnlyPublicKey {
+    type Encoder<'e>
+        = ArrayEncoder<32>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.serialize())
+    }
+}
+
+macro_rules! impl_hash_encoder {
+    ($ty:ty, $len:expr) => {
+        impl PsbtEncode for $ty {
+            type Encoder<'e>
+                = ArrayEncoder<$len>
+            where
+                Self: 'e;
+
+            fn psbt_encoder(&self) -> Self::Encoder<'_> {
+                ArrayEncoder::without_length_prefix(*self.as_byte_array())
+            }
+        }
+    };
+}
+
+impl_hash_encoder!(Txid, 32);
+impl_hash_encoder!(ripemd160::Hash, 20);
+impl_hash_encoder!(hash160::Hash, 20);
+impl_hash_encoder!(sha256::Hash, 32);
+impl_hash_encoder!(sha256d::Hash, 32);
+impl_hash_encoder!(TapLeafHash, 32);
+impl_hash_encoder!(TapNodeHash, 32);
+impl PsbtEncode for LeafVersion {
+    type Encoder<'e>
+        = ArrayEncoder<1>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix([self.to_consensus()])
+    }
+}
+impl PsbtEncode for ScriptBuf {
+    type Encoder<'e>
+        = BytesEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        BytesEncoder::without_length_prefix(self.as_bytes())
+    }
+}
 
 /// Encoder for a [`PublicKey`].
 pub enum PublicKeyEncoder {
@@ -268,6 +324,45 @@ impl PsbtEncode for ecdsa::Signature {
     type Encoder<'e> = EcdsaSigEncoder;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a `(XOnlyPublicKey, TapLeafHash)` composite (32 byte + 32 byte).
+    pub struct XOnlyLeafHashPairEncoder<'e>(Encoder2<ArrayEncoder<32>, ArrayEncoder<32>>);
+}
+
+impl PsbtEncode for (XOnlyPublicKey, TapLeafHash) {
+    type Encoder<'e>
+        = XOnlyLeafHashPairEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        XOnlyLeafHashPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
+    }
+}
+
+/// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
+pub struct TapSigEncoder(taproot::serialized_signature::SerializedSignature);
+
+impl TapSigEncoder {
+    fn new(sig: taproot::serialized_signature::SerializedSignature) -> Self { Self(sig) }
+}
+
+impl Encoder for TapSigEncoder {
+    fn current_chunk(&self) -> &[u8] { &self.0 }
+
+    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+}
+
+impl ExactSizeEncoder for TapSigEncoder {
+    fn len(&self) -> usize { self.0.len() }
+}
+
+impl PsbtEncode for taproot::Signature {
+    type Encoder<'e> = TapSigEncoder;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
 }
 
 #[cfg(feature = "silent-payments")]
@@ -537,5 +632,90 @@ mod tests {
         assert!(enc.advance().has_finished());
         // Should not happend in non testing code
         assert_eq!(enc.len(), 1);
+    }
+
+    #[test]
+    fn xonly_public_key_matches_serialize() {
+        use core::str::FromStr;
+
+        let pk = XOnlyPublicKey::from_str(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        assert_eq!(encode_to_vec(&pk), Serialize::serialize(&pk));
+    }
+
+    #[test]
+    fn hash_types_match_serialize() {
+        let rmd = ripemd160::Hash::hash(&[0x42]);
+        let h160 = hash160::Hash::hash(&[0x42]);
+        let sha = sha256::Hash::hash(&[0x42]);
+        let dsha = sha256d::Hash::hash(&[0x42]);
+        assert_eq!(encode_to_vec(&rmd), Serialize::serialize(&rmd));
+        assert_eq!(encode_to_vec(&h160), Serialize::serialize(&h160));
+        assert_eq!(encode_to_vec(&sha), Serialize::serialize(&sha));
+        assert_eq!(encode_to_vec(&dsha), Serialize::serialize(&dsha));
+    }
+
+    #[test]
+    fn leaf_version_matches_serialize() {
+        let lv = LeafVersion::TapScript;
+        let bytes = encode_to_vec(&lv);
+        // Game between byte form used by `(ScriptBuf, LeafVersion)` serialization; LeafVersion
+        // itself is only ever encoded as the trailing byte within that tuple.
+        assert_eq!(bytes, vec![lv.to_consensus()]);
+    }
+
+    #[test]
+    fn script_buf_matches_serialize() {
+        let script = bitcoin::ScriptBuf::from_bytes(vec::Vec::from([0x76, 0xa9, 0x14, 0xcd, 0xbd]));
+        assert_eq!(encode_to_vec(&script), Serialize::serialize(&script));
+        assert_eq!(encode_to_vec(&script), script.as_bytes());
+    }
+
+    #[test]
+    fn taproot_signature_matches_serialize() {
+        let raw_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        // Non-default sighash adds one byte (65 bytes total); default drops to 64 bytes.
+        let sig =
+            taproot::Signature { signature: raw_sig, sighash_type: bitcoin::TapSighashType::All };
+        assert_eq!(encode_to_vec(&sig), Serialize::serialize(&sig));
+        let default_sig = taproot::Signature {
+            signature: raw_sig,
+            sighash_type: bitcoin::TapSighashType::Default,
+        };
+        assert_eq!(encode_to_vec(&default_sig), Serialize::serialize(&default_sig));
+    }
+
+    // Taproot signatures are fixed-size: 64 bytes for the default sighash (no trailing
+    // sighash byte), 65 bytes for any explicit sighash type. Mirrors
+    // `serialized_ecdsa_signature_encoded_size_varies_with_der_size` for the schnorr case,
+    // pinning both the `ExactSizeEncoder`-reported length and the actual encoded byte length.
+    #[test]
+    fn taproot_signature_encoded_size_matches_sighash_type() {
+        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        let sighashes = [
+            (bitcoin::TapSighashType::Default, 64),
+            (bitcoin::TapSighashType::All, 65),
+            (bitcoin::TapSighashType::None, 65),
+            (bitcoin::TapSighashType::Single, 65),
+            (bitcoin::TapSighashType::AllPlusAnyoneCanPay, 65),
+            (bitcoin::TapSighashType::NonePlusAnyoneCanPay, 65),
+            (bitcoin::TapSighashType::SinglePlusAnyoneCanPay, 65),
+        ];
+        for (sighash_type, expected_len) in sighashes {
+            let sig = taproot::Signature { signature: raw, sighash_type };
+            assert_eq!(sig.psbt_encoder().len(), expected_len, "encoder len for {sighash_type:?}");
+            assert_eq!(encode_to_vec(&sig).len(), expected_len, "encoded len for {sighash_type:?}");
+        }
+    }
+
+    #[test]
+    fn xonly_leaf_hash_pair_matches_serialize() {
+        let key_raw = [0x51u8; 32];
+        let leaf = TapLeafHash::hash(&[0x51]);
+        let xkey = XOnlyPublicKey::from_slice(&key_raw).unwrap();
+        let pair = (xkey, leaf);
+        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
     }
 }
