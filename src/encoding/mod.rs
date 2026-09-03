@@ -13,8 +13,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use bitcoin_consensus_encoding::{
-    CompactSizeEncoder, DecodeError, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4,
-    EncoderStatus, ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
+    CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, DecodeError, Decoder,
+    Decoder2, Decoder2Error, DecoderStatus, Encoder, Encoder2, Encoder4, EncoderStatus,
+    ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
 };
 
 /// Types that can be PSBT-decoded.
@@ -118,6 +119,36 @@ impl<K: ExactSizeEncoder, V: ExactSizeEncoder> KeyValueEncoder<K, V> {
         );
         Self { inner }
     }
+}
+
+/// Generic decoder (counterpart to [`KeyValueEncoder`]) for a PSBT key/value value.
+///
+/// - `<value> := <valuelen> <value body>`
+///
+/// The length prefix is decoded, but not used to constrain the value since
+/// the given decoder controls how many bytes it takes. A dynamically sized value may
+/// want to use a [`bitcoin_consensus_encoding::ByteVecDecoder`] instead.
+///
+/// The error type is a pass-through [`Decoder2Error`]; callers are responsible
+/// for mapping based on the concrete inner decoder type.
+#[derive(Debug)]
+pub(crate) struct ValueDecoder<D: Decoder>(Decoder2<CompactSizeU64Decoder, D>);
+
+impl<D: Decoder + Default> Default for ValueDecoder<D> {
+    fn default() -> Self { Self(Decoder2::default()) }
+}
+
+impl<D: Decoder + Default> Decoder for ValueDecoder<D> {
+    type Output = (u64, D::Output);
+    type Error = Decoder2Error<CompactSizeDecoderError, D::Error>;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.0.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> { self.0.end() }
+
+    fn read_limit(&self) -> usize { self.0.read_limit() }
 }
 
 /// Iterator yielding [`PairEncoder`]s for a map, prefixing each key's encoder
