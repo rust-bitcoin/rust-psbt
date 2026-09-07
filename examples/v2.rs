@@ -17,8 +17,8 @@ use psbt_v2::bitcoin::{
     script, Address, Amount, CompressedPublicKey, Network, OutPoint, PublicKey, ScriptBuf,
     Sequence, TxOut, Txid,
 };
-use psbt_v2::psbt::{self, Constructor, Modifiable, Psbt, Signer, Updater};
-use psbt_v2::{InputBuilder, Output, OutputBuilder};
+use psbt_v2::psbt::{self, Constructor, Modifiable, Signer, Updater};
+use psbt_v2::{InputBuilder, Output, OutputBuilder, Psbt};
 
 const DUMMY_UTXO_AMOUNT: Amount = Amount::from_sat(20_000_000);
 const SPEND_AMOUNT: Amount = Amount::from_sat(20_000_000);
