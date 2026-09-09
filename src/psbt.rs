@@ -32,7 +32,7 @@ use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
-use bitcoin::bip32::{self, DerivationPath, KeySource, Xpriv};
+use bitcoin::bip32::{self, KeySource, Xpriv};
 use bitcoin::hex::DisplayHex;
 use bitcoin::key::{PrivateKey, PublicKey};
 use bitcoin::locktime::absolute;
@@ -1198,14 +1198,13 @@ impl GetKey for Xpriv {
             KeyRequest::Pubkey(_) | KeyRequest::XOnlyPubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
                 let key = if self.fingerprint(secp) == *fingerprint {
-                    let k = self.derive_priv(secp, &path)?;
+                    let k = self.derive_priv(secp, path)?;
                     Some(k.to_priv())
                 } else if self.parent_fingerprint == *fingerprint
                     && !path.is_empty()
                     && path[0] == self.child_number
                 {
-                    let path = DerivationPath::from_iter(path.into_iter().skip(1).copied());
-                    let k = self.derive_priv(secp, &path)?;
+                    let k = self.derive_priv(secp, &path[1..].iter().as_slice())?;
                     Some(k.to_priv())
                 } else {
                     None
@@ -2177,12 +2176,11 @@ mod tests {
 
     #[cfg(all(feature = "rand", feature = "std"))]
     mod get_key {
-        use bitcoin::secp256k1;
-        use bitcoin::secp256k1::All;
-
+        #[cfg(any(feature = "miniscript", all(feature = "rand", feature = "std")))]
         use super::*;
 
-        fn gen_keys() -> (PrivateKey, PublicKey, Secp256k1<All>) {
+        #[cfg(all(feature = "rand", feature = "std"))]
+        fn gen_keys() -> (PrivateKey, PublicKey, Secp256k1<bitcoin::secp256k1::All>) {
             use bitcoin::secp256k1::{rand, SecretKey};
             use bitcoin::Network;
 
@@ -2195,13 +2193,14 @@ mod tests {
         }
 
         #[test]
+        #[cfg(all(feature = "rand", feature = "std"))]
         fn pubkey_map_get_key_negates_odd_parity_keys() {
             let (mut priv_key, mut pk, secp) = gen_keys();
             let (xonly, parity) = pk.inner.x_only_public_key();
 
             let mut pubkey_map: HashMap<PublicKey, PrivateKey> = HashMap::new();
 
-            if parity == secp256k1::Parity::Even {
+            if parity == bitcoin::secp256k1::Parity::Even {
                 priv_key = PrivateKey {
                     compressed: priv_key.compressed,
                     network: priv_key.network,
@@ -2222,9 +2221,33 @@ mod tests {
             assert_eq!(xonly, retrieved_xonly);
             assert_eq!(
                 retrieved_parity,
-                secp256k1::Parity::Even,
+                bitcoin::secp256k1::Parity::Even,
                 "Key should be normalized to have even parity, even when original had odd parity"
             );
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_succeeds() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let path: DerivationPath = "m/1/2/3".parse().unwrap();
+            let path_prefix: DerivationPath = "m/1".parse().unwrap();
+
+            let expected_private_key = parent_xpriv.derive_priv(&secp, &path).unwrap().to_priv();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path_prefix).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((parent_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            assert_eq!(derived_key, Some(expected_private_key));
         }
     }
 }
