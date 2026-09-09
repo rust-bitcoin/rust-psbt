@@ -984,9 +984,9 @@ impl Psbt {
         let mut used = vec![]; // List of pubkeys used to sign the input.
 
         for (pk, key_source) in input.bip32_derivations.iter() {
-            let sk = if let Ok(Some(sk)) = k.get_key(KeyRequest::Bip32(key_source.clone()), secp) {
+            let sk = if let Ok(Some(sk)) = k.get_key(&KeyRequest::Bip32(key_source.clone()), secp) {
                 sk
-            } else if let Ok(Some(sk)) = k.get_key(KeyRequest::Pubkey(*pk), secp) {
+            } else if let Ok(Some(sk)) = k.get_key(&KeyRequest::Pubkey(*pk), secp) {
                 sk
             } else {
                 continue;
@@ -1178,7 +1178,7 @@ pub trait GetKey {
     /// - `Err` if an error was encountered while looking for the key.
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error>;
 }
@@ -1188,13 +1188,13 @@ impl GetKey for Xpriv {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error> {
         match key_request {
             KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
-                let key = if self.fingerprint(secp) == fingerprint {
+                let key = if self.fingerprint(secp) == *fingerprint {
                     let k = self.derive_priv(secp, &path)?;
                     Some(k.to_priv())
                 } else {
@@ -1221,14 +1221,14 @@ impl GetKey for $set<Xpriv> {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>
     ) -> Result<Option<PrivateKey>, Self::Error> {
         match key_request {
             KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
                 for xpriv in self.iter() {
-                    if xpriv.parent_fingerprint == fingerprint {
+                    if xpriv.parent_fingerprint == *fingerprint {
                         let k = xpriv.derive_priv(secp, &path)?;
                         return Ok(Some(k.to_priv()));
                     }
@@ -1253,7 +1253,7 @@ impl GetKey for $map<PublicKey, PrivateKey> {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         _: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error> {
         match key_request {
