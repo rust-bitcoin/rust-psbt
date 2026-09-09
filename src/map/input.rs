@@ -352,12 +352,19 @@ impl Input {
             tap_key_origins: BTreeMap::new(),
             tap_internal_key: None,
             tap_merkle_root: None,
+            // BIP-375 has the transaction extractor verify silent payment output
+            // scripts against the ECDH shares and DLEQ proofs. The extractor runs
+            // after the finalizer, so they must survive.
             #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::new(),
+            sp_ecdh_shares: self.sp_ecdh_shares.clone(),
             #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::new(),
-            proprietaries: BTreeMap::new(),
-            unknowns: BTreeMap::new(),
+            sp_dleq_proofs: self.sp_dleq_proofs.clone(),
+            // BIP-174: "All other data except the UTXO and unknown fields (including
+            // PSBT_IN_PROPRIETARY fields the Input Finalizer does not understand) in
+            // the input key-value map should be cleared from the PSBT." Retain all
+            // proprietary and unknown fields.
+            proprietaries: self.proprietaries.clone(),
+            unknowns: self.unknowns.clone(),
         };
 
         // TODO: These errors should only trigger if there are bugs in this crate or miniscript.
@@ -1411,6 +1418,56 @@ mod test {
         assert_eq!(finalized.sequence, input.sequence);
         assert_eq!(finalized.min_time, input.min_time);
         assert_eq!(finalized.min_height, input.min_height);
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn finalize_retains_unknown_and_proprietary_fields() {
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        });
+        input.proprietaries.insert(
+            raw::ProprietaryKey { prefix: b"test".to_vec(), subtype: 0, key: vec![0x01] },
+            vec![0x02],
+        );
+        input.unknowns.insert(raw::Key { type_value: 0x7f, key: vec![0x03] }, vec![0x04]);
+
+        let finalized = input
+            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
+            .expect("finalize must succeed");
+
+        assert_eq!(finalized.proprietaries, input.proprietaries);
+        assert_eq!(finalized.unknowns, input.unknowns);
+    }
+
+    // TODO: Remove once the BIP-375 finalizer and extractor vectors land in tests/bip375.rs.
+    #[cfg(feature = "miniscript")]
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn finalize_retains_silent_payment_fields() {
+        use core::str::FromStr;
+
+        let scan_key = CompressedPublicKey::from_str(
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        });
+        input.sp_ecdh_shares.insert(scan_key, scan_key);
+        input.sp_dleq_proofs.insert(scan_key, DleqProof([0x42; 64]));
+
+        let finalized = input
+            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
+            .expect("finalize must succeed");
+
+        assert_eq!(finalized.sp_ecdh_shares, input.sp_ecdh_shares);
+        assert_eq!(finalized.sp_dleq_proofs, input.sp_dleq_proofs);
     }
 
     #[cfg(feature = "miniscript")]
