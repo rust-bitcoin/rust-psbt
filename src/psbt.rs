@@ -32,7 +32,7 @@ use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
-use bitcoin::bip32::{self, KeySource, Xpriv};
+use bitcoin::bip32::{self, DerivationPath, KeySource, Xpriv};
 use bitcoin::hex::DisplayHex;
 use bitcoin::key::{PrivateKey, PublicKey};
 use bitcoin::locktime::absolute;
@@ -1195,6 +1195,13 @@ impl GetKey for Xpriv {
             KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
                 let key = if self.fingerprint(secp) == *fingerprint {
+                    let k = self.derive_priv(secp, &path)?;
+                    Some(k.to_priv())
+                } else if self.parent_fingerprint == *fingerprint
+                    && !path.is_empty()
+                    && path[0] == self.child_number
+                {
+                    let path = DerivationPath::from_iter(path.into_iter().skip(1).copied());
                     let k = self.derive_priv(secp, &path)?;
                     Some(k.to_priv())
                 } else {
