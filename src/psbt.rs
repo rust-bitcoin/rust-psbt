@@ -1224,18 +1224,11 @@ impl GetKey for $set<Xpriv> {
         key_request: &KeyRequest,
         secp: &Secp256k1<C>
     ) -> Result<Option<PrivateKey>, Self::Error> {
-        match key_request {
-            KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
-            KeyRequest::Bip32((fingerprint, path)) => {
-                for xpriv in self.iter() {
-                    if xpriv.parent_fingerprint == *fingerprint {
-                        let k = xpriv.derive_priv(secp, &path)?;
-                        return Ok(Some(k.to_priv()));
-                    }
-                }
-                Ok(None)
-            }
-        }
+        // OK to stop at the first error because Xpriv::get_key() can only fail
+        // if this isn't a KeyRequest::Bip32, which would fail for all Xprivs.
+        self.iter()
+            .find_map(|xpriv| xpriv.get_key(key_request, secp).transpose())
+            .transpose()
     }
 }}}
 
