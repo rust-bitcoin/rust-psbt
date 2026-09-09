@@ -1870,6 +1870,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn unique_id_is_stable_across_sequence_updates() {
+        // BIP-370 requires unique identification to carry a sequence of zero because Updaters
+        // and Combiners may change PSBT_IN_SEQUENCE. `Psbt::id` zeroes the sequence itself, so
+        // the default applied by `Input::unsigned_tx_in` cannot affect the result.
+        let baseline = valid_psbt();
+        assert!(baseline.inputs[0].sequence.is_none());
+        let expected = baseline.id().expect("lock time must be determinable");
+
+        for sequence in [Sequence::ZERO, Sequence::ENABLE_LOCKTIME_NO_RBF, Sequence::MAX] {
+            let mut psbt = valid_psbt();
+            psbt.inputs[0].sequence = Some(sequence);
+            assert_eq!(psbt.id().expect("lock time must be determinable"), expected);
+        }
+    }
+
     #[cfg(feature = "silent-payments")]
     #[test]
     fn constructor_accepts_underived_silent_payment_output() {
