@@ -2249,5 +2249,52 @@ mod tests {
 
             assert_eq!(derived_key, Some(expected_private_key));
         }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_wrong_first_segment() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let path: DerivationPath = "m/2/3".parse().unwrap();
+            let path_prefix: DerivationPath = "m/1".parse().unwrap();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path_prefix).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((parent_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            // Fingerprint matches but first path segment (2) != child_number (1).
+            assert_eq!(derived_key, None);
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_fp_mismatch() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let other_seed = hex!("aabbccddeeff00112233445566778899");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let other_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &other_seed).unwrap();
+            let path: DerivationPath = "m/1".parse().unwrap();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((other_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            // Fingerprint mismatch but path nonempty and first segment matches child_number.
+            assert_eq!(derived_key, None);
+        }
     }
 }
