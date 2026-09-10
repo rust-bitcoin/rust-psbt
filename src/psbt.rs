@@ -71,7 +71,7 @@ bitcoin_consensus_encoding::encoder_newtype! {
     pub struct PsbtV2Encoder<'e>(
         Encoder4<
             BytesEncoder<'static>,
-            global::GlobalMapEncoder,
+            global::GlobalMapEncoder<'e>,
             crate::encoding::SliceEncoder<'e, Input>,
             crate::encoding::SliceEncoder<'e, Output>,
         >

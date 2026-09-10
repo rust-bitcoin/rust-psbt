@@ -12,7 +12,9 @@ use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{bip32, transaction, VarInt};
-use bitcoin_consensus_encoding::{Decoder, DecoderStatus, Encoder, EncoderStatus};
+use bitcoin_consensus_encoding::{
+    ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
+};
 
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
@@ -23,12 +25,17 @@ use crate::consts::{
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
-use crate::encoding::PsbtEncode;
+use crate::encoding::delegates::{FallbackLockTimeKeyValueEncoder, TxVersionKeyValueEncoder};
+use crate::encoding::native::XpubKeyValueIter;
+#[cfg(feature = "silent-payments")]
+use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::{KeyValueEncoder, PsbtEncode};
 use crate::error::{write_err, InconsistentKeySourcesError};
 use crate::io::{Cursor, Read};
 use crate::map::Map;
+use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::serialize::Serialize;
-use crate::version::Version;
+use crate::version::{Version, VersionKeyValueEncoder};
 use crate::{consts, raw, serialize, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
@@ -504,21 +511,199 @@ impl Decoder for GlobalDecoder {
     }
 }
 
-/// Encoder for the PSBT global map.
-pub struct GlobalMapEncoder(Vec<u8>);
+type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
+type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
+type Separator = ArrayEncoder<1>;
 
-impl Encoder for GlobalMapEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0[..] }
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+/// State of the global map encoder, one key-value pair group per variant.
+enum State<'e> {
+    Version(VersionKeyValueEncoder<'e>),
+    TxVersion(TxVersionKeyValueEncoder<'e>),
+    FallbackLockTime(FallbackLockTimeKeyValueEncoder<'e>),
+    InputCount(CountPair),
+    OutputCount(CountPair),
+    Flags(FlagsPair),
+    Xpubs(IterEncoder<XpubKeyValueIter<'e>>),
+    #[cfg(feature = "silent-payments")]
+    Ecdh(IterEncoder<EcdhKeyValueIter<'e>>),
+    #[cfg(feature = "silent-payments")]
+    Dleq(IterEncoder<DleqKeyValueIter<'e>>),
+    Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
+    Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
+    Separator(Separator),
+}
+
+/// Encoder for the PSBT global map.
+pub struct GlobalMapEncoder<'e> {
+    global: &'e Global,
+    state: State<'e>,
+}
+
+impl<'e> GlobalMapEncoder<'e> {
+    fn new(global: &'e Global) -> Self {
+        let state = State::Version(KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_VERSION),
+            global.version.psbt_encoder(),
+        ));
+        Self { global, state }
+    }
+
+    /// Constructs the next state in field order after the current one, if any.
+    fn next_state(&self) -> Option<State<'e>> {
+        match &self.state {
+            State::Version(_) => Some(State::TxVersion(self.tx_version_key_value())),
+            State::TxVersion(_) =>
+                if self.global.fallback_lock_time.is_some() {
+                    Some(State::FallbackLockTime(self.fallback_key_value()))
+                } else {
+                    Some(State::InputCount(self.input_count_key_value()))
+                },
+            State::FallbackLockTime(_) => Some(State::InputCount(self.input_count_key_value())),
+            State::InputCount(_) => Some(State::OutputCount(self.output_count_key_value())),
+            State::OutputCount(_) => Some(State::Flags(self.flags_key_value())),
+            State::Flags(_) => Some(State::Xpubs(self.xpub_iter())),
+            State::Xpubs(_) => self.first_collection_after_xpubs(),
+            #[cfg(feature = "silent-payments")]
+            State::Ecdh(_) => Some(State::Dleq(self.dleq_iter())),
+            #[cfg(feature = "silent-payments")]
+            State::Dleq(_) => Some(State::Proprietaries(self.proprietary_iter())),
+            State::Proprietaries(_) => Some(State::Unknowns(self.unknown_iter())),
+            State::Unknowns(_) => Some(State::Separator(Separator::without_length_prefix([0x00]))),
+            State::Separator(_) => None,
+        }
+    }
+
+    fn tx_version_key_value(&self) -> TxVersionKeyValueEncoder<'e> {
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_TX_VERSION),
+            self.global.tx_version.psbt_encoder(),
+        )
+    }
+
+    fn fallback_key_value(&self) -> FallbackLockTimeKeyValueEncoder<'e> {
+        let lock_time = self.global.fallback_lock_time.as_ref().expect("checked by caller");
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_FALLBACK_LOCKTIME),
+            lock_time.psbt_encoder(),
+        )
+    }
+
+    fn input_count_key_value(&self) -> CountPair {
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_INPUT_COUNT),
+            CompactSizeEncoder::new(self.global.input_count),
+        )
+    }
+
+    fn output_count_key_value(&self) -> CountPair {
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_OUTPUT_COUNT),
+            CompactSizeEncoder::new(self.global.output_count),
+        )
+    }
+
+    fn flags_key_value(&self) -> FlagsPair {
+        KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_GLOBAL_TX_MODIFIABLE),
+            ArrayEncoder::without_length_prefix([self.global.tx_modifiable_flags]),
+        )
+    }
+
+    fn xpub_iter(&self) -> IterEncoder<XpubKeyValueIter<'e>> {
+        IterEncoder::new(XpubKeyValueIter::new(self.global.xpubs.iter()))
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn ecdh_iter(&self) -> IterEncoder<EcdhKeyValueIter<'e>> {
+        IterEncoder::new(EcdhKeyValueIter::new(self.global.sp_ecdh_shares.iter()))
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn dleq_iter(&self) -> IterEncoder<DleqKeyValueIter<'e>> {
+        IterEncoder::new(DleqKeyValueIter::new(self.global.sp_dleq_proofs.iter()))
+    }
+
+    fn proprietary_iter(&self) -> IterEncoder<ProprietaryKeyValueIter<'e>> {
+        IterEncoder::new(ProprietaryKeyValueIter(self.global.proprietaries.iter()))
+    }
+
+    fn unknown_iter(&self) -> IterEncoder<UnknownKeyValueIter<'e>> {
+        IterEncoder::new(UnknownKeyValueIter(self.global.unknowns.iter()))
+    }
+
+    /// Returns the first collection state after the xpubs group.
+    fn first_collection_after_xpubs(&self) -> Option<State<'e>> {
+        #[cfg(feature = "silent-payments")]
+        {
+            Some(State::Ecdh(self.ecdh_iter()))
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            Some(State::Proprietaries(self.proprietary_iter()))
+        }
+    }
+}
+
+impl Encoder for GlobalMapEncoder<'_> {
+    fn current_chunk(&self) -> &[u8] {
+        match &self.state {
+            State::Version(e) => e.current_chunk(),
+            State::TxVersion(e) => e.current_chunk(),
+            State::FallbackLockTime(e) => e.current_chunk(),
+            State::InputCount(e) => e.current_chunk(),
+            State::OutputCount(e) => e.current_chunk(),
+            State::Flags(e) => e.current_chunk(),
+            State::Xpubs(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            State::Ecdh(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            State::Dleq(e) => e.current_chunk(),
+            State::Proprietaries(e) => e.current_chunk(),
+            State::Unknowns(e) => e.current_chunk(),
+            State::Separator(e) => e.current_chunk(),
+        }
+    }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let finished = match &mut self.state {
+            State::Version(e) => e.advance().has_finished(),
+            State::TxVersion(e) => e.advance().has_finished(),
+            State::FallbackLockTime(e) => e.advance().has_finished(),
+            State::InputCount(e) => e.advance().has_finished(),
+            State::OutputCount(e) => e.advance().has_finished(),
+            State::Flags(e) => e.advance().has_finished(),
+            State::Xpubs(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            State::Ecdh(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            State::Dleq(e) => e.advance().has_finished(),
+            State::Proprietaries(e) => e.advance().has_finished(),
+            State::Unknowns(e) => e.advance().has_finished(),
+            State::Separator(e) => e.advance().has_finished(),
+        };
+
+        if finished {
+            loop {
+                match self.next_state() {
+                    Some(next) => self.state = next,
+                    None => return EncoderStatus::Finished,
+                }
+                // Hop past any empty groups (e.g. an empty collection iterator).
+                if !self.current_chunk().is_empty() {
+                    return EncoderStatus::HasMore;
+                }
+            }
+        }
+        EncoderStatus::HasMore
+    }
 }
 
 impl PsbtEncode for Global {
-    type Encoder<'e> = GlobalMapEncoder;
+    type Encoder<'e> = GlobalMapEncoder<'e>;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        // TODO: swap our with native pull encoding.
         // `<global-map> := <keypair>* 0x00`
-        GlobalMapEncoder(self.serialize_map())
+        GlobalMapEncoder::new(self)
     }
 }
 
@@ -851,7 +1036,30 @@ impl From<InconsistentKeySourcesError> for CombineError {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
+
     use super::*;
+    use crate::encoding::encode_to_vec;
+    use crate::map::Map;
+
+    fn sample_xpub() -> Xpub {
+        Xpub::from_str(
+            "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
+        )
+        .unwrap()
+    }
+
+    // Asserts the native pull-based encoder produces exactly `Map::serialize_map`'s bytes and
+    // that the map round-trips through the Read-based `Global::decode`.
+    fn check_global(global: &Global) {
+        let encoded = encode_to_vec(global);
+        assert_eq!(encoded, Map::serialize_map(global));
+        assert_eq!(encoded.last(), Some(&0x00), "global map must end with separator");
+
+        let mut slice: &[u8] = &encoded;
+        let decoded = Global::decode(&mut slice).unwrap();
+        assert_eq!(decoded, global.clone());
+    }
 
     #[test]
     fn pairs_matches_serialize_map() {
@@ -863,13 +1071,19 @@ mod tests {
         }
         from_pairs.push(0x00);
 
-        assert_eq!(from_pairs, global.serialize_map());
+        assert_eq!(from_pairs, Map::serialize_map(&global));
+    }
+
+    #[test]
+    fn encode_default() {
+        let global = Global::default();
+        check_global(&global);
     }
 
     #[test]
     fn encode_nonempty() {
         let global = Global::default();
-        let bytes = crate::encoding::encode_to_vec(&global);
+        let bytes = encode_to_vec(&global);
         assert!(!bytes.is_empty());
         assert!(bytes.len() > 1, "map must have at least one keypair before separator");
         assert_eq!(bytes.last(), Some(&0x00), "global map must end with separator");
@@ -886,5 +1100,58 @@ mod tests {
         let mut remaining = &bytes[..];
         assert!(decoder.push_bytes(&mut remaining).unwrap().is_ready());
         assert_eq!(decoder.read_limit(), 0, "completed decoder should request no bytes");
+    }
+
+    #[test]
+    fn encode_fallback_locktime() {
+        let global = Global {
+            fallback_lock_time: Some(absolute::LockTime::from_consensus(500)),
+            ..Default::default()
+        };
+
+        check_global(&global);
+    }
+
+    #[test]
+    fn encode_xpubs() {
+        let mut global = Global::default();
+        let key_source: KeySource =
+            (Fingerprint::from([0x42, 0x99, 0x69, 0xf0]), DerivationPath::default());
+        global.xpubs.insert(sample_xpub(), key_source);
+
+        check_global(&global);
+    }
+
+    #[test]
+    fn encode_proprietaries_and_unknowns() {
+        let mut global = Global::default();
+        global.proprietaries.insert(
+            raw::ProprietaryKey { prefix: b"test".to_vec(), subtype: 0x42, key: vec![1, 2, 3] },
+            vec![0xde, 0xad],
+        );
+        global
+            .unknowns
+            .insert(raw::Key { type_value: 0x51, key: vec![0xaa, 0xbb] }, vec![0xcc, 0xdd]);
+
+        check_global(&global);
+    }
+
+    #[test]
+    #[cfg(feature = "silent-payments")]
+    fn encode_silent_payments() {
+        use core::str::FromStr;
+
+        use crate::dleq::DleqProof;
+
+        let mut global = Global::default();
+        let compressed = bitcoin::CompressedPublicKey::from_str(
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+
+        global.sp_ecdh_shares.insert(compressed, compressed);
+        global.sp_dleq_proofs.insert(compressed, DleqProof([0x42; 64]));
+
+        check_global(&global);
     }
 }

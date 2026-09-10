@@ -3,14 +3,22 @@
 //! This module contains [`PsbtEncode`] implementations for types which live outside of rust-psbt
 //! but are not consensus encodable.
 
+use alloc::collections::btree_map;
 use core::fmt;
 
-use bitcoin::bip32::{self, Xpub};
+use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+#[cfg(feature = "silent-payments")]
+use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, BytesEncoder, Decoder, DecoderStatus, Encoder2, UnexpectedEofError,
 };
 
-use super::{PsbtDecode, PsbtEncode};
+use super::{ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode};
+use crate::consts::PSBT_GLOBAL_XPUB;
+#[cfg(feature = "silent-payments")]
+use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
+#[cfg(feature = "silent-payments")]
+use crate::dleq::DleqProof;
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -27,6 +35,9 @@ impl PsbtEncode for Xpub {
         XpubEncoder::new(ArrayEncoder::without_length_prefix(self.encode()))
     }
 }
+
+pub(crate) type XpubKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
 
 /// Decoder for a serialized [`Xpub`].
 #[derive(Debug, Default)]
@@ -89,8 +100,81 @@ impl std::error::Error for XpubDecodeError {
     }
 }
 
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a serialized [`ChildNumber`].
+    pub struct ChildNumberEncoder<'e>(ArrayEncoder<4>);
+}
+
+impl PsbtEncode for ChildNumber {
+    type Encoder<'e>
+        = ChildNumberEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ChildNumberEncoder::new(ArrayEncoder::without_length_prefix(u32::from(*self).to_le_bytes()))
+    }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a serialized [`KeySource`].
+    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, ExactSliceEncoder<'e, ChildNumber>>);
+}
+
+impl PsbtEncode for KeySource {
+    type Encoder<'e>
+        = KeySourceEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        KeySourceEncoder::new(Encoder2::new(
+            BytesEncoder::without_length_prefix(self.0.as_bytes()),
+            <ExactSliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
+        ))
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+impl PsbtEncode for CompressedPublicKey {
+    type Encoder<'e>
+        = ArrayEncoder<33>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_bytes())
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
+    PSBT_GLOBAL_SP_ECDH_SHARE,
+>;
+
+#[cfg(feature = "silent-payments")]
+impl PsbtEncode for DleqProof {
+    type Encoder<'e>
+        = BytesEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        BytesEncoder::without_length_prefix(self.as_bytes())
+    }
+}
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type DleqKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
+
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
+    use bitcoin::bip32::Fingerprint;
+
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
 
@@ -153,5 +237,38 @@ mod tests {
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn key_source_encode_empty_path() {
+        use bitcoin::bip32::DerivationPath;
+
+        let key_source: KeySource =
+            (Fingerprint::from([0x42, 0x99, 0x69, 0xf0]), DerivationPath::default());
+        let bytes = encode_to_vec(&key_source);
+        assert_eq!(bytes.len(), 4);
+        assert_eq!(bytes, [0x42, 0x99, 0x69, 0xf0]);
+    }
+
+    #[test]
+    fn key_source_encode_multi_element_path() {
+        use bitcoin::bip32::DerivationPath;
+
+        let path: DerivationPath = [
+            ChildNumber::from_hardened_idx(84).unwrap(),
+            ChildNumber::from_normal_idx(1).unwrap(),
+            ChildNumber::from_hardened_idx(2).unwrap(),
+        ]
+        .into_iter()
+        .collect();
+        let key_source: KeySource = (Fingerprint::from([0x12, 0x34, 0x56, 0x78]), path);
+
+        let bytes = encode_to_vec(&key_source);
+        assert_eq!(bytes.len(), 4 + 3 * 4);
+        let mut expected = vec![0x12, 0x34, 0x56, 0x78];
+        for n in &key_source.1 {
+            expected.extend(u32::from(*n).to_le_bytes());
+        }
+        assert_eq!(bytes, expected);
     }
 }
