@@ -59,6 +59,7 @@ use crate::input::{self, Input};
 use crate::output::{self, Output};
 #[cfg(feature = "miniscript")]
 use crate::PartialSigsSighashTypeError;
+use crate::PsbtSighashType;
 
 /// The magic bytes that identify a PSBT (`"psbt"` in ASCII).
 const PSBT_MAGIC: &[u8; 4] = b"psbt";
@@ -646,7 +647,7 @@ impl Signer {
     /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
     /// > inputs so that it accurately reflects the state of the PSBT.
     pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.0.clear_tx_modifiable(ty as u8)
+        self.0.clear_tx_modifiable(PsbtSighashType::from(ty))
     }
 
     /// Returns the inner [`Psbt`].
@@ -791,24 +792,22 @@ impl Psbt {
     }
 
     /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing.
-    // TODO: Consider using consts instead of magic numbers.
-    fn clear_tx_modifiable(&mut self, sighash_type: u8) {
-        let ty = sighash_type;
+    fn clear_tx_modifiable(&mut self, sighash_type: PsbtSighashType) {
         // If the Signer added a signature that does not use SIGHASH_ANYONECANPAY,
         // the Input Modifiable flag must be set to False.
-        if !(ty == 0x81 || ty == 0x82 || ty == 0x83) {
+        if !sighash_type.is_anyone_can_pay() {
             self.global.clear_inputs_modifiable_flag();
         }
 
         // If the Signer added a signature that does not use SIGHASH_NONE,
         // the Outputs Modifiable flag must be set to False.
-        if !(ty == 0x02 || ty == 0x82) {
+        if !sighash_type.is_none() {
             self.global.clear_outputs_modifiable_flag();
         }
 
         // If the Signer added a signature that uses SIGHASH_SINGLE,
         // the Has SIGHASH_SINGLE flag must be set to True.
-        if ty == 0x03 || ty == 0x83 {
+        if sighash_type.is_single() {
             self.global.set_sighash_single_flag();
         }
     }
@@ -933,7 +932,7 @@ impl Psbt {
         }
 
         let ty = sighash_ty.expect("at this stage we know its ok");
-        self.clear_tx_modifiable(ty as u8);
+        self.clear_tx_modifiable(PsbtSighashType::from(ty));
 
         Ok(used)
     }
@@ -1822,5 +1821,83 @@ mod tests {
             "underived silent payment output must not encode PSBT_OUT_SCRIPT"
         );
         assert_eq!(decoded.serialize(), encoded);
+    }
+
+    #[test]
+    fn clear_tx_modifiable_all_clears_modifiable_flags() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_ALL: not ANYONECANPAY, not NONE, not SINGLE.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::All));
+
+        assert!(!psbt.global.is_inputs_modifiable());
+        assert!(!psbt.global.is_outputs_modifiable());
+        assert!(!psbt.global.has_sighash_single());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_anyone_can_pay_preserves_inputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+
+        // SIGHASH_ALL | SIGHASH_ANYONECANPAY.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay));
+
+        assert!(psbt.global.is_inputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_none_preserves_outputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_NONE.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::None));
+
+        assert!(psbt.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_none_plus_acp_preserves_outputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_NONE | SIGHASH_ANYONECANPAY: like plain NONE, outputs stay modifiable.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::NonePlusAnyoneCanPay));
+
+        assert!(psbt.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_single_plus_acp_sets_has_single_flag() {
+        let mut psbt = single_input_psbt();
+
+        // Plain SIGHASH_SINGLE must set the Has SIGHASH_SINGLE flag as well.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::Single));
+        assert!(psbt.global.has_sighash_single());
+
+        let mut psbt = single_input_psbt();
+
+        // SIGHASH_SINGLE | SIGHASH_ANYONECANPAY must set the Has SIGHASH_SINGLE flag.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::SinglePlusAnyoneCanPay));
+
+        assert!(psbt.global.has_sighash_single());
+    }
+
+    #[test]
+    fn ecdsa_clear_tx_modifiable_updates_flags() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+        psbt.global.set_outputs_modifiable_flag();
+
+        let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+        signer.ecdsa_clear_tx_modifiable(EcdsaSighashType::All);
+
+        let psbt = signer.psbt();
+        assert!(!psbt.global.is_inputs_modifiable());
+        assert!(!psbt.global.is_outputs_modifiable());
+        assert!(!psbt.global.has_sighash_single());
     }
 }

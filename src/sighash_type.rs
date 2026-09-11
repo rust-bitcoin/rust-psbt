@@ -9,6 +9,8 @@ use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError, TapS
 
 use crate::error::write_err;
 
+const SIGHASH_ANYONECANPAY: u32 = 0x80;
+
 /// A Signature hash type for the corresponding input.
 ///
 /// As of taproot upgrade, the signature hash type can be either [`EcdsaSighashType`] or
@@ -115,6 +117,34 @@ impl PsbtSighashType {
     ///
     /// No guarantees are made as to the standardness or validity of the returned value.
     pub fn to_u32(self) -> u32 { self.inner }
+
+    /// True if the `SIGHASH_ANYONECANPAY` flag is set.
+    ///
+    /// Unlike [`Self::is_none`] and [`Self::is_single`], which answer "is this a
+    /// standard sighash of the given base type", this is a pure flag bit check and
+    /// applies to any `u32` value.
+    pub fn is_anyone_can_pay(self) -> bool { self.inner & SIGHASH_ANYONECANPAY != 0 }
+
+    /// True for `SIGHASH_NONE`, with or without `SIGHASH_ANYONECANPAY`.
+    ///
+    /// Returns `false` for non-standard sighash values, which fail
+    /// [`Self::ecdsa_hash_ty`] anyway.
+    pub fn is_none(self) -> bool {
+        self.ecdsa_hash_ty()
+            .map(|ty| matches!(ty, EcdsaSighashType::None | EcdsaSighashType::NonePlusAnyoneCanPay))
+            .unwrap_or(false)
+    }
+
+    /// True for `SIGHASH_SINGLE`, with or without `SIGHASH_ANYONECANPAY`.
+    ///
+    /// The ECDSA-standard and taproot-valid type sets coincide except for `0x00`
+    /// (taproot `Default`), which is not single - so one conversion suffices.
+    ///
+    /// Returns `false` for non-standard sighash values, which fail
+    /// [`Self::ecdsa_hash_ty`] anyway.
+    pub fn is_single(self) -> bool {
+        self.ecdsa_hash_ty().map(|ty| ty.is_single()).unwrap_or(false)
+    }
 }
 
 /// Error returned for failure during parsing one of the sighash types.
@@ -244,6 +274,25 @@ mod tests {
         assert_eq!(PsbtSighashType::from_u32(0xffff_ffff).to_u32(), 0xffff_ffff);
         assert_eq!(PsbtSighashType::from_u32(0x01).to_u32(), 0x01);
         assert_eq!(PsbtSighashType::from_u32(0x00).to_u32(), 0x00);
+    }
+
+    #[test]
+    fn sighash_flag_methods() {
+        assert!(PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay).is_anyone_can_pay());
+        assert!(!PsbtSighashType::from(EcdsaSighashType::All).is_anyone_can_pay());
+
+        assert!(PsbtSighashType::from(EcdsaSighashType::None).is_none());
+        assert!(!PsbtSighashType::from(EcdsaSighashType::All).is_none());
+        assert!(PsbtSighashType::from(EcdsaSighashType::NonePlusAnyoneCanPay).is_none());
+
+        assert!(PsbtSighashType::from(EcdsaSighashType::Single).is_single());
+        assert!(!PsbtSighashType::from(EcdsaSighashType::All).is_single());
+        assert!(PsbtSighashType::from(EcdsaSighashType::SinglePlusAnyoneCanPay).is_single());
+
+        // Non-standard values are never classified.
+        let nonstandard = PsbtSighashType::from_u32(0x07);
+        assert!(!nonstandard.is_none());
+        assert!(!nonstandard.is_single());
     }
 
     #[test]
