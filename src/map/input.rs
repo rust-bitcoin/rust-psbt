@@ -243,12 +243,12 @@ impl Input {
 
     /// Performs the BIP-174 signer validity checks for the input at `index`.
     pub fn signer_checks(&self) -> Result<(), SignError> {
-        let prevout_type = self.output_type();
+        let prevout_type = self.output_type()?;
         let prevout = self.funding_utxo()?;
 
         // If a witness UTXO is provided, no non-witness signature may be created.
         if self.witness_utxo.is_some() {
-            if let Ok(OutputType::Bare) = prevout_type {
+            if let OutputType::Bare = prevout_type {
                 return Err(SignError::NonWitnessSig);
             }
         }
@@ -272,13 +272,13 @@ impl Input {
         // scriptPubKey must be for that witnessScript.
         if let Some(ref witness_script) = self.witness_script {
             match prevout_type {
-                Ok(OutputType::Wsh)
+                OutputType::Wsh
                     if ScriptBuf::new_p2wsh(&witness_script.wscript_hash())
                         != *prevout.script_pubkey =>
                 {
                     return Err(SignError::WitnessScriptMismatchWsh);
                 }
-                Ok(OutputType::ShWsh) =>
+                OutputType::ShWsh =>
                     if let Some(ref redeem_script) = self.redeem_script {
                         if ScriptBuf::new_p2wsh(&witness_script.wscript_hash()) != *redeem_script
                             || ScriptBuf::new_p2sh(&redeem_script.script_hash())
@@ -293,7 +293,7 @@ impl Input {
 
         // Use provided sighash or DEFAULT for taproot output and ALL for non-taproot outputs.
         let expected_sighash_type = match (self.sighash_type, prevout_type) {
-            (None, Ok(OutputType::Tr)) => PsbtSighashType::from(TapSighashType::Default),
+            (None, OutputType::Tr) => PsbtSighashType::from(TapSighashType::Default),
             (None, _) => PsbtSighashType::ALL,
             (Some(sighash_type), _) => sighash_type,
         };
