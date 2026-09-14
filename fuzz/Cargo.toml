@@ -12,7 +12,7 @@ cargo-fuzz = true
 cargo-fuzz = "0.13.2"
 
 [package.metadata.rbmt.toolchains]
-nightly = "nightly-2026-09-05"
+nightly = "nightly-2026-09-12"
 
 [dependencies]
 libfuzzer-sys = "0.4"
