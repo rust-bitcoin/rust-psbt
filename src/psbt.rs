@@ -873,6 +873,13 @@ impl Psbt {
             (Some(sighash_type), _) => sighash_type,
         };
 
+        // SIGHASH_SINGLE must have a corresponding output at the same index; otherwise
+        // the signature commits to no outputs (the legacy algorithm even signs the
+        // constant hash 1, segwit v0 commits to a zero hash).
+        if expected_sighash_type.is_single() && index >= self.outputs.len() {
+            return Err(SignError::SighashSingleMissingOutput);
+        }
+
         let sighash_mismatches = |sighash: PsbtSighashType| sighash != expected_sighash_type;
 
         let has_mismatch = input
@@ -1521,6 +1528,17 @@ mod tests {
         }
     }
 
+    fn two_inputs_one_output_psbt() -> Psbt {
+        Psbt {
+            global: Global { input_count: 2, output_count: 1, ..Global::default() },
+            inputs: vec![Input::new(&OutPoint::null()), Input::new(&OutPoint::null())],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        }
+    }
+
     fn valid_psbt() -> Psbt {
         use crate::bitcoin::hashes::Hash as _;
 
@@ -1714,6 +1732,114 @@ mod tests {
 
         assert_eq!(psbt.signer_checks(0), Err(SignError::SighashMismatch));
     }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_wpkh() {
+        // P2WPKH input using SIGHASH_SINGLE with no output at the same index.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_legacy_p2pkh() {
+        // Legacy (P2PKH) input using SIGHASH_SINGLE with no output at the same index:
+        // signing this would produce a signature over the constant hash 1 (replayable).
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let funding_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2pkh(&pubkey.pubkey_hash()),
+            }],
+        };
+        let txid = funding_tx.compute_txid();
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].previous_txid = txid;
+        psbt.inputs[1].spent_output_index = 0;
+        psbt.inputs[1].non_witness_utxo = Some(funding_tx);
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_taproot() {
+        // P2TR input using SIGHASH_SINGLE with no output at the same index: rejected
+        // uniformly here, not relying on the downstream taproot sighash check.
+        let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2tr(&Secp256k1::verification_only(), xonly, None);
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(TapSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_anyone_can_pay_out_of_range_rejected() {
+        // SIGHASH_SINGLE with ANYONECANPAY is guarded as well.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type =
+            Some(PsbtSighashType::from(EcdsaSighashType::SinglePlusAnyoneCanPay));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_in_range_accepted() {
+        // Input 0 paired with output 0 is a valid use of SIGHASH_SINGLE.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(0), Ok(()));
+    }
+
+    #[test]
+    fn signer_checks_non_single_sighash_out_of_range_accepted() {
+        // Non-single sighash types suffer no commitment-to-nothing issue.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::All));
+
+        assert_eq!(psbt.signer_checks(1), Ok(()));
+    }
+
+    #[test]
+    fn signer_checks_nonstandard_sighash_out_of_range_not_misclassified() {
+        // A non-standard value like 0x07 shares the two low bits of SINGLE but its
+        // base type (x & 0x1f) is not SINGLE; classification must use the ECDSA/taproot
+        // conversions, not a bit mask.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from_u32(0x07));
+
+        assert_eq!(psbt.signer_checks(1), Ok(()));
+    }
+
     #[test]
     fn iter_funding_utxos_yields_correct_utxo() {
         let mut psbt = single_input_psbt();

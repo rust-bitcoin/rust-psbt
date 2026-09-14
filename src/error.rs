@@ -175,6 +175,8 @@ pub enum SignError {
     WitnessScriptMismatchShWsh,
     /// The signature sighash did not match the sighash provided in the input.
     SighashMismatch,
+    /// `SIGHASH_SINGLE` used on an input with no output at the same index.
+    SighashSingleMissingOutput,
 }
 
 impl fmt::Display for SignError {
@@ -208,6 +210,8 @@ impl fmt::Display for SignError {
                 write!(f, "nested segwit p2wsh script_pubkey did not match redeem script hash"),
             Self::SighashMismatch =>
                 write!(f, "the signature sighash did not match the sighash provided in the input"),
+            Self::SighashSingleMissingOutput =>
+                write!(f, "sighash single input has no output at the same index"),
         }
     }
 }
@@ -237,7 +241,8 @@ impl std::error::Error for SignError {
             | Self::RedeemScriptMismatch
             | Self::WitnessScriptMismatchWsh
             | Self::WitnessScriptMismatchShWsh
-            | Self::SighashMismatch => None,
+            | Self::SighashMismatch
+            | Self::SighashSingleMissingOutput => None,
         }
     }
 }
