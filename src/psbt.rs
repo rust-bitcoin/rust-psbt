@@ -38,7 +38,9 @@ use bitcoin::key::{PrivateKey, PublicKey};
 use bitcoin::locktime::absolute;
 use bitcoin::secp256k1::{Message, Secp256k1, Signing};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
-use bitcoin::{ecdsa, transaction, Amount, Sequence, Transaction, TxOut, Txid};
+use bitcoin::{
+    ecdsa, transaction, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
+};
 use bitcoin_consensus_encoding::{ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, Encoder4};
 
 #[cfg(feature = "base64")]
@@ -812,6 +814,86 @@ impl Psbt {
         }
     }
 
+    /// Performs the BIP-174 signer validity checks for the input at `index`.
+    pub fn signer_checks(&self, index: usize) -> Result<(), SignError> {
+        self.check_input_index(index)?;
+        let input = &self.inputs[index];
+        let prevout_type = input.output_type()?;
+        let prevout = input.funding_utxo()?;
+
+        // If a witness UTXO is provided, no non-witness signature may be created.
+        if input.witness_utxo.is_some() {
+            if let OutputType::Bare = prevout_type {
+                return Err(SignError::NonWitnessSig);
+            }
+        }
+
+        // If a non-witness UTXO is provided, its hash must match the prevout txid.
+        if let Some(ref tx) = input.non_witness_utxo {
+            if tx.compute_txid() != input.previous_txid {
+                return Err(SignError::NonWitnessUtxoTxidMismatch);
+            }
+        }
+
+        // If a redeemScript is provided, the scriptPubKey must be for that redeemScript.
+        if let Some(ref redeem_script) = input.redeem_script {
+            let script_pubkey = ScriptBuf::new_p2sh(&redeem_script.script_hash());
+            if prevout.script_pubkey != script_pubkey {
+                return Err(SignError::RedeemScriptMismatch);
+            }
+        }
+
+        // If a witnessScript is provided the redeemScript must be for that witnessScript, and the
+        // scriptPubKey must be for that witnessScript.
+        if let Some(ref witness_script) = input.witness_script {
+            match prevout_type {
+                OutputType::Wsh
+                    if ScriptBuf::new_p2wsh(&witness_script.wscript_hash())
+                        != *prevout.script_pubkey =>
+                {
+                    return Err(SignError::WitnessScriptMismatchWsh);
+                }
+                OutputType::ShWsh =>
+                    if let Some(ref redeem_script) = input.redeem_script {
+                        if ScriptBuf::new_p2wsh(&witness_script.wscript_hash()) != *redeem_script
+                            || ScriptBuf::new_p2sh(&redeem_script.script_hash())
+                                != *prevout.script_pubkey
+                        {
+                            return Err(SignError::WitnessScriptMismatchShWsh);
+                        }
+                    },
+                _ => (),
+            }
+        }
+
+        // Use provided sighash or DEFAULT for taproot output and ALL for non-taproot outputs.
+        let expected_sighash_type = match (input.sighash_type, prevout_type) {
+            (None, OutputType::Tr) => PsbtSighashType::from(TapSighashType::Default),
+            (None, _) => PsbtSighashType::ALL,
+            (Some(sighash_type), _) => sighash_type,
+        };
+
+        let sighash_mismatches = |sighash: PsbtSighashType| sighash != expected_sighash_type;
+
+        let has_mismatch = input
+            .tap_key_sig
+            .is_some_and(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || input
+                .tap_script_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || input
+                .partial_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)));
+
+        if has_mismatch {
+            return Err(SignError::SighashMismatch);
+        }
+
+        Ok(())
+    }
+
     /// Attempts to create _all_ the required signatures for this PSBT using `k`.
     ///
     /// **NOTE**: Taproot inputs are, as yet, not supported by this function. We currently only
@@ -845,14 +927,8 @@ impl Psbt {
 
         // Check all inputs before providing any signature (BIP-174).
         for i in 0..self.global.input_count {
-            match self.checked_input(i).map_err(SignError::IndexOutOfBounds) {
-                Err(e) => {
-                    errors.insert(i, e);
-                }
-                Ok(input) =>
-                    if let Err(e) = input.signer_checks() {
-                        errors.insert(i, e);
-                    },
+            if let Err(e) = self.signer_checks(i) {
+                errors.insert(i, e);
             }
         }
 
@@ -1541,7 +1617,7 @@ mod tests {
         psbt.inputs[0].redeem_script = Some(redeem_script);
         psbt.inputs[0].witness_script = Some(witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Ok(()));
+        assert_eq!(psbt.signer_checks(0), Ok(()));
     }
 
     #[test]
@@ -1557,7 +1633,7 @@ mod tests {
         psbt.inputs[0].redeem_script = Some(redeem_script);
         psbt.inputs[0].witness_script = Some(wrong_witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::WitnessScriptMismatchShWsh));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::WitnessScriptMismatchShWsh));
     }
 
     #[test]
@@ -1570,7 +1646,7 @@ mod tests {
         psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
         psbt.inputs[0].witness_script = Some(witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Ok(()));
+        assert_eq!(psbt.signer_checks(0), Ok(()));
     }
 
     #[test]
@@ -1584,7 +1660,7 @@ mod tests {
         psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
         psbt.inputs[0].witness_script = Some(wrong_witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::WitnessScriptMismatchWsh));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::WitnessScriptMismatchWsh));
     }
 
     #[test]
@@ -1601,7 +1677,7 @@ mod tests {
         };
         psbt.inputs[0].partial_sigs.insert(pubkey, sig);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::SighashMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::SighashMismatch));
     }
 
     #[test]
@@ -1620,7 +1696,7 @@ mod tests {
         psbt.inputs[0].spent_output_index = 0;
         psbt.inputs[0].non_witness_utxo = Some(funding_tx);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::NonWitnessUtxoTxidMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::NonWitnessUtxoTxidMismatch));
     }
 
     #[test]
@@ -1636,7 +1712,7 @@ mod tests {
             sighash_type: TapSighashType::None,
         });
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::SighashMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::SighashMismatch));
     }
     #[test]
     fn iter_funding_utxos_yields_correct_utxo() {
