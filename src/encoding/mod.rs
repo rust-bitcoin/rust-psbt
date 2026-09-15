@@ -336,9 +336,11 @@ mod tests {
         let items = [Sequence::ZERO, Sequence::MAX];
         let mut encoder = <ExactSliceEncoder<'_, Sequence>>::without_length_prefix(&items);
 
+        assert_eq!(encoder.current_chunk(), [0x00; 4], "first sequence bytes");
         assert_eq!(encoder.len(), 8, "two sequences encode to 4 bytes each");
 
         assert!(encoder.advance().has_more(), "second sequence remains");
+        assert_eq!(encoder.current_chunk(), [0xff; 4], "second sequence bytes");
         assert_eq!(encoder.len(), 4, "first sequence consumed");
 
         assert!(encoder.advance().has_finished(), "both items consumed");
