@@ -41,9 +41,10 @@ use crate::encoding::PsbtEncode;
 use crate::error::{write_err, FundingUtxoError};
 use crate::io::Cursor;
 use crate::map::Map;
+use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::serialize::{Deserialize, Serialize};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
-use crate::{raw, serialize};
+use crate::{raw, serialize, SignError};
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -181,6 +182,127 @@ impl Input {
             proprietaries: BTreeMap::new(),
             unknowns: BTreeMap::new(),
         }
+    }
+
+    /// Returns the [`OutputType`] of the spend utxo for this PSBT's input at `input_index`.
+    pub fn output_type(&self) -> Result<OutputType, SignError> {
+        let utxo = self.funding_utxo()?;
+        let spk = utxo.script_pubkey.clone();
+
+        // Anything that is not segwit and is not p2sh is `Bare`.
+        if !(spk.is_witness_program() || spk.is_p2sh()) {
+            return Ok(OutputType::Bare);
+        }
+
+        if spk.is_p2wpkh() {
+            return Ok(OutputType::Wpkh);
+        }
+
+        if spk.is_p2wsh() {
+            return Ok(OutputType::Wsh);
+        }
+
+        if spk.is_p2sh() {
+            if self.redeem_script.as_ref().map(|s| s.is_p2wpkh()).unwrap_or(false) {
+                return Ok(OutputType::ShWpkh);
+            }
+            if self.redeem_script.as_ref().map(|x| x.is_p2wsh()).unwrap_or(false) {
+                return Ok(OutputType::ShWsh);
+            }
+            return Ok(OutputType::Sh);
+        }
+
+        if spk.is_p2tr() {
+            return Ok(OutputType::Tr);
+        }
+
+        // Something is wrong with the input scriptPubkey or we do not know how to sign
+        // because there has been a new softfork that we do not yet support.
+        Err(SignError::UnknownOutputType)
+    }
+
+    /// Returns the algorithm used to sign this PSBT's input at `input_index`.
+    pub fn signing_algorithm(&self) -> Result<SigningAlgorithm, SignError> {
+        let output_type = self.output_type()?;
+        Ok(output_type.signing_algorithm())
+    }
+
+    /// Performs the BIP-174 signer validity checks for the input at `index`.
+    pub fn signer_checks(&self) -> Result<(), SignError> {
+        let prevout_type = self.output_type();
+        let prevout = self.funding_utxo()?;
+
+        // If a witness UTXO is provided, no non-witness signature may be created.
+        if self.witness_utxo.is_some() {
+            if let Ok(OutputType::Bare) = prevout_type {
+                return Err(SignError::NonWitnessSig);
+            }
+        }
+
+        // If a non-witness UTXO is provided, its hash must match the prevout txid.
+        if let Some(ref tx) = self.non_witness_utxo {
+            if tx.compute_txid() != self.previous_txid {
+                return Err(SignError::NonWitnessUtxoTxidMismatch);
+            }
+        }
+
+        // If a redeemScript is provided, the scriptPubKey must be for that redeemScript.
+        if let Some(ref redeem_script) = self.redeem_script {
+            let script_pubkey = ScriptBuf::new_p2sh(&redeem_script.script_hash());
+            if prevout.script_pubkey != script_pubkey {
+                return Err(SignError::RedeemScriptMismatch);
+            }
+        }
+
+        // If a witnessScript is provided the redeemScript must be for that witnessScript, and the
+        // scriptPubKey must be for that witnessScript.
+        if let Some(ref witness_script) = self.witness_script {
+            match prevout_type {
+                Ok(OutputType::Wsh)
+                    if ScriptBuf::new_p2wsh(&witness_script.wscript_hash())
+                        != *prevout.script_pubkey =>
+                {
+                    return Err(SignError::WitnessScriptMismatchWsh);
+                }
+                Ok(OutputType::ShWsh) =>
+                    if let Some(ref redeem_script) = self.redeem_script {
+                        if ScriptBuf::new_p2wsh(&witness_script.wscript_hash()) != *redeem_script
+                            || ScriptBuf::new_p2sh(&redeem_script.script_hash())
+                                != *prevout.script_pubkey
+                        {
+                            return Err(SignError::WitnessScriptMismatchShWsh);
+                        }
+                    },
+                _ => (),
+            }
+        }
+
+        // Use provided sighash or DEFAULT for taproot output and ALL for non-taproot outputs.
+        let expected_sighash_type = match (self.sighash_type, prevout_type) {
+            (None, Ok(OutputType::Tr)) => PsbtSighashType::from(TapSighashType::Default),
+            (None, _) => PsbtSighashType::ALL,
+            (Some(sighash_type), _) => sighash_type,
+        };
+
+        let sighash_mismatches = |sighash: PsbtSighashType| sighash != expected_sighash_type;
+
+        let has_mismatch = self
+            .tap_key_sig
+            .is_some_and(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || self
+                .tap_script_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || self
+                .partial_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)));
+
+        if has_mismatch {
+            return Err(SignError::SighashMismatch);
+        }
+
+        Ok(())
     }
 
     /// Returns all key-value pairs for this input map in serialization order.
