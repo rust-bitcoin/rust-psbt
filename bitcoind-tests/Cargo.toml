@@ -10,10 +10,9 @@ publish = false
 stable = "1.98.1"
 
 [dependencies]
-bitcoind = { version = "0.38.0", features = ["download"] }
+bitcoind = { version = "0.41.0", features = ["download"] }
 psbt-v2 = { path = "..", features = ["std", "miniscript", "rand", "base64"] }
 
 [features]
-# Bitcoin Core version range integration testing.
-"latest" = ["bitcoind/30_2"]
-"minimum" = ["bitcoind/0_17_2"] # Initial PSBT v0 (BIP-174) support.
+"latest" = ["bitcoind/31_0"]  # Most recent Bitcoin Core version.
+"v0" = ["bitcoind/0_17_2"]    # Initial PSBT v0 (BIP-174) support.
