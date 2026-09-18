@@ -44,6 +44,9 @@ pub(crate) type FallbackLockTimeValueDecoder =
 /// [`Amount`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Amount {}
 
+pub(crate) type AmountPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
+
 /// [`Sequence`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Sequence {}
 

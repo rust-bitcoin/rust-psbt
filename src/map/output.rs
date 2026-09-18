@@ -12,7 +12,8 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
 use bitcoin_consensus_encoding::{
-    Decoder, DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith,
+    CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith,
+    IterEncoder,
 };
 
 use crate::consts::{
@@ -22,10 +23,18 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::PsbtEncode;
+use crate::encoding::delegates::AmountPair;
+use crate::encoding::native::{
+    OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, SeparatorEncoder, TapInternalKeyPair,
+    TapTreePair,
+};
+#[cfg(feature = "silent-payments")]
+use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
+use crate::encoding::{KeyValueEncoder, PsbtEncode};
 use crate::error::write_err;
 use crate::io::Cursor;
 use crate::map::Map;
+use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::serialize::{Deserialize, Serialize};
 use crate::{raw, serialize};
 
@@ -323,21 +332,245 @@ impl Decoder for OutputDecoder {
 /// Decodes a sequence of output maps, one per output.
 pub(crate) type OutputsDecoder = ExactVecDecoderWith<OutputDecoder>;
 
-/// Encoder for a PSBT output map.
-pub struct OutputMapEncoder(Vec<u8>);
+/// State of the output map encoder, one key-value pair per variant.
+enum EncoderState<'e> {
+    Amount(AmountPair<'e>),
+    Script(ScriptPair<'e>),
+    RedeemScript(ScriptPair<'e>),
+    WitnessScript(ScriptPair<'e>),
+    Bip32Derivations(IterEncoder<OutBip32DerivationIter<'e>>),
+    TapInternalKey(TapInternalKeyPair<'e>),
+    TapTree(TapTreePair<'e>),
+    TapKeyOrigins(IterEncoder<OutTapKeyOriginIter<'e>>),
+    #[cfg(feature = "silent-payments")]
+    SpV0Info(SpV0InfoPair<'e>),
+    #[cfg(feature = "silent-payments")]
+    SpV0Label(SpV0LabelPair<'e>),
+    Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
+    Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
+    Separator(SeparatorEncoder),
+}
 
-impl Encoder for OutputMapEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0[..] }
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+/// Encoder for a PSBT output map.
+///
+/// Walks the map's fields in canonical order without materializing raw `Pair` buffers.
+pub struct OutputMapEncoder<'e> {
+    output: &'e Output,
+    state: EncoderState<'e>,
+}
+
+impl<'e> OutputMapEncoder<'e> {
+    fn new(output: &'e Output) -> Self {
+        let state = EncoderState::Amount(KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_OUT_AMOUNT),
+            output.amount.psbt_encoder(),
+        ));
+        Self { output, state }
+    }
+
+    /// Constructs the next state in field order after the current one, if any.
+    fn next_state(&self) -> Option<EncoderState<'e>> {
+        match &self.state {
+            EncoderState::Amount(_) => self.script_state(),
+            EncoderState::Script(_) => self.redeem_script_state(),
+            EncoderState::RedeemScript(_) => self.witness_script_state(),
+            EncoderState::WitnessScript(_) => Some(self.bip32_derivations_state()),
+            EncoderState::Bip32Derivations(_) => self.tap_internal_key_state(),
+            EncoderState::TapInternalKey(_) => self.tap_tree_state(),
+            EncoderState::TapTree(_) => Some(self.tap_key_origins_state()),
+            EncoderState::TapKeyOrigins(_) => self.after_tap_key_origins(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Info(_) => self.sp_v0_label_state(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Label(_) => Some(self.proprietaries_state()),
+            EncoderState::Proprietaries(_) => Some(self.unknowns_state()),
+            EncoderState::Unknowns(_) => Some(EncoderState::Separator(SeparatorEncoder::new())),
+            EncoderState::Separator(_) => None,
+        }
+    }
+
+    /// The first state after `tap_key_origins`, cfg-gated on silent payments.
+    fn after_tap_key_origins(&self) -> Option<EncoderState<'e>> {
+        #[cfg(feature = "silent-payments")]
+        {
+            self.sp_v0_info_state()
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            Some(self.proprietaries_state())
+        }
+    }
+
+    fn script_state(&self) -> Option<EncoderState<'e>> {
+        // BIP-375 represents an underived silent payment output by omitting the script, so
+        // encoding one has to leave the field out rather than write it empty.
+        #[cfg(feature = "silent-payments")]
+        let omit_script = self.output.sp_v0_info.is_some() && self.output.script_pubkey.is_empty();
+        #[cfg(not(feature = "silent-payments"))]
+        let omit_script = false;
+
+        if omit_script {
+            return self.redeem_script_state();
+        }
+        Some(EncoderState::Script(KeyValueEncoder::from_sized_kv(
+            CompactSizeEncoder::new_u64(PSBT_OUT_SCRIPT),
+            self.output.script_pubkey.psbt_encoder(),
+        )))
+    }
+
+    fn redeem_script_state(&self) -> Option<EncoderState<'e>> {
+        match &self.output.redeem_script {
+            Some(script) => Some(EncoderState::RedeemScript(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_REDEEM_SCRIPT),
+                script.psbt_encoder(),
+            ))),
+            None => self.witness_script_state(),
+        }
+    }
+
+    fn witness_script_state(&self) -> Option<EncoderState<'e>> {
+        match &self.output.witness_script {
+            Some(script) => Some(EncoderState::WitnessScript(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_WITNESS_SCRIPT),
+                script.psbt_encoder(),
+            ))),
+            None => Some(self.bip32_derivations_state()),
+        }
+    }
+
+    fn bip32_derivations_state(&self) -> EncoderState<'e> {
+        EncoderState::Bip32Derivations(IterEncoder::new(OutBip32DerivationIter::new(
+            self.output.bip32_derivations.iter(),
+        )))
+    }
+
+    fn tap_internal_key_state(&self) -> Option<EncoderState<'e>> {
+        match &self.output.tap_internal_key {
+            Some(key) => Some(EncoderState::TapInternalKey(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_TAP_INTERNAL_KEY),
+                key.psbt_encoder(),
+            ))),
+            None => self.tap_tree_state(),
+        }
+    }
+
+    fn tap_tree_state(&self) -> Option<EncoderState<'e>> {
+        match &self.output.tap_tree {
+            Some(tree) => Some(EncoderState::TapTree(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_TAP_TREE),
+                tree.psbt_encoder(),
+            ))),
+            None => Some(self.tap_key_origins_state()),
+        }
+    }
+
+    fn tap_key_origins_state(&self) -> EncoderState<'e> {
+        EncoderState::TapKeyOrigins(IterEncoder::new(OutTapKeyOriginIter::new(
+            self.output.tap_key_origins.iter(),
+        )))
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn sp_v0_info_state(&self) -> Option<EncoderState<'e>> {
+        // Importing inside method to avoid linting issues because feature is disabled
+        use bitcoin_consensus_encoding::BytesEncoder;
+
+        match &self.output.sp_v0_info {
+            Some(info) => Some(EncoderState::SpV0Info(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_SP_V0_INFO),
+                BytesEncoder::without_length_prefix(info.as_slice()),
+            ))),
+            None => self.sp_v0_label_state(),
+        }
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn sp_v0_label_state(&self) -> Option<EncoderState<'e>> {
+        use bitcoin_consensus_encoding::ArrayEncoder;
+
+        match &self.output.sp_v0_label {
+            Some(label) => Some(EncoderState::SpV0Label(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_OUT_SP_V0_LABEL),
+                ArrayEncoder::without_length_prefix(label.to_le_bytes()),
+            ))),
+            None => Some(self.proprietaries_state()),
+        }
+    }
+
+    fn proprietaries_state(&self) -> EncoderState<'e> {
+        EncoderState::Proprietaries(IterEncoder::new(ProprietaryKeyValueIter(
+            self.output.proprietaries.iter(),
+        )))
+    }
+
+    fn unknowns_state(&self) -> EncoderState<'e> {
+        EncoderState::Unknowns(IterEncoder::new(UnknownKeyValueIter(self.output.unknowns.iter())))
+    }
+}
+
+impl Encoder for OutputMapEncoder<'_> {
+    fn current_chunk(&self) -> &[u8] {
+        match &self.state {
+            EncoderState::Amount(e) => e.current_chunk(),
+            EncoderState::Script(e) => e.current_chunk(),
+            EncoderState::RedeemScript(e) => e.current_chunk(),
+            EncoderState::WitnessScript(e) => e.current_chunk(),
+            EncoderState::Bip32Derivations(e) => e.current_chunk(),
+            EncoderState::TapInternalKey(e) => e.current_chunk(),
+            EncoderState::TapTree(e) => e.current_chunk(),
+            EncoderState::TapKeyOrigins(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Info(e) => e.current_chunk(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Label(e) => e.current_chunk(),
+            EncoderState::Proprietaries(e) => e.current_chunk(),
+            EncoderState::Unknowns(e) => e.current_chunk(),
+            EncoderState::Separator(e) => e.current_chunk(),
+        }
+    }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let finished = match &mut self.state {
+            EncoderState::Amount(e) => e.advance().has_finished(),
+            EncoderState::Script(e) => e.advance().has_finished(),
+            EncoderState::RedeemScript(e) => e.advance().has_finished(),
+            EncoderState::WitnessScript(e) => e.advance().has_finished(),
+            EncoderState::Bip32Derivations(e) => e.advance().has_finished(),
+            EncoderState::TapInternalKey(e) => e.advance().has_finished(),
+            EncoderState::TapTree(e) => e.advance().has_finished(),
+            EncoderState::TapKeyOrigins(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Info(e) => e.advance().has_finished(),
+            #[cfg(feature = "silent-payments")]
+            EncoderState::SpV0Label(e) => e.advance().has_finished(),
+            EncoderState::Proprietaries(e) => e.advance().has_finished(),
+            EncoderState::Unknowns(e) => e.advance().has_finished(),
+            EncoderState::Separator(e) => e.advance().has_finished(),
+        };
+
+        if finished {
+            loop {
+                match self.next_state() {
+                    Some(next) => self.state = next,
+                    None => return EncoderStatus::Finished,
+                }
+                // Hop past any empty groups (e.g. an empty collection iterator).
+                if !self.current_chunk().is_empty() {
+                    return EncoderStatus::HasMore;
+                }
+            }
+        }
+
+        EncoderStatus::HasMore
+    }
 }
 
 impl PsbtEncode for Output {
-    type Encoder<'e> = OutputMapEncoder;
+    type Encoder<'e> = OutputMapEncoder<'e>;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        // TODO: swap out with native pull encoding.
         // `<output-map> := <keypair>* 0x00`
-        OutputMapEncoder(self.serialize_map())
+        OutputMapEncoder::new(self)
     }
 }
 
@@ -632,6 +865,15 @@ mod tests {
         assert_eq!(from_pairs, output.serialize_map());
     }
 
+    // Asserts the native pull-based encoder produces exactly `Map::serialize_map`'s bytes.
+    #[test]
+    fn encoder_matches_serialize_map() {
+        let output = Output::new(tx_out());
+
+        let encoded = crate::encoding::encode_to_vec(&output);
+        assert_eq!(encoded, Map::serialize_map(&output));
+    }
+
     #[test]
     fn encode_nonempty() {
         let output = Output::new(tx_out());
@@ -661,14 +903,21 @@ mod tests {
         let has_script = |output: &Output| {
             output.pairs().iter().any(|pair| pair.key.type_value == PSBT_OUT_SCRIPT)
         };
+        // Asserts the pull-based encoder applies the same omit rule as `pairs`.
+        let encoder_matches_pairs = |output: &Output| {
+            assert_eq!(crate::encoding::encode_to_vec(output), output.serialize_map());
+        };
         assert!(has_script(&ordinary));
+        encoder_matches_pairs(&ordinary);
 
         let mut derived_sp = ordinary;
         derived_sp.sp_v0_info = Some(vec![0; 66]);
         assert!(has_script(&derived_sp));
+        encoder_matches_pairs(&derived_sp);
 
         let mut underived_sp = derived_sp;
         underived_sp.script_pubkey = ScriptBuf::new();
         assert!(!has_script(&underived_sp));
+        encoder_matches_pairs(&underived_sp);
     }
 }

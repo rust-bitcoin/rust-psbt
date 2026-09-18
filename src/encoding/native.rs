@@ -34,7 +34,8 @@ use crate::consts::{
 use crate::consts::{
     PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
     PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
-    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_SEPARATOR,
+    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
+    PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_SEPARATOR,
 };
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
@@ -534,6 +535,8 @@ impl PsbtEncode for TapTree {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapTreeEncoder::new(self) }
 }
 
+pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
+
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
     pub struct LeafHashVecKeySourceEncoder<'e>(
@@ -628,6 +631,20 @@ impl PsbtEncode for DleqProof {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0InfoPair<'e> = KeyValueEncoder<CompactSizeEncoder, BytesEncoder<'e>>;
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+
+pub(crate) type OutBip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
+
+pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
+>;
 
 #[cfg(feature = "silent-payments")]
 pub(crate) type DleqKeyValueIter<'e> =
