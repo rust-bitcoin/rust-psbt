@@ -56,6 +56,7 @@ pub use crate::{
         NotUnsignedError, OutputsNotModifiableError, PartialSigsSighashTypeError,
         PsbtNotModifiableError, SignError, InconsistentKeySourcesError, FeeError, FundingUtxoError
     },
+    psbt::Psbt,
     sighash_type::{PsbtSighashType, InvalidSighashTypeError, ParseSighashTypeError},
     version::{Version, UnsupportedVersionError},
     v0::{DeserializeV0Error, SerializeV0Error},
