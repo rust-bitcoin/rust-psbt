@@ -9,7 +9,7 @@
 use bitcoind_tests::client::Client;
 use psbt::bitcoin::bip32::{IntoDerivationPath, Xpriv, Xpub};
 use psbt::bitcoin::secp256k1::Secp256k1;
-use psbt::bitcoin::{Address, Amount, Network, OutPoint, TxOut};
+use psbt::bitcoin::{Address, Amount, OutPoint, TxOut};
 use psbt::psbt::{Creator, Finalizer, Signer};
 use psbt::{Extractor, InputBuilder, OutputBuilder};
 use psbt_v2 as psbt;
@@ -18,10 +18,6 @@ const TEST_XPRIV: &str =
     "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
 const TEST_XPUB: &str =
     "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
-
-const NETWORK: Network = Network::Regtest;
-const ONE_BTC: Amount = Amount::from_int_btc(1);
-const FEE: Amount = Amount::from_sat(1_000);
 
 /// A single P2WPKH input spending to a P2WPKH output and a change output.
 #[test]
@@ -40,11 +36,11 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         let derived = xpriv.derive_priv(&secp, &path)?;
         let xpub = Xpub::from_priv(&secp, &derived);
         let cpk = xpub.to_pub();
-        (cpk, Address::p2wpkh(&cpk, NETWORK))
+        (cpk, Address::p2wpkh(&cpk, Client::NETWORK))
     };
 
     // Fund the test address.
-    let txid = client.send(ONE_BTC, &address)?;
+    let txid = client.send(Client::ONE_BTC, &address)?;
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -60,7 +56,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     // Build the PSBT.
     let receiver = client.wallet_address()?;
     let spend_amount = Amount::from_sat(50_000_000);
-    let change_amount = fund.value - spend_amount - FEE;
+    let change_amount = fund.value - spend_amount - Client::FEE;
 
     let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
     let change_output = TxOut { value: change_amount, script_pubkey: address.script_pubkey() };
@@ -114,11 +110,11 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
         let derived = xpriv.derive_priv(&secp, &path)?;
         let xpub = Xpub::from_priv(&secp, &derived);
         let cpk = xpub.to_pub();
-        (cpk, Address::p2pkh(cpk, NETWORK))
+        (cpk, Address::p2pkh(cpk, Client::NETWORK))
     };
 
     // Fund the test address.
-    let txid = client.send(ONE_BTC, &address)?;
+    let txid = client.send(Client::ONE_BTC, &address)?;
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -134,7 +130,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     // Build the PSBT.
     let receiver = client.wallet_address()?;
     let spend_amount = Amount::from_sat(50_000_000);
-    let change_amount = fund.value - spend_amount - FEE;
+    let change_amount = fund.value - spend_amount - Client::FEE;
 
     let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
     let change_output = TxOut { value: change_amount, script_pubkey: address.script_pubkey() };
@@ -189,18 +185,18 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         let derived = xpriv.derive_priv(&secp, &path0)?;
         let xpub = Xpub::from_priv(&secp, &derived);
         let cpk = xpub.to_pub();
-        (cpk, Address::p2wpkh(&cpk, NETWORK))
+        (cpk, Address::p2wpkh(&cpk, Client::NETWORK))
     };
     let (cpk1, address1) = {
         let derived = xpriv.derive_priv(&secp, &path1)?;
         let xpub = Xpub::from_priv(&secp, &derived);
         let cpk = xpub.to_pub();
-        (cpk, Address::p2wpkh(&cpk, NETWORK))
+        (cpk, Address::p2wpkh(&cpk, Client::NETWORK))
     };
 
     // Fund both addresses.
-    let txid0 = client.send(ONE_BTC, &address0)?;
-    let txid1 = client.send(ONE_BTC, &address1)?;
+    let txid0 = client.send(Client::ONE_BTC, &address0)?;
+    let txid1 = client.send(Client::ONE_BTC, &address1)?;
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -226,7 +222,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let receiver = client.wallet_address()?;
     let total_input = fund0.value + fund1.value;
     let spend_amount = Amount::from_sat(150_000_000);
-    let change_amount = total_input - spend_amount - FEE;
+    let change_amount = total_input - spend_amount - Client::FEE;
 
     let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
     let change_output = TxOut { value: change_amount, script_pubkey: address0.script_pubkey() };

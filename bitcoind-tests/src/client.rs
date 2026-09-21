@@ -28,7 +28,7 @@
 // i.e., it is lower down the stack than the psbt_v2 crate.
 use bitcoind::vtype::GetBlockchainInfo;
 use bitcoind::{AddressType, BitcoinD};
-use psbt_v2::bitcoin::{Address, Amount, Transaction, Txid};
+use psbt_v2::bitcoin::{Address, Amount, Network, Transaction, Txid};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -43,6 +43,15 @@ pub struct Client {
 }
 
 impl Client {
+    /// The network the client runs on.
+    pub const NETWORK: Network = Network::Regtest;
+
+    /// Convenience constant: 1 BTC.
+    pub const ONE_BTC: Amount = Amount::from_int_btc(1);
+
+    /// The per-transaction fee used by both the balance tracker and PSBT change calculations.
+    pub const FEE: Amount = Amount::from_sat(1_000);
+
     /// Creates a new [`Client`].
     pub fn new() -> Result<Self> {
         let exe_path = bitcoind::exe_path()?;
@@ -171,9 +180,7 @@ impl BalanceTracker {
 
     /// Update balance by sending `amount` (deducts amount + estimated fee).
     fn send(&mut self, amount: Amount) {
-        // 1000 mimics some fee amount, the exact amount is not important
-        // because we ignore everything after the decimal place.
-        self.balance = self.balance - amount - Amount::from_sat(1000);
+        self.balance = self.balance - amount - Client::FEE;
     }
 
     /// Update balance by receiving `amount`.
