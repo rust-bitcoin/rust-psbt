@@ -9,7 +9,7 @@
 use bitcoind_tests::client::Client;
 use psbt::bitcoin::bip32::{IntoDerivationPath, Xpriv, Xpub};
 use psbt::bitcoin::secp256k1::Secp256k1;
-use psbt::bitcoin::{Address, Amount, OutPoint, TxOut};
+use psbt::bitcoin::{Address, Amount, OutPoint, ScriptBuf, TxOut};
 use psbt::psbt::{Creator, Finalizer, Signer};
 use psbt::{Extractor, InputBuilder, OutputBuilder};
 use psbt_v2 as psbt;
@@ -241,6 +241,154 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         .input(input1)
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
+        .psbt()?;
+
+    // Sign and finalize the PSBT.
+    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+
+    // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
+    let b64 = finalized.serialize_v0_base64_lossy()?;
+    client.decode_psbt(&b64)?;
+
+    // Broadcast the extracted transaction.
+    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    client.send_raw_transaction(&tx)?;
+    client.mine_a_block()?;
+    client.track_receive(spend_amount);
+    client.assert_balance_is_as_expected()?;
+
+    Ok(())
+}
+
+/// A single P2SH-P2WPKH (wrapped segwit) input spending to a P2WPKH output and a change output.
+///
+/// Exercises the nested/wrapped segwit path. The UTXO sits at a P2SH address that wraps a
+/// P2WPKH redeem script. The PSBT carries a `witness_utxo` and the finalizer produces both
+/// a scriptSig (pushing the redeem script) and a witness.
+#[test]
+fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = Client::new()?;
+    client.mine_a_block()?;
+
+    // Generate key material.
+    let xpriv: Xpriv = TEST_XPRIV.parse()?;
+    let xpub: Xpub = TEST_XPUB.parse()?;
+    let fingerprint = xpub.fingerprint();
+    let path = "m/0".into_derivation_path()?;
+    let secp = Secp256k1::new();
+
+    let (cpk, address) = {
+        let derived = xpriv.derive_priv(&secp, &path)?;
+        let xpub = Xpub::from_priv(&secp, &derived);
+        let cpk = xpub.to_pub();
+        (cpk, Address::p2shwpkh(&cpk, Client::NETWORK))
+    };
+
+    // Fund the test address.
+    let txid = client.send(Client::ONE_BTC, &address)?;
+    client.mine_a_block()?;
+    client.assert_balance_is_as_expected()?;
+
+    // Fetch the funded UTXO.
+    let tx = client.get_transaction(&txid)?;
+    let spk = address.script_pubkey();
+    let utxos: Vec<_> =
+        tx.output.iter().zip(0u32..).filter(|(out, _)| out.script_pubkey == spk).collect();
+    assert_eq!(utxos.len(), 1);
+    let (fund, vout) = utxos[0];
+    let out_point = OutPoint { txid, vout };
+
+    // Build the PSBT.
+    let receiver = client.wallet_address()?;
+    let spend_amount = Amount::from_sat(50_000_000);
+    let change_amount = fund.value - spend_amount - Client::FEE;
+
+    let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
+    let change_output = TxOut { value: change_amount, script_pubkey: address.script_pubkey() };
+
+    let mut input = InputBuilder::new(&out_point).segwit_fund(fund.clone()).build();
+    input.redeem_script =
+        Some(ScriptBuf::new_p2wpkh(&cpk.wpubkey_hash()));
+    input.bip32_derivations.insert(cpk.into(), (fingerprint, path.clone()));
+    input.sequence = Some(psbt::bitcoin::Sequence::MAX);
+
+    let psbt = Creator::new()
+        .constructor_modifiable()
+        .input(input)
+        .output(OutputBuilder::new(spend_output).build())?
+        .output(OutputBuilder::new(change_output).build())?
+        .psbt()?;
+
+    // Sign and finalize the PSBT.
+    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+
+    // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
+    let b64 = finalized.serialize_v0_base64_lossy()?;
+    client.decode_psbt(&b64)?;
+
+    // Broadcast the extracted transaction.
+    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    client.send_raw_transaction(&tx)?;
+    client.mine_a_block()?;
+    client.track_receive(spend_amount);
+    client.assert_balance_is_as_expected()?;
+
+    Ok(())
+}
+
+/// A single P2WPKH input with no change output.
+///
+/// Exercises the single-output PSBT path. When `input == output + fee` exactly, there is no
+/// change to return.
+#[test]
+fn no_change() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = Client::new()?;
+    client.mine_a_block()?;
+
+    // Generate key material.
+    let xpriv: Xpriv = TEST_XPRIV.parse()?;
+    let xpub: Xpub = TEST_XPUB.parse()?;
+    let fingerprint = xpub.fingerprint();
+    let path = "m/0".into_derivation_path()?;
+    let secp = Secp256k1::new();
+
+    let (cpk, address) = {
+        let derived = xpriv.derive_priv(&secp, &path)?;
+        let xpub = Xpub::from_priv(&secp, &derived);
+        let cpk = xpub.to_pub();
+        (cpk, Address::p2wpkh(&cpk, Client::NETWORK))
+    };
+
+    // Fund the test address.
+    let txid = client.send(Client::ONE_BTC, &address)?;
+    client.mine_a_block()?;
+    client.assert_balance_is_as_expected()?;
+
+    // Fetch the funded UTXO.
+    let tx = client.get_transaction(&txid)?;
+    let spk = address.script_pubkey();
+    let utxos: Vec<_> =
+        tx.output.iter().zip(0u32..).filter(|(out, _)| out.script_pubkey == spk).collect();
+    assert_eq!(utxos.len(), 1);
+    let (fund, vout) = utxos[0];
+    let out_point = OutPoint { txid, vout };
+
+    // Spend the entire UTXO minus the fee — no change output needed.
+    let receiver = client.wallet_address()?;
+    let spend_amount = fund.value - Client::FEE;
+
+    let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
+
+    let mut input = InputBuilder::new(&out_point).segwit_fund(fund.clone()).build();
+    input.bip32_derivations.insert(cpk.into(), (fingerprint, path.clone()));
+    input.sequence = Some(psbt::bitcoin::Sequence::MAX);
+
+    let psbt = Creator::new()
+        .constructor_modifiable()
+        .input(input)
+        .output(OutputBuilder::new(spend_output).build())?
         .psbt()?;
 
     // Sign and finalize the PSBT.
