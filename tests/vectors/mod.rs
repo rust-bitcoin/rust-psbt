@@ -445,16 +445,18 @@ fn consensus_tx(hex: &str) -> Transaction {
     deserialize::<Transaction>(&bytes).expect("previous_tx must be a valid transaction")
 }
 
-fn load_test_file(json_data: &str) -> TestFile {
-    serde_json::from_str(json_data).expect("failed to deserialize test vectors")
-}
-
 macro_rules! make_check_case {
     ($spec:ident) => {
         pub fn $spec(desc: &str) {
             static CASES: OnceLock<Vec<TestCase>> = OnceLock::new();
             let cases = CASES.get_or_init(|| {
-                load_test_file(include_str!(concat!("../data/", stringify!($spec), ".json"))).cases
+                serde_json::from_str::<TestFile>(include_str!(concat!(
+                    "../data/",
+                    stringify!($spec),
+                    ".json"
+                )))
+                .expect("failed to deserialize test vectors")
+                .cases
             });
             let case = cases.iter().find(|c| c.description == desc).unwrap_or_else(|| {
                 panic!("case not found in {} vectors: \"{desc}\"", stringify!($spec))
