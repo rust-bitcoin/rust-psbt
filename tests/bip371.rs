@@ -1,8 +1,4 @@
-//! BIP-174 test vector executor.
-//!
-//! Parses `bip371.json` and runs each case through a single dispatcher
-//! keyed on the `task` field. One `#[test]` per vector, named after its
-//! `description`, so `cargo test` output maps 1-to-1 with the JSON document.
+//! BIP-371 Test Vectors.
 
 #![cfg(all(feature = "std", feature = "base64", feature = "serde", feature = "miniscript"))]
 
@@ -14,66 +10,93 @@ mod invalid {
     use super::bip371;
 
     #[test]
-    fn in_tap_internal_key_is_too_long() { bip371(0); }
+    fn tap_internal_key_key_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_INTERNAL_KEY key is too long (incorrectly deserialized as compressed DER)");
+    }
 
     #[test]
-    fn in_tap_key_sig_is_too_short() { bip371(1); }
+    fn tap_key_sig_signature_too_short() {
+        bip371("Invalid: PSBT_IN_TAP_KEY_SIG signature is too short");
+    }
 
     #[test]
-    fn in_tap_key_sig_is_too_long() { bip371(2); }
+    fn tap_key_sig_signature_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_KEY_SIG signature is too long");
+    }
 
     #[test]
-    fn in_tap_bip32_derivation_key_is_too_long() { bip371(3); }
+    fn tap_bip32_derivation_key_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_BIP32_DERIVATION key is too long (incorrectly deserialized as compressed DER)");
+    }
 
     #[test]
-    fn out_tap_internal_key_is_too_long() { bip371(4); }
+    fn out_tap_internal_key_key_too_long() {
+        bip371("Invalid: PSBT_OUT_TAP_INTERNAL_KEY key is too long (incorrectly deserialized as compressed DER)");
+    }
 
     #[test]
-    fn out_tap_bip32_derivation_key_is_too_long() { bip371(5); }
+    fn out_tap_bip32_derivation_key_too_long() {
+        bip371("Invalid: PSBT_OUT_TAP_BIP32_DERIVATION key is too long (incorrectly deserialized as compressed DER)");
+    }
 
     #[test]
-    fn in_tap_script_sig_key_is_too_long() { bip371(6); }
+    fn tap_script_sig_key_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_SCRIPT_SIG key is too long (incorrectly deserialized as compressed DER)");
+    }
 
     #[test]
-    fn in_tap_script_sig_signature_is_too_long() { bip371(7); }
+    fn tap_script_sig_signature_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_SCRIPT_SIG signature is too long");
+    }
 
     #[test]
-    fn in_tap_script_sig_signature_is_too_short() { bip371(8); }
+    fn tap_script_sig_signature_too_short() {
+        bip371("Invalid: PSBT_IN_TAP_SCRIPT_SIG signature is too short");
+    }
 
     #[test]
-    fn in_tap_leaf_script_control_block_is_too_long() { bip371(9); }
+    fn tap_leaf_script_control_block_too_long() {
+        bip371("Invalid: PSBT_IN_TAP_LEAF_SCRIPT control block is too long");
+    }
 
     #[test]
-    fn in_tap_leaf_script_control_block_is_too_short() { bip371(10); }
+    fn tap_leaf_script_control_block_too_short() {
+        bip371("Invalid: PSBT_IN_TAP_LEAF_SCRIPT control block is too short");
+    }
 }
 
 mod valid {
     use super::bip371;
 
     #[test]
-    fn one_p2tr_key_only_input_with_internal_key_and_derivation_path() { bip371(11); }
-
-    #[test]
-    fn one_p2tr_key_only_input_with_internal_key_derivation_path_and_signature() { bip371(12); }
-
-    #[test]
-    fn one_p2tr_key_only_output_with_internal_key_and_derivation_path() { bip371(13); }
-
-    #[test]
-    fn one_p2tr_script_path_only_input_with_dummy_internal_key_scripts_script_keys_derivation_paths_and_merkle_root(
-    ) {
-        bip371(14);
+    fn one_p2tr_key_only_input_internal_key_derivation() {
+        bip371("Valid: one P2TR key only input with internal key and its derivation path");
     }
 
     #[test]
-    fn one_p2tr_script_path_only_output_with_dummy_internal_key_taptree_script_keys_and_derivation_paths(
-    ) {
-        bip371(15);
+    fn one_p2tr_key_only_input_internal_key_derivation_1() {
+        bip371(
+            "Valid: one P2TR key only input with internal key, its derivation path, and signature",
+        );
     }
 
     #[test]
-    fn one_p2tr_script_path_only_input_with_dummy_internal_key_scripts_script_key_derivation_paths_merkle_root_and_script_path_signatures(
-    ) {
-        bip371(16);
+    fn one_p2tr_key_only_output_internal_key_derivation() {
+        bip371("Valid: one P2TR key only output with internal key and its derivation path");
+    }
+
+    #[test]
+    fn one_p2tr_script_path_only_input_dummy_internal() {
+        bip371("Valid: one P2TR script path only input with dummy internal key, scripts, derivation paths for keys in the scripts, and merkle root");
+    }
+
+    #[test]
+    fn one_p2tr_script_path_only_output_dummy_internal() {
+        bip371("Valid: one P2TR script path only output with dummy internal key, taproot tree, and script key derivation paths");
+    }
+
+    #[test]
+    fn one_p2tr_script_path_only_input_dummy_internal_1() {
+        bip371("Valid: one P2TR script path only input with dummy internal key, scripts, script key derivation paths, merkle root, and script path signatures");
     }
 }

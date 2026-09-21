@@ -69,8 +69,8 @@ struct TestFile {
 
 #[derive(Debug, Deserialize)]
 pub struct TestCase {
-    #[serde(default, alias = "description")]
-    _description: String,
+    #[serde(alias = "description")]
+    pub description: String,
     #[serde(default)]
     version: u8,
     #[serde(default)]
@@ -518,12 +518,21 @@ fn load_test_file(json_data: &str) -> TestFile {
 
 macro_rules! make_check_case {
     ($spec:ident) => {
-        pub fn $spec(idx: usize) {
-            static VECTORS: OnceLock<TestFile> = OnceLock::new();
-            let file = VECTORS.get_or_init(|| {
-                load_test_file(include_str!(concat!("../data/", stringify!($spec), ".json")))
+        pub fn $spec(desc: &str) {
+            static CASES: OnceLock<Vec<TestCase>> = OnceLock::new();
+            let cases = CASES.get_or_init(|| {
+                load_test_file(include_str!(concat!("../data/", stringify!($spec), ".json"))).cases
             });
-            execute_case(&file.cases[idx]);
+            let case = cases
+                .iter()
+                .find(|c| c.description == desc)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "case not found in {} vectors: \"{desc}\"",
+                        stringify!($spec)
+                    )
+                });
+            execute_case(case);
         }
     };
 }

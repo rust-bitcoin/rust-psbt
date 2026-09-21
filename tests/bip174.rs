@@ -1,8 +1,6 @@
-//! BIP-174 test vector executor.
+//! BIP-174 test vectors.
 //!
-//! Parses `bip174.json` and runs each case through a single dispatcher
-//! keyed on the `task` field. One `#[test]` per vector, named after its
-//! `description`, so `cargo test` output maps 1-to-1 with the JSON document.
+//! Each test case is keyed by its canonical description from bip174.json.
 
 #![cfg(all(feature = "std", feature = "base64", feature = "serde", feature = "miniscript"))]
 
@@ -14,118 +12,148 @@ mod invalid {
     use super::bip174;
 
     #[test]
-    fn network_transaction_not_psbt_format() { bip174(0); }
+    fn network_transaction() { bip174("Invalid: network transaction, not PSBT format"); }
 
     #[test]
-    fn missing_outputs() { bip174(1); }
+    fn missing_outputs() { bip174("Invalid: missing outputs in PSBT"); }
 
     #[test]
-    fn unsigned_tx_has_signatures() { bip174(2); }
+    fn unsigned_transaction_contains_input_non_empty_scriptsig() {
+        bip174("Invalid: the unsigned transaction contains an input with a non empty scriptSig");
+    }
 
     #[test]
-    fn missing_unsigned_tx() { bip174(3); }
+    fn missing_unsigned_tx_where_inputs_outputs_provided() {
+        bip174("Invalid: missing unsigned tx on a PSBT where inputs and outputs are provided");
+    }
 
     #[test]
-    fn missing_inputs() { bip174(4); }
+    fn duplicated_keys_one_input() { bip174("Invalid: duplicated keys in one PSBT input"); }
 
     #[test]
-    fn non_witness_utxo() { bip174(5); }
+    fn global_transaction() { bip174("Invalid: invalid global transaction in PSBT"); }
 
     #[test]
-    fn witness_utxo_provided_for_non_witness_input() { bip174(6); }
+    fn input_witness_utxo() { bip174("Invalid: invalid input witness utxo in PSBT"); }
 
     #[test]
-    fn redeemscript_with_non_witness_utxo_does_not_match_the_scriptpubkey() { bip174(7); }
+    fn pubkey_length_input_partial_signature() {
+        bip174("Invalid: invalid pubkey length on PSBT input partial signature");
+    }
 
     #[test]
-    fn redeemscript_with_witness_utxo_does_not_match_the_scriptpubkey() { bip174(8); }
+    fn redeemscript() { bip174("Invalid: invalid redeemscript in PSBT"); }
 
     #[test]
-    fn witness_script_with_witness_utxo_does_not_match_the_redeemscript() { bip174(9); }
+    fn witnessscript() { bip174("Invalid: invalid witnessscript in PSBT"); }
 
     #[test]
-    fn witness_script() { bip174(10); }
+    fn pubkey_input_32_derivation_paths() {
+        bip174("Invalid: invalid pubkey in PSBT input BIP 32 derivation paths");
+    }
 
     #[test]
-    fn pubkey_in_input_bip_32_derivation_paths() { bip174(11); }
+    fn non_witness_utxo_input() { bip174("Invalid: invalid non-witness utxo in PSBT input"); }
 
     #[test]
-    fn pubkey_in_output_bip_32_derivation_paths() { bip174(12); }
+    fn final_scriptsig() { bip174("Invalid: invalid final scriptSig in PSBT"); }
 
     #[test]
-    fn duplicate_keys_in_input() { bip174(13); }
+    fn final_script_witness() { bip174("Invalid: invalid final script witness in PSBT"); }
 
     #[test]
-    fn pubkey_length_for_input_partial_signature() { bip174(14); }
+    fn public_key_output_32_derivation_paths() {
+        bip174("Invalid: invalid public key in PSBT output BIP 32 derivation paths");
+    }
 
     #[test]
-    fn input_sighash_type() { bip174(15); }
+    fn sighash_type_input() { bip174("Invalid: invalid SIGHASH type in PSBT input"); }
 
     #[test]
-    fn output_redeemscript() { bip174(16); }
+    fn output_redeemscript() { bip174("Invalid: invalid output redeemScript in PSBT"); }
 
     #[test]
-    fn output_witness_script() { bip174(17); }
+    fn witnessscript_output() { bip174("Invalid: invalid witnessScript in PSBT output"); }
 
     #[test]
-    fn global_transaction() { bip174(18); }
+    fn unsigned_tx_serialized_witness_serialization_format() {
+        bip174("Invalid: unsigned tx serialized with witness serialization format in PSBT");
+    }
 
     #[test]
-    fn unsigned_tx_serialized_with_witness_serialization_format() { bip174(19); }
+    fn valuesize_length_does_match_valuelen_size() {
+        bip174("Invalid: <valuesize> length does not match <valuelen> size in PSBT");
+    }
 
     #[test]
-    fn final_scriptsig() { bip174(24); }
+    fn witness_utxo_provided_non_witness_input() {
+        bip174("Invalid: a Witness UTXO is provided for a non-witness input");
+    }
 
     #[test]
-    fn final_script_witness() { bip174(25); }
+    fn redeemscript_non_witness_utxo_does_match_scriptpubkey() {
+        bip174("Invalid: redeemScript with non-witness UTXO does not match the scriptPubKey");
+    }
 
     #[test]
-    fn value_data_size_does_not_match_value_len() { bip174(26); }
+    fn redeemscript_witness_utxo_does_not_match_scriptpubkey() {
+        bip174("Invalid: redeemScript with witness UTXO does not match the scriptPubKey");
+    }
 
     #[test]
-    fn redeemscript() { bip174(27); }
+    fn witnessscript_witness_utxo_does_match_redeemscript() {
+        bip174("Invalid: witnessScript with witness UTXO does not match the redeemScript");
+    }
 }
 
 mod valid {
     use super::bip174;
 
     #[test]
-    fn no_inputs_nor_outputs_in_global_unsigned_tx() { bip174(20); }
+    fn one_p2pkh_input_outputs() { bip174("Valid: one P2PKH input and no outputs in PSBT"); }
 
     #[test]
-    fn no_outputs_one_p2pkh_input() { bip174(21); }
-
-    #[test]
-    fn no_outputs_and_a_p2pkh_input_without_final_scriptsig_and_sighash_type_set() { bip174(22); }
-
-    #[test]
-    fn no_inputs() { bip174(23); }
-
-    #[test]
-    fn outputs_filled_with_p2pkh_input_and_p2sh_p2wpkh_input_with_reedem_script_both_with_non_final_scriptsigs(
-    ) {
-        bip174(28);
+    fn one_signed_finalized_p2pkh_input_one_p2sh_p2wpkh() {
+        bip174("Valid: PSBT with one signed and finalized P2PKH input and one P2SH-P2WPKH input. Outputs are empty");
     }
 
     #[test]
-    fn outputs_filled_one_p2wsh_2_of_2_multisig_input_witness_script_keypaths_and_global_xpubs_available_no_signatures(
-    ) {
-        bip174(29);
+    fn one_p2pkh_input_non_final_scriptsig_sighash_type() {
+        bip174("Valid: PSBT with one P2PKH input with a non-final scriptSig and sighash type set. Outputs are empty");
     }
 
     #[test]
-    fn psbt_global_xpub() { bip174(31); }
+    fn one_p2pkh_input_one_p2sh_p2wpkh_input_both() {
+        bip174("Valid: PSBT with one P2PKH input and one P2SH-P2WPKH input both with non-final scriptSigs. P2SH-P2WPKH input's redeemScript is available. Outputs filled.");
+    }
 
     #[test]
-    fn unknown_types_in_the_inputs() { bip174(32); }
+    fn one_p2sh_p2wsh_input_multisig_redeemscript_witnessscript_keypaths() {
+        bip174("Valid: PSBT with one P2SH-P2WSH input of a 2-of-2 multisig. redeemScript, witnessScript, and keypaths are available. Contains one signature.");
+    }
 
     #[test]
-    fn combiner_combines_keys_lexicographically() { bip174(33); }
+    fn one_p2wsh_input_multisig_witnessscript_keypaths_global_xpubs() {
+        bip174("Valid: PSBT with one P2WSH input of a 2-of-2 multisig. witnessScript, keypaths, and global xpubs are available. Contains no signatures. Outputs filled.");
+    }
 
     #[test]
-    fn one_p2sh_p2wsh_2_of_2_multisig_input_with_redeemscript_witness_script_and_keypaths_one_signature_available(
-    ) {
-        bip174(39);
+    fn unknown_types_inputs() { bip174("Valid: PSBT with unknown types in the inputs."); }
+
+    #[test]
+    fn global_xpub() { bip174("Valid: PSBT with `PSBT_GLOBAL_XPUB`."); }
+
+    #[test]
+    fn global_unsigned_tx_inputs_nor_outputs() {
+        bip174("Valid: PSBT with global unsigned tx and no inputs nor outputs");
+    }
+
+    #[test]
+    fn no_inputs() { bip174("Valid: PSBT with no inputs"); }
+
+    #[test]
+    fn combine_with_unknown_key_value_pairs() {
+        bip174("Valid: taking as input the PSBTs with unknown key-value pairs, a Combiner which orders keys lexicographically combines them into a single PSBT");
     }
 }
 
@@ -133,29 +161,42 @@ mod workflow {
     use super::bip174;
 
     #[test]
-    fn step_1_creator_creates_psbt() { bip174(34); }
-
-    #[test]
-    fn step_2_updater_updates_keys() { bip174(35); }
-
-    #[test]
-    fn step_3_updater_updates_sighash() { bip174(36); }
-
-    #[test]
-    fn step_4_signer_that_supports_sighash_all_for_p2pkh_and_p2wpkh_spends_and_uses_rfc6979_for_nonce_generation_provides_first_signature(
-    ) {
-        bip174(37);
+    fn creator_takes_given_inputs_outputs() {
+        bip174("Workflow A (step 1): the Creator takes the given inputs and outputs and produces the PSBT");
     }
 
     #[test]
-    fn step_5_signer_provides_second_signature() { bip174(38); }
+    fn updater_takes_key_witness_material() {
+        bip174("Workflow A (step 2): with the PSBT produced in step 1 of Workflow A, the Updater takes the key and witness material and updates the PSBT");
+    }
 
     #[test]
-    fn step_6_combiner_combines() { bip174(40); }
+    fn updater_adds_sighash_flag() {
+        bip174("Workflow A (step 3): with the PSBT produced in step 2 of Workflow A, the Updater adds the sighash flag to the PSBT");
+    }
 
     #[test]
-    fn step_7_input_finalizer_finalizes() { bip174(40); }
+    fn signer_which_supports_sighash_all() {
+        bip174("Workflow A (step 4): with the PSBT produced in step 3 of Workflow A, a Signer which supports SIGHASH_ALL for P2PKH and P2WPKH spends and uses RFC6979 for nonce generation, adds the first partial signature of the second input of the PSBT");
+    }
 
     #[test]
-    fn step_8_extractor_extracts() { bip174(41); }
+    fn signer_adds_second_partial_signature() {
+        bip174("Workflow A (step 5): with the PSBT produced in step 4 of Workflow A, a Signer adds the second partial signature of the second input of the PSBT");
+    }
+
+    #[test]
+    fn combiner_combines_them() {
+        bip174("Workflow A (step 6): with the PSBTs produced in step 4 and step 5 of Workflow A, a Combiner combines them into a single PSBT");
+    }
+
+    #[test]
+    fn finalizer_finalizes_second_input() {
+        bip174("Workflow A (step 7): with the PSBT produced in step 6 of Workflow A, an Input Finalizer finalizes the second input of the PSBT");
+    }
+
+    #[test]
+    fn extractor_extracts_bitcoin_transaction() {
+        bip174("Workflow A (step 8): with the PSBT produced in step 7 of Workflow A, a Transaction Extractor extracts a bitcoin transaction");
+    }
 }
