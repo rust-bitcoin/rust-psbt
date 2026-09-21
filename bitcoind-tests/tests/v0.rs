@@ -45,7 +45,6 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fund the test address.
     let txid = client.send(ONE_BTC, &address)?;
-    client.balance.send(ONE_BTC);
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -59,7 +58,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     let out_point = OutPoint { txid, vout };
 
     // Build the PSBT.
-    let receiver = client.core_wallet_controlled_address()?;
+    let receiver = client.wallet_address()?;
     let spend_amount = Amount::from_sat(50_000_000);
     let change_amount = fund.value - spend_amount - FEE;
 
@@ -89,7 +88,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
-    client.balance.receive(spend_amount);
+    client.track_receive(spend_amount);
     client.assert_balance_is_as_expected()?;
 
     Ok(())
@@ -120,7 +119,6 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fund the test address.
     let txid = client.send(ONE_BTC, &address)?;
-    client.balance.send(ONE_BTC);
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -134,7 +132,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     let out_point = OutPoint { txid, vout };
 
     // Build the PSBT.
-    let receiver = client.core_wallet_controlled_address()?;
+    let receiver = client.wallet_address()?;
     let spend_amount = Amount::from_sat(50_000_000);
     let change_amount = fund.value - spend_amount - FEE;
 
@@ -164,7 +162,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
-    client.balance.receive(spend_amount);
+    client.track_receive(spend_amount);
     client.assert_balance_is_as_expected()?;
 
     Ok(())
@@ -202,9 +200,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fund both addresses.
     let txid0 = client.send(ONE_BTC, &address0)?;
-    client.balance.send(ONE_BTC);
     let txid1 = client.send(ONE_BTC, &address1)?;
-    client.balance.send(ONE_BTC);
     client.mine_a_block()?;
     client.assert_balance_is_as_expected()?;
 
@@ -227,7 +223,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let out_point1 = OutPoint { txid: txid1, vout: vout1 };
 
     // Build the PSBT.
-    let receiver = client.core_wallet_controlled_address()?;
+    let receiver = client.wallet_address()?;
     let total_input = fund0.value + fund1.value;
     let spend_amount = Amount::from_sat(150_000_000);
     let change_amount = total_input - spend_amount - FEE;
@@ -263,7 +259,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
-    client.balance.receive(spend_amount);
+    client.track_receive(spend_amount);
     client.assert_balance_is_as_expected()?;
 
     Ok(())

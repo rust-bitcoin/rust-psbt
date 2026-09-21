@@ -8,7 +8,7 @@ use bitcoind_tests::client::Client;
 #[test]
 fn bitcoind_get_core_wallet_controlled_address() {
     let client = Client::new().expect("failed to create client");
-    let address = client.core_wallet_controlled_address().expect("get_new_address failed");
+    let address = client.wallet_address().expect("get_new_address failed");
     println!("address: {}", address);
 }
 
@@ -23,11 +23,14 @@ fn bitcoind_send() {
     assert_eq!(client.tracked_balance(), Amount::from_btc(50.0).unwrap());
     client.assert_balance_is_as_expected().expect("incorrect balance");
 
-    let address = client.core_wallet_controlled_address().expect("get_new_address failed");
+    let address = client.wallet_address().expect("get_new_address failed");
     let amount = Amount::ONE_BTC;
 
     let txid = client.send(amount, &address).expect("send failed");
-    client.balance.send_to_self();
+    // The send deducted `amount` from the tracker, but the funds stayed in the
+    // Core wallet (we sent to a Core-controlled address). Add it back so only
+    // the fee placeholder is reflected.
+    client.track_receive(amount);
 
     client.mine_a_block().expect("mine_a_block failed");
 
