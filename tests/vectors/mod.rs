@@ -62,6 +62,28 @@ pub struct TestCase {
     supplementary: Supplementary,
 }
 
+impl TestCase {
+    fn execute(&self) {
+        match &self.supplementary {
+            Supplementary::FailDeserialize { psbts } => run_fail_deserialize(self.version, psbts),
+            Supplementary::FailSign { psbts } => run_fail_sign(psbts),
+            Supplementary::Deserialize { psbts } => run_deserialize(self.version, psbts),
+            Supplementary::Create { inputs, outputs } =>
+                run_create(&self.expected, inputs, outputs),
+            Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } =>
+                run_update(&self.expected, psbts, *xpriv, input_updates, output_updates, *sighash),
+            Supplementary::Sign { psbts, xpriv, seed, private_keys } =>
+                run_sign(&self.expected, psbts, *xpriv, *seed, private_keys),
+            Supplementary::Combine { psbts } => run_combine(&self.expected, psbts),
+            Supplementary::Finalize { psbts } => run_finalize(&self.expected, psbts),
+            Supplementary::Extract { psbts, tx } => run_extract(psbts, tx),
+            Supplementary::DetermineLockTime { psbts, expected_lock_time } =>
+                run_determine_lock_time(psbts, *expected_lock_time),
+            Supplementary::FailDetermineLockTime { psbts } => run_fail_determine_lock_time(psbts),
+        }
+    }
+}
+
 /// Holds the optional hex/base64 encodings of a PSBT.
 #[derive(Debug, Deserialize, Default)]
 struct PsbtData {
@@ -472,25 +494,6 @@ fn run_fail_determine_lock_time(psbts: &[PsbtData]) {
     }
 }
 
-fn execute_case(case: &TestCase) {
-    match &case.supplementary {
-        Supplementary::FailDeserialize { psbts } => run_fail_deserialize(case.version, psbts),
-        Supplementary::FailSign { psbts } => run_fail_sign(psbts),
-        Supplementary::Deserialize { psbts } => run_deserialize(case.version, psbts),
-        Supplementary::Create { inputs, outputs } => run_create(&case.expected, inputs, outputs),
-        Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } =>
-            run_update(&case.expected, psbts, *xpriv, input_updates, output_updates, *sighash),
-        Supplementary::Sign { psbts, xpriv, seed, private_keys } =>
-            run_sign(&case.expected, psbts, *xpriv, *seed, private_keys),
-        Supplementary::Combine { psbts } => run_combine(&case.expected, psbts),
-        Supplementary::Finalize { psbts } => run_finalize(&case.expected, psbts),
-        Supplementary::Extract { psbts, tx } => run_extract(psbts, tx),
-        Supplementary::DetermineLockTime { psbts, expected_lock_time } =>
-            run_determine_lock_time(psbts, *expected_lock_time),
-        Supplementary::FailDetermineLockTime { psbts } => run_fail_determine_lock_time(psbts),
-    }
-}
-
 fn load_test_file(json_data: &str) -> TestFile {
     serde_json::from_str(json_data).expect("failed to deserialize test vectors")
 }
@@ -505,7 +508,7 @@ macro_rules! make_check_case {
             let case = cases.iter().find(|c| c.description == desc).unwrap_or_else(|| {
                 panic!("case not found in {} vectors: \"{desc}\"", stringify!($spec))
             });
-            execute_case(case);
+            case.execute();
         }
     };
 }
