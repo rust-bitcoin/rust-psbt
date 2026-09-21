@@ -36,6 +36,8 @@ struct PrivKeyPath {
     pub path: DerivationPath,
 }
 
+/// Serde helper which parses an optional sighash type from its symbolic name
+/// (e.g. `"SIGHASH_ALL"`), used by the `Update` variant's `sighash` field.
 fn deserialize_sighash<'de, D: Deserializer<'de>>(
     d: D,
 ) -> Result<Option<PsbtSighashType>, D::Error> {
