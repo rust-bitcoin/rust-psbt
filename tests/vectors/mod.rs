@@ -254,7 +254,12 @@ impl TestCase {
                 });
 
                 for u in input_updates {
-                    let prev_tx = consensus_tx(&u.previous_tx);
+                    let prev_tx = {
+                        let bytes =
+                            Vec::from_hex(&u.previous_tx).expect("previous_tx must be valid hex");
+                        deserialize::<Transaction>(&bytes)
+                            .expect("previous_tx must be a valid transaction")
+                    };
                     let txid = prev_tx.compute_txid();
                     let i = psbt
                         .inputs
@@ -439,12 +444,8 @@ impl TestCase {
     }
 }
 
-/// Decode a consensus-encoded transaction from a hex string.
-fn consensus_tx(hex: &str) -> Transaction {
-    let bytes = Vec::from_hex(hex).expect("previous_tx must be valid hex");
-    deserialize::<Transaction>(&bytes).expect("previous_tx must be a valid transaction")
-}
-
+/// Defines a public function `$spec(desc: &str)` that looks up a test case by its
+/// exact JSON `description` field and executes it via [`TestCase::execute`].
 macro_rules! make_check_case {
     ($spec:ident) => {
         pub fn $spec(desc: &str) {
