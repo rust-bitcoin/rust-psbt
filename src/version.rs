@@ -9,7 +9,7 @@ use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
-use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
+use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
 use crate::serialize::{self, Deserialize, Serialize};
 
 /// The PSBT version.
@@ -31,6 +31,7 @@ impl Version {
 
 pub(crate) type VersionKeyValueEncoder<'e> =
     KeyValueEncoder<CompactSizeEncoder, VersionEncoder<'e>>;
+pub(crate) type VersionValueDecoder = ValueDecoder<VersionDecoder>;
 
 impl Version {
     /// Returns the version number as a `u32`.
@@ -152,6 +153,11 @@ impl std::error::Error for VersionDecoderError {
 #[non_exhaustive]
 pub struct UnsupportedVersionError(u32);
 
+impl UnsupportedVersionError {
+    /// Returns the unsupported version value.
+    pub fn version(&self) -> u32 { self.0 }
+}
+
 impl fmt::Display for UnsupportedVersionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unsupported version, we only support v0 and v2: {}", self.0)
@@ -199,5 +205,19 @@ mod tests {
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn version_value_decoder_read_limit() {
+        let decoder = VersionValueDecoder::default();
+        assert!(decoder.read_limit() > 1);
+    }
+
+    #[test]
+    fn unsupported_version_error_returns_version() {
+        let err = UnsupportedVersionError(7);
+        assert_eq!(err.version(), 7);
+        let err = UnsupportedVersionError(42);
+        assert_eq!(err.version(), 42);
     }
 }
