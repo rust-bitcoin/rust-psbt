@@ -44,7 +44,9 @@ mod invalid {
 
     #[test]
     fn structure_missing_out_script_for_non_sp_output() {
-        bip375("Invalid: psbt structure: missing PSBT_OUT_SCRIPT field when sending to non-sp output");
+        bip375(
+            "Invalid: psbt structure: missing PSBT_OUT_SCRIPT field when sending to non-sp output",
+        );
     }
 
     // TODO: Validation not yet implemented.
@@ -137,7 +139,9 @@ mod invalid {
     #[ignore]
     #[test]
     fn output_scripts_nums_internal_key_cannot_derive_sp() {
-        bip375("Invalid: output scripts: P2TR input with NUMS internal key cannot derive sp output");
+        bip375(
+            "Invalid: output scripts: P2TR input with NUMS internal key cannot derive sp output",
+        );
     }
 
     // TODO: Validation not yet implemented.
@@ -213,7 +217,9 @@ mod valid {
 
     #[test]
     fn can_finalize_two_sp_outputs_labeled() {
-        bip375("Valid: can finalize: two sp outputs - output 0 uses label=3 / output 1 uses label=1");
+        bip375(
+            "Valid: can finalize: two sp outputs - output 0 uses label=3 / output 1 uses label=1",
+        );
     }
 
     #[test]
