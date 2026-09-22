@@ -12,170 +12,263 @@ mod vectors;
 
 use vectors::bip375;
 
-mod valid {
-    use super::bip375;
-
-    #[test]
-    fn can_finalize_one_p2pkh_input_single_signer() { bip375(0); }
-
-    #[test]
-    fn can_finalize_one_p2wpkh_input_single_signer() { bip375(1); }
-
-    #[test]
-    fn can_finalize_two_inputs_both_eligible() { bip375(2); }
-
-    #[test]
-    fn can_finalize_two_inputs_one_ineligible() { bip375(3); }
-
-    #[test]
-    fn can_finalize_many_eligible_inputs_no_dups() { bip375(4); }
-
-    #[test]
-    fn can_finalize_many_eligible_inputs_with_dups() { bip375(5); }
-
-    #[test]
-    fn handles_many_sp_outputs_correct_matching() { bip375(6); }
-
-    #[test]
-    fn handles_many_non_sp_outputs() { bip375(7); }
-
-    #[test]
-    fn output_is_sp_when_sp_info_present() { bip375(8); }
-
-    #[test]
-    fn outputs_not_sp_when_no_sp_info() { bip375(9); }
-
-    #[test]
-    fn label_zero_is_valid() { bip375(10); }
-
-    #[test]
-    fn label_with_long_bytes_is_valid() { bip375(11); }
-
-    #[test]
-    fn dleq_proof_correct_for_inputs() { bip375(12); }
-
-    #[test]
-    fn dleq_proof_with_different_values_per_input() { bip375(13); }
-
-    #[test]
-    fn global_shares_only_one_share_per_key() { bip375(14); }
-
-    #[test]
-    fn global_shares_many_keys_different_values() { bip375(15); }
-
-    #[test]
-    fn input_shares_one_per_input() { bip375(16); }
-
-    #[test]
-    fn input_shares_different_values_per_input() { bip375(17); }
-
-    #[test]
-    fn mixed_global_and_input_shares() { bip375(18); }
-}
-
 mod invalid {
     use super::bip375;
 
     #[test]
-    fn psbt_structure_missing_out_sp_v0_info_field_when_out_sp_v0_label_set() { bip375(19); }
-
-    #[test]
-    fn psbt_structure_incorrect_byte_length_for_out_sp_v0_info_field() { bip375(20); }
-
-    #[test]
-    fn psbt_structure_incorrect_byte_length_for_in_sp_ecdh_share_field() { bip375(21); }
-
-    #[test]
-    fn psbt_structure_incorrect_byte_length_for_in_sp_dleq_field() { bip375(22); }
-
-    // TODO: Validate that global tx modifiable field must be zero for SP outputs
-    #[ignore]
-    #[test]
-    fn psbt_structure_global_tx_modifiable_field_is_nonzero_when_out_script_set_for_sp_output() {
-        bip375(23);
+    fn structure_missing_sp_v0_info_when_label_set() {
+        bip375("Invalid: psbt structure: missing PSBT_OUT_SP_V0_INFO field when PSBT_OUT_SP_V0_LABEL set");
     }
 
     #[test]
-    fn psbt_structure_missing_out_script_field_when_sending_to_non_sp_output() { bip375(24); }
-
-    // TODO: Validate ECDH share coverage for eligible inputs
-    #[ignore]
-    #[test]
-    fn ecdh_coverage_only_one_ineligible_p2sh_multisig_input_when_out_script_set_for_sp_output() {
-        bip375(25);
-    }
-
-    // TODO: Validate that all eligible inputs must have ECDH shares
-    #[ignore]
-    #[test]
-    fn ecdh_coverage_missing_in_sp_ecdh_share_field_for_input_0_when_out_script_set_for_sp_output()
-    {
-        bip375(26);
+    fn structure_incorrect_byte_length_out_sp_v0_info() {
+        bip375("Invalid: psbt structure: incorrect byte length for PSBT_OUT_SP_V0_INFO field");
     }
 
     #[test]
-    fn ecdh_coverage_no_ecdh_shares_present_when_out_script_set_for_sp_output() { bip375(27); }
+    fn structure_incorrect_byte_length_sp_ecdh_share_field() {
+        bip375("Invalid: psbt structure: incorrect byte length for PSBT_IN_SP_ECDH_SHARE field");
+    }
 
     #[test]
-    fn ecdh_coverage_incomplete_ecdh_shares_missing_input_1() { bip375(28); }
+    fn structure_incorrect_byte_length_sp_dleq_field() {
+        bip375("Invalid: psbt structure: incorrect byte length for PSBT_IN_SP_DLEQ field");
+    }
 
-    // TODO: Validate that scan keys must be unique across fields
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn duplicate_keys_global_ecdh_duplicate_scan_key() { bip375(29); }
+    fn structure_tx_modifiable_non_zero_for_sp_output() {
+        bip375("Invalid: psbt structure: PSBT_GLOBAL_TX_MODIFIABLE field is non-zero when PSBT_OUT_SCRIPT set for sp output");
+    }
 
-    // TODO: Validate that scan keys must be unique across fields
+    #[test]
+    fn structure_missing_out_script_for_non_sp_output() {
+        bip375(
+            "Invalid: psbt structure: missing PSBT_OUT_SCRIPT field when sending to non-sp output",
+        );
+    }
+
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn duplicate_keys_global_dleq_duplicate_scan_key() { bip375(30); }
+    fn ecdh_coverage_only_one_ineligible_p2sh_multisig_input() {
+        bip375("Invalid: ecdh coverage: only one ineligible P2SH multisig input when PSBT_OUT_SCRIPT set for sp output");
+    }
 
-    // TODO: Validate that scan keys must be unique across fields
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn duplicate_keys_per_input_ecdh_duplicate_scan_key() { bip375(31); }
+    fn ecdh_coverage_missing_ecdh_share_for_input_0() {
+        bip375("Invalid: ecdh coverage: missing PSBT_IN_SP_ECDH_SHARE field for input 0 when PSBT_OUT_SCRIPT set for sp output");
+    }
 
-    // TODO: Validate that scan keys must be unique across fields
+    #[test]
+    fn ecdh_coverage_missing_dleq_when_ecdh_share_set() {
+        bip375(
+            "Invalid: ecdh coverage: missing PSBT_IN_SP_DLEQ field for input when PSBT_IN_SP_ECDH_SHARE set",
+        );
+    }
+
+    #[test]
+    fn ecdh_coverage_missing_global_dleq_when_ecdh_share_set() {
+        bip375(
+            "Invalid: ecdh coverage: missing PSBT_GLOBAL_SP_DLEQ field when PSBT_GLOBAL_SP_ECDH_SHARE set",
+        );
+    }
+
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn duplicate_keys_per_input_dleq_duplicate_scan_key() { bip375(32); }
+    fn ecdh_coverage_invalid_proof_sp_dleq_field() {
+        bip375("Invalid: ecdh coverage: invalid proof in PSBT_IN_SP_DLEQ field");
+    }
 
-    // TODO: Validate that ECDH and DLEQ proofs must both be present or both absent
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn field_mismatch_global_dleq_only_no_ecdh() { bip375(33); }
+    fn ecdh_coverage_invalid_proof_global_sp_dleq_field() {
+        bip375("Invalid: ecdh coverage: invalid proof in PSBT_GLOBAL_SP_DLEQ field");
+    }
 
-    // TODO: Validate that ECDH and DLEQ proofs must both be present or both absent
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn field_mismatch_global_ecdh_only_no_dleq() { bip375(34); }
+    fn ecdh_coverage_missing_bip32_derivation_when_dleq_set() {
+        bip375("Invalid: ecdh coverage: missing PSBT_IN_BIP32_DERIVATION field for input when PSBT_IN_SP_DLEQ set");
+    }
 
-    // TODO: Validate that ECDH and DLEQ proofs must both be present or both absent
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn field_mismatch_per_input_dleq_only_no_ecdh() { bip375(35); }
+    fn ecdh_coverage_output_missing_ecdh_share_scan_key() {
+        bip375("Invalid: ecdh coverage: output 1 missing ECDH share for scan key with one input / three sp outputs (different scan keys)");
+    }
 
-    // TODO: Validate that ECDH and DLEQ proofs must both be present or both absent
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn field_mismatch_per_input_ecdh_only_no_dleq() { bip375(36); }
+    fn ecdh_coverage_input_missing_ecdh_share_output_two() {
+        bip375("Invalid: ecdh coverage: input 1 missing ECDH share for output 1 with two inputs / two sp outputs (different scan keys)");
+    }
 
-    // TODO: Validate consistency between global and per-input field presence
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn field_mismatch_global_and_per_input_imbalance() { bip375(37); }
+    fn ecdh_coverage_input_missing_ecdh_share_scan_key() {
+        bip375("Invalid: ecdh coverage: input 1 missing ECDH share for scan key with two inputs / one sp output");
+    }
 
-    // TODO: Reject unknown PSBT output fields
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn psbt_output_unknown_field_non_bip375_field() { bip375(38); }
+    fn input_eligibility_segwit_version_greater_than_transaction_inputs() {
+        bip375(
+            "Invalid: input eligibility: segwit version greater than 1 in transaction inputs with sp output",
+        );
+    }
 
-    // TODO: Reject unknown PSBT input fields
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn psbt_input_unknown_field_non_bip375_field() { bip375(39); }
+    fn input_eligibility_non_sighash_all_signature_input_sp() {
+        bip375("Invalid: input eligibility: non-SIGHASH_ALL signature on input with sp output");
+    }
 
-    // TODO: Validate that finalization should fail for certain field combinations
+    // TODO: Validation not yet implemented.
     #[ignore]
     #[test]
-    fn can_finalize_should_fail_check() { bip375(40); }
+    fn output_scripts_nums_internal_key_cannot_derive_sp() {
+        bip375(
+            "Invalid: output scripts: P2TR input with NUMS internal key cannot derive sp output",
+        );
+    }
+
+    // TODO: Validation not yet implemented.
+    #[ignore]
+    #[test]
+    fn output_scripts_out_script_does_not_match_derived_sp() {
+        bip375("Invalid: output scripts: PSBT_OUT_SCRIPT does not match derived sp output");
+    }
+
+    // TODO: Validation not yet implemented.
+    #[ignore]
+    #[test]
+    fn output_scripts_two_sp_outputs_sorted_lexicographically_spend() {
+        bip375("Invalid: output scripts: two sp outputs (same scan / different spend keys) not sorted lexicographically by spend key");
+    }
+
+    // TODO: Validation not yet implemented.
+    #[ignore]
+    #[test]
+    fn output_scripts_values_assigned_wrong_output_indices_three() {
+        bip375("Invalid: output scripts: k values assigned to wrong output indices with three sp outputs (same scan / spend keys)");
+    }
+}
+
+mod valid {
+    use super::bip375;
+
+    #[test]
+    fn can_finalize_one_p2pkh_input_single_signer() {
+        bip375("Valid: can finalize: one P2PKH input single-signer");
+    }
+
+    #[test]
+    fn can_finalize_two_inputs_single_signer_using_global() {
+        bip375("Valid: can finalize: two inputs single-signer using global ECDH share");
+    }
+
+    #[test]
+    fn can_finalize_two_inputs_single_signer_using_per() {
+        bip375("Valid: can finalize: two inputs single-signer using per-input ECDH shares");
+    }
+
+    #[test]
+    fn can_finalize_two_inputs_two_sp_outputs_mixed() {
+        bip375(
+            "Valid: can finalize: two inputs / two sp outputs with mixed global and per-input ECDH shares",
+        );
+    }
+
+    #[test]
+    fn can_finalize_one_input_one_sp_output_both() {
+        bip375(
+            "Valid: can finalize: one input / one sp output with both global and per-input ECDH shares",
+        );
+    }
+
+    #[test]
+    fn can_finalize_three_sp_outputs_multiple_global_ecdh() {
+        bip375(
+            "Valid: can finalize: three sp outputs (different scan keys) with multiple global ECDH shares",
+        );
+    }
+
+    #[test]
+    fn can_finalize_one_p2wpkh_input_two_mixed_outputs() {
+        bip375("Valid: can finalize: one P2WPKH input / two mixed outputs - labeled sp output and BIP 32 change");
+    }
+
+    #[test]
+    fn can_finalize_one_input_two_sp_outputs() {
+        bip375("Valid: can finalize: one input / two sp outputs - output 0 has no label / output 1 uses label=0 convention for sp change");
+    }
+
+    #[test]
+    fn can_finalize_two_sp_outputs_labeled() {
+        bip375(
+            "Valid: can finalize: two sp outputs - output 0 uses label=3 / output 1 uses label=1",
+        );
+    }
+
+    #[test]
+    fn can_finalize_two_inputs_using_per_input_ecdh() {
+        bip375("Valid: can finalize: two inputs using per-input ECDH shares - only eligible inputs contribute shares (P2SH excluded)");
+    }
+
+    #[test]
+    fn can_finalize_two_inputs_using_global_ecdh_share() {
+        bip375("Valid: can finalize: two inputs using global ECDH share - only eligible inputs contribute shares (P2SH excluded)");
+    }
+
+    #[test]
+    fn can_finalize_two_mixed_input_types_only_eligible() {
+        bip375("Valid: can finalize: two mixed input types - only eligible inputs contribute ECDH shares (NUMS internal key excluded)");
+    }
+
+    #[test]
+    fn can_finalize_three_sp_outputs_each_output_distinct() {
+        bip375("Valid: can finalize: three sp outputs (same scan key) - each output has distinct k value");
+    }
+
+    #[test]
+    fn can_finalize_three_sp_outputs_two_regular_outputs() {
+        bip375("Valid: can finalize: three sp outputs (same scan key) / two regular outputs - k values assigned independently of output index");
+    }
+
+    #[test]
+    fn progress_two_p2tr_inputs_neither_signed() {
+        bip375("Valid: in progress: two P2TR inputs, neither is signed");
+    }
+
+    #[test]
+    fn progress_one_p2tr_input_one_sp_output_ecdh() {
+        bip375("Valid: in progress: one P2TR input / one sp output with no ECDH shares when PSBT_OUT_SCRIPT field is not set");
+    }
+
+    #[test]
+    fn progress_two_inputs_one_sp_output_missing_ecdh() {
+        bip375("Valid: in progress: two inputs / one sp output, input 1 missing ECDH share when PSBT_OUT_SCRIPT field is not set");
+    }
+
+    #[test]
+    fn progress_one_input_two_sp_outputs_missing_ecdh() {
+        bip375("Valid: in progress: one input / two sp outputs, input 0 missing ECDH share for output 0 when PSBT_OUT_SCRIPT field is not set");
+    }
+
+    #[test]
+    fn progress_large_nine_mixed_inputs_six_outputs_some() {
+        bip375("Valid: in progress: large PSBT with nine mixed inputs / six outputs - some inputs signed");
+    }
 }

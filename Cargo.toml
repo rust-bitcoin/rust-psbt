@@ -29,7 +29,7 @@ examples = [
     "v2-separate-creator-constructor:std",
 ]
 exact_features = [
-    ["std", "miniscript", "serde"],
+    ["std", "base64", "miniscript", "serde"], # Ensure integration tests always run.
 ]
 
 [package.metadata.rbmt.lint]

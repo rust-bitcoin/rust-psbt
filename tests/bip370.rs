@@ -6,148 +6,214 @@ mod vectors;
 
 use vectors::bip370;
 
-mod valid {
-    use super::bip370;
-
-    #[test]
-    fn required_fields_only() { bip370(0); }
-
-    #[test]
-    fn updated() { bip370(1); }
-
-    #[test]
-    fn with_psbt_in_sequence() { bip370(2); }
-
-    #[test]
-    fn with_psbt_in_sequence_and_all_locktime_fields() { bip370(3); }
-
-    #[test]
-    fn with_inputs_modifiable_flag() { bip370(4); }
-
-    #[test]
-    fn with_outputs_modifiable_flag() { bip370(5); }
-
-    #[test]
-    fn with_has_sighash_single_flag() { bip370(6); }
-
-    #[test]
-    fn with_an_undefined_flag() { bip370(7); }
-
-    #[test]
-    fn with_both_inputs_and_outputs_modifiable_flags() { bip370(8); }
-
-    #[test]
-    fn with_inputs_modifiable_and_sighash_single_flags() { bip370(9); }
-
-    #[test]
-    fn with_outputs_modifiable_and_sighash_single_flags() { bip370(10); }
-
-    #[test]
-    fn with_all_defined_modifiable_flags() { bip370(11); }
-
-    #[test]
-    fn with_all_possible_modifiable_flags() { bip370(12); }
-
-    #[test]
-    fn with_all_psbtv2_fields() { bip370(13); }
-}
-
 mod invalid {
     use super::bip370;
 
     #[test]
-    fn psbtv0_with_global_version_set_to_2() { bip370(14); }
+    fn psbtv0_but_global_version_set() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_VERSION set to 2.");
+    }
 
     #[test]
-    fn psbtv0_with_global_tx_version() { bip370(15); }
+    fn psbtv0_but_global_tx_version() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_TX_VERSION.");
+    }
 
     #[test]
-    fn psbtv0_with_global_fallback_locktime() { bip370(16); }
+    fn psbtv0_but_global_fallback_locktime() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_FALLBACK_LOCKTIME.");
+    }
 
     #[test]
-    fn psbtv0_with_global_input_count() { bip370(17); }
+    fn psbtv0_but_global_input_count() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_INPUT_COUNT.");
+    }
 
     #[test]
-    fn psbtv0_with_global_output_count() { bip370(18); }
+    fn psbtv0_but_global_output_count() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_OUTPUT_COUNT.");
+    }
 
     #[test]
-    fn psbtv0_with_global_tx_modifiable() { bip370(19); }
+    fn psbtv0_but_global_tx_modifiable() {
+        bip370("Invalid: PSBTv0 but with PSBT_GLOBAL_TX_MODIFIABLE.");
+    }
 
     #[test]
-    fn psbtv0_with_psbt_in_previous_txid() { bip370(20); }
+    fn psbtv0_but_previous_txid() { bip370("Invalid: PSBTv0 but with PSBT_IN_PREVIOUS_TXID."); }
 
     #[test]
-    fn psbtv0_with_psbt_in_output_index() { bip370(21); }
+    fn psbtv0_but_output_index() { bip370("Invalid: PSBTv0 but with PSBT_IN_OUTPUT_INDEX."); }
 
     #[test]
-    fn psbtv0_with_psbt_in_sequence() { bip370(22); }
+    fn psbtv0_but_sequence() { bip370("Invalid: PSBTv0 but with PSBT_IN_SEQUENCE."); }
 
     #[test]
-    fn psbtv0_with_psbt_in_required_time_locktime() { bip370(23); }
+    fn psbtv0_but_required_time_locktime() {
+        bip370("Invalid: PSBTv0 but with PSBT_IN_REQUIRED_TIME_LOCKTIME.");
+    }
 
     #[test]
-    fn psbtv0_with_psbt_in_required_height_locktime() { bip370(24); }
+    fn psbtv0_but_required_height_locktime() {
+        bip370("Invalid: PSBTv0 but with PSBT_IN_REQUIRED_HEIGHT_LOCKTIME.");
+    }
 
     #[test]
-    fn psbtv0_with_psbt_out_amount() { bip370(25); }
+    fn psbtv0_but_out_amount() { bip370("Invalid: PSBTv0 but with PSBT_OUT_AMOUNT."); }
 
     #[test]
-    fn psbtv0_with_psbt_out_script() { bip370(26); }
+    fn psbtv0_but_out_script() { bip370("Invalid: PSBTv0 but with PSBT_OUT_SCRIPT."); }
 
     #[test]
-    fn psbtv2_missing_psbt_global_input_count() { bip370(27); }
+    fn psbtv2_missing_global_input_count() {
+        bip370("Invalid: PSBTv2 missing PSBT_GLOBAL_INPUT_COUNT.");
+    }
 
     #[test]
-    fn psbtv2_missing_psbt_global_output_count() { bip370(28); }
+    fn psbtv2_missing_global_output_count() {
+        bip370("Invalid: PSBTv2 missing PSBT_GLOBAL_OUTPUT_COUNT.");
+    }
 
     #[test]
-    fn psbtv2_missing_psbt_in_previous_txid() { bip370(29); }
+    fn psbtv2_missing_previous_txid() { bip370("Invalid: PSBTv2 missing PSBT_IN_PREVIOUS_TXID."); }
 
     #[test]
-    fn psbtv2_missing_psbt_in_output_index() { bip370(30); }
+    fn psbtv2_missing_output_index() { bip370("Invalid: PSBTv2 missing PSBT_IN_OUTPUT_INDEX."); }
 
     #[test]
-    fn psbtv2_missing_psbt_out_amount() { bip370(31); }
+    fn psbtv2_missing_out_amount() { bip370("Invalid: PSBTv2 missing PSBT_OUT_AMOUNT."); }
 
     #[test]
-    fn psbtv2_missing_psbt_out_script() { bip370(32); }
+    fn psbtv2_missing_out_script() { bip370("Invalid: PSBTv2 missing PSBT_OUT_SCRIPT."); }
 
     #[test]
-    fn psbtv2_with_required_time_locktime_less_than_500000000() { bip370(33); }
+    fn psbtv2_required_time_locktime_less_than_500000000() {
+        bip370("Invalid: PSBTv2 with PSBT_IN_REQUIRED_TIME_LOCKTIME less than 500000000.");
+    }
 
     #[test]
-    fn psbtv2_with_required_height_locktime_greater_than_or_equal_to_500000000() { bip370(34); }
+    fn psbtv2_required_height_locktime_greater_than_equal_500000000() {
+        bip370("Invalid: PSBTv2 with PSBT_IN_REQUIRED_HEIGHT_LOCKTIME greater than or equal to 500000000.");
+    }
+}
+
+mod valid {
+    use super::bip370;
+
+    #[test]
+    fn input_output_psbtv2_required_fields_only() {
+        bip370("Valid: 1 input, 2 output PSBTv2, required fields only.");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2() { bip370("Valid: 1 input, 2 output updated PSBTv2."); }
+
+    #[test]
+    fn input_output_updated_psbtv2_sequence() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with PSBT_IN_SEQUENCE.");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_sequence_all_locktime_fields() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with PSBT_IN_SEQUENCE, and all locktime fields");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_inputs_modifiable_flag_global() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with Inputs Modifiable Flag (bit 0) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_outputs_modifiable_flag_global() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with Outputs Modifiable Flag (bit 1) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_sighash_single_flag_global() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with Has SIGHASH_SINGLE Flag (bit 2) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_undefined_flag_global_tx() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with an undefined flag (bit 3) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_both_inputs_modifiable_flag() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with both Inputs Modifiable Flag (bit 0) and Outputs Modifiable Flag (bit 1) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_both_inputs_modifiable_flag_1() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with both Inputs Modifiable Flag (bit 0) and Has SIGHASH_SINGLE Flag (bit 2) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_both_outputs_modifiable_flag() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with both Outputs Modifiable Flag (bit 1) and Has SIGHASH_SINGLE FLag (bit 2) of PSBT_GLOBAL_TX_MODIFIABLE set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_all_defined_global_tx() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with all defined PSBT_GLOBAL_TX_MODIFIABLE flags set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_all_possible_global_tx() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with all possible PSBT_GLOBAL_TX_MODIFIABLE flags set");
+    }
+
+    #[test]
+    fn input_output_updated_psbtv2_all_psbtv2_fields() {
+        bip370("Valid: 1 input, 2 output updated PSBTv2, with all PSBTv2 fields");
+    }
 }
 
 mod determine_lock_time {
     use super::bip370;
 
     #[test]
-    fn no_locktimes_specified() { bip370(35); }
+    fn locktimes_specified() { bip370("Determine lock time: No locktimes specified"); }
 
     #[test]
-    fn fallback_locktime_of_0() { bip370(36); }
+    fn fallback_locktime() { bip370("Determine lock time: Fallback locktime of 0"); }
 
     #[test]
-    fn input_1_has_height_locktime_of_10000_input_2_has_no_locktime_fields() { bip370(37); }
-
-    #[test]
-    fn input_1_has_height_locktime_of_10000_input_2_has_height_locktime_of_9000() { bip370(38); }
-
-    #[test]
-    fn input_1_has_height_locktime_of_10000_input_2_has_both_time_and_height_locktime() {
-        bip370(39);
+    fn input_required_height_locktime_10000_input_locktime_fields() {
+        bip370(
+            "Determine lock time: Input 1 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 10000, Input 2 has no locktime fields",
+        );
     }
 
     #[test]
-    fn both_inputs_have_time_and_height_locktime() { bip370(40); }
+    fn input_required_height_locktime_10000_input_required_height() {
+        bip370("Determine lock time: Input 1 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 10000, Input 2 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 9000");
+    }
 
     #[test]
-    fn input_1_time_locktime_input_2_both_time_and_height_locktime() { bip370(41); }
+    fn input_required_height_locktime_10000_input_required_height_1() {
+        bip370("Determine lock time: Input 1 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 10000, Input 2 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 9000 and PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048460");
+    }
 
     #[test]
-    fn input_1_both_time_and_height_locktime_input_2_time_locktime() { bip370(42); }
+    fn input_required_height_locktime_10000_required_time_locktime() {
+        bip370("Determine lock time: Input 1 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 10000 and PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048459, Input 2 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 9000 and PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048460");
+    }
 
     #[test]
-    fn cannot_be_determined() { bip370(43); }
+    fn input_required_time_locktime_1657048459_input_required_height() {
+        bip370("Determine lock time: Input 1 has PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048459, Input 2 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 9000 and PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048460");
+    }
+
+    #[test]
+    fn input_required_height_locktime_10000_required_time_locktime_1() {
+        bip370("Determine lock time: Input 1 has PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 10000 and PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048459, Input 2 has PSBT_IN_REQUIRED_TIME_LOCKTIME of 1657048460");
+    }
+
+    #[test]
+    fn lock_time_cannot_determined() {
+        bip370(
+            "Determine lock time: Lock time cannot be determined (both time-based and height-based lock times required)",
+        );
+    }
 }
