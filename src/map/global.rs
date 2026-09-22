@@ -684,7 +684,16 @@ impl Decoder for GlobalDecoder {
                         .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
                     let share = CompressedPublicKey::from_slice(&bytes)
                         .map_err(|_| InsertPairError::ValueWrongLength(bytes.len(), 33))?;
-                    self.sp_ecdh_shares.insert(scan_key, share);
+                    match self.sp_ecdh_shares.entry(scan_key) {
+                        btree_map::Entry::Vacant(e) => {
+                            e.insert(share);
+                        }
+                        btree_map::Entry::Occupied(_) => {
+                            return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(
+                                key,
+                            )));
+                        }
+                    }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 #[cfg(feature = "silent-payments")]
@@ -710,7 +719,16 @@ impl Decoder for GlobalDecoder {
                         .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
                     let proof = DleqProof::try_from(bytes.as_slice())
                         .map_err(|_| InsertPairError::ValueWrongLength(bytes.len(), 64))?;
-                    self.sp_dleq_proofs.insert(scan_key, proof);
+                    match self.sp_dleq_proofs.entry(scan_key) {
+                        btree_map::Entry::Vacant(e) => {
+                            e.insert(proof);
+                        }
+                        btree_map::Entry::Occupied(_) => {
+                            return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(
+                                key,
+                            )));
+                        }
+                    }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::Done(global) => {
