@@ -7,7 +7,7 @@
 //! consensus [`bitcoin_consensus_encoding::Encode`] implementations.
 
 use bitcoin::locktime::absolute;
-use bitcoin::{transaction, OutPoint, Sequence, Transaction, TxOut, Witness};
+use bitcoin::{transaction, Amount, OutPoint, Sequence, Transaction, TxOut, Witness};
 use bitcoin_consensus_encoding::{CompactSizeEncoder, Decode, Encode};
 
 use super::{ExactLenEncoder, KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
@@ -40,6 +40,12 @@ pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
 pub(crate) type FallbackLockTimeValueDecoder =
     ValueDecoder<<absolute::LockTime as PsbtDecode>::Decoder>;
+
+/// [`Amount`] uses its consensus encoding and decoding for PSBT.
+impl PsbtDelegate for Amount {}
+
+pub(crate) type AmountPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
 
 /// [`Sequence`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Sequence {}

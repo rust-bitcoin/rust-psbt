@@ -3,6 +3,7 @@
 //! This module contains [`PsbtEncode`] implementations for types which live outside of rust-psbt
 //! but are not consensus encodable.
 
+use alloc::borrow::ToOwned as _;
 use alloc::collections::btree_map;
 use alloc::vec::Vec;
 use core::fmt;
@@ -12,13 +13,15 @@ use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
-use bitcoin::taproot::{self, ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{
+    self, ControlBlock, LeafVersion, ScriptLeaves, TapLeafHash, TapNodeHash, TapTree,
+};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
-use bitcoin::{ecdsa, ScriptBuf, Txid};
+use bitcoin::{ecdsa, ScriptBuf, Txid, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, BytesEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder,
-    Encoder2, EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
+    Encoder2, Encoder4, EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
 use super::{
@@ -31,7 +34,8 @@ use crate::consts::{
 use crate::consts::{
     PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
     PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
-    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_SEPARATOR,
+    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
+    PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_SEPARATOR,
 };
 #[cfg(feature = "silent-payments")]
 use crate::dleq::DleqProof;
@@ -444,6 +448,95 @@ impl PsbtEncode for (ScriptBuf, LeafVersion) {
     }
 }
 
+/// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
+/// `leaf version u8`, then compact-size-prefixed script per leaf, in DFS order.
+pub struct TapTreeEncoder<'e> {
+    inner: IterEncoder<TapTreeLeafIter<'e>>,
+    /// Remaining bytes to be yielded. Decremented on each `advance()`.
+    remaining: usize,
+}
+
+impl<'e> TapTreeEncoder<'e> {
+    fn new(tree: &'e TapTree) -> Self {
+        // Per-leaf layout mirrors `Serialize::serialize`: 1-byte depth, 1-byte
+        // version, compact-size-prefixed script.
+        let remaining = tree
+            .script_leaves()
+            .map(|l| l.script().len() + VarInt::from(l.script().len()).size() + 1 + 1)
+            .sum();
+        Self {
+            inner: IterEncoder::new(TapTreeLeafIter { leaves: tree.script_leaves() }),
+            remaining,
+        }
+    }
+}
+
+impl Encoder for TapTreeEncoder<'_> {
+    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let chunk_len = self.inner.current_chunk().len();
+        let status = self.inner.advance();
+        self.remaining = self.remaining.saturating_sub(chunk_len);
+        status
+    }
+}
+
+impl ExactSizeEncoder for TapTreeEncoder<'_> {
+    fn len(&self) -> usize { self.remaining }
+}
+
+/// Yields an owned script's bytes as a single chunk.
+struct TapScriptEncoder(ScriptBuf);
+
+impl TapScriptEncoder {
+    fn new(script_buf: ScriptBuf) -> Self { Self(script_buf) }
+}
+
+impl Encoder for TapScriptEncoder {
+    fn current_chunk(&self) -> &[u8] { self.0.as_bytes() }
+
+    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+}
+
+impl ExactSizeEncoder for TapScriptEncoder {
+    fn len(&self) -> usize { self.0.len() }
+}
+
+/// An iterator over the leaf encoders of a [`TapTree`].
+struct TapTreeLeafIter<'e> {
+    leaves: ScriptLeaves<'e>,
+}
+
+impl<'e> Iterator for TapTreeLeafIter<'e> {
+    type Item = Encoder4<ArrayEncoder<1>, ArrayEncoder<1>, CompactSizeEncoder, TapScriptEncoder>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let leaf = self.leaves.next()?;
+        // `ScriptLeaf::script()` ties its reference to the temporary `ScriptLeaf`,
+        // so the script is owned per leaf (one allocation) rather than borrowed.
+        let script = leaf.script().to_owned();
+        Some(Encoder4::new(
+            // TaprootMerkleBranch can only have len at most 128.
+            ArrayEncoder::without_length_prefix([leaf.merkle_branch().len() as u8]),
+            ArrayEncoder::without_length_prefix([leaf.version().to_consensus()]),
+            CompactSizeEncoder::new(leaf.script().len()),
+            TapScriptEncoder::new(script),
+        ))
+    }
+}
+
+impl PsbtEncode for TapTree {
+    type Encoder<'e>
+        = TapTreeEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { TapTreeEncoder::new(self) }
+}
+
+pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
+
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
     pub struct LeafHashVecKeySourceEncoder<'e>(
@@ -538,6 +631,20 @@ impl PsbtEncode for DleqProof {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0InfoPair<'e> = KeyValueEncoder<CompactSizeEncoder, BytesEncoder<'e>>;
+
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+
+pub(crate) type OutBip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
+
+pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
+>;
 
 #[cfg(feature = "silent-payments")]
 pub(crate) type DleqKeyValueIter<'e> =
@@ -880,6 +987,67 @@ mod tests {
         let xkey = XOnlyPublicKey::from_slice(&key_raw).unwrap();
         let pair = (xkey, leaf);
         assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
+    }
+
+    #[test]
+    fn tap_tree_matches_serialize() {
+        use bitcoin::taproot::TaprootBuilder;
+
+        let builder = TaprootBuilder::new()
+            .add_leaf(0x00, ScriptBuf::from_bytes(Vec::from([0x51])))
+            .expect("leaf");
+        let single = TapTree::try_from(builder).expect("complete single leaf tree");
+        assert_eq!(encode_to_vec(&single), Serialize::serialize(&single));
+
+        let builder = TaprootBuilder::new()
+            .add_leaf(1, ScriptBuf::from_bytes(Vec::from([0x51])))
+            .expect("leaf")
+            .add_leaf(1, ScriptBuf::from_bytes(Vec::from([0x52])))
+            .expect("leaf");
+        let multi = TapTree::try_from(builder).expect("complete tree");
+        assert_eq!(encode_to_vec(&multi), Serialize::serialize(&multi));
+    }
+
+    #[test]
+    fn tap_tree_encoder_len_counts_down() {
+        use bitcoin::taproot::TaprootBuilder;
+
+        let builder = TaprootBuilder::new()
+            .add_leaf(0x00, ScriptBuf::from_bytes(Vec::from([0x51])))
+            .expect("leaf");
+        let tree = TapTree::try_from(builder).expect("tree");
+        let mut encoder = tree.psbt_encoder();
+        let mut remaining = encoder.len();
+        assert_eq!(remaining, Serialize::serialize(&tree).len());
+        loop {
+            remaining -= encoder.current_chunk().len();
+            if encoder.advance().has_finished() {
+                break;
+            }
+            assert_eq!(encoder.len(), remaining, "len counts down on advance");
+        }
+        assert_eq!(encoder.len(), 0, "nothing remains after finish");
+    }
+
+    #[test]
+    fn tap_script_encoder_len_is_script_len() {
+        let script = ScriptBuf::from_bytes(vec![0x51, 0xac]);
+        let encoder = TapScriptEncoder::new(script.clone());
+        assert_eq!(encoder.len(), script.len());
+    }
+
+    #[test]
+    fn tap_tree_leaf_encoder_len_includes_script_len() {
+        use bitcoin::taproot::TaprootBuilder;
+
+        let builder = TaprootBuilder::new()
+            .add_leaf(0x00, ScriptBuf::from_bytes(vec![0x51, 0x52, 0x53]))
+            .expect("leaf");
+        let tree = TapTree::try_from(builder).expect("tree");
+        let mut iter = TapTreeLeafIter { leaves: tree.script_leaves() };
+        let leaf_encoder = iter.next().expect("one leaf");
+        // 1 depth byte + 1 version byte + 1 compact-size byte + 3 script bytes.
+        assert_eq!(leaf_encoder.len(), 6);
     }
 
     #[test]

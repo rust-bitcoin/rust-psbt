@@ -36,6 +36,7 @@ pub(crate) trait Map {
     /// A separator of 0x00 would mean that the deserializer can read it as a key length of 0,
     /// which would never occur with actual keys. It can thus be used as a separator and allow for
     /// easier deserializer implementation.
+    #[allow(dead_code)]
     fn serialize_map(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         for pair in Map::get_pairs(self) {
