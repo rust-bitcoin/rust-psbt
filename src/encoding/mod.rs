@@ -11,11 +11,12 @@ pub mod native;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use bitcoin_consensus_encoding::{
-    CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, DecodeError, Decoder,
-    Decoder2, Decoder2Error, DecoderStatus, Encoder, Encoder2, Encoder4, EncoderStatus,
-    ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
+    BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, DecodeError,
+    Decoder, Decoder2, Decoder2Error, DecoderStatus, Encode, Encoder, Encoder2, Encoder4,
+    EncoderStatus, ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
 };
 
 /// Types that can be PSBT-decoded.
@@ -157,14 +158,35 @@ impl<D: Decoder + Default> Decoder for ValueDecoder<D> {
 /// Works with any iterator of borrowed `(key, value)` pairs (e.g.
 /// `btree_map::Iter`); the yielded items implement [`ExactSizeEncoder`] when
 /// both key and value encoders do.
-pub(crate) struct KeyValueIter<I, const TYPE: u64>(I);
-
-impl<I, const TYPE: u64> KeyValueIter<I, TYPE> {
-    /// Constructs a pair iterator from the given underlying iterator.
-    pub(crate) fn new(iter: I) -> Self { Self(iter) }
+///
+/// The third parameter selects how values are encoded:
+/// - [`PsbtValue`] (the default): `V: PsbtEncode`, encoded via `psbt_encoder`.
+/// - [`BytesValue`]: `V: AsRef<[u8]>`, encoded as raw unprefixed bytes via
+///   [`BytesEncoder::without_length_prefix`]. Used for `Vec<u8>` values (e.g.
+///   preimage maps) without requiring an `impl PsbtEncode for Vec<u8>`.
+pub(crate) struct KeyValueIter<I, const TYPE: u64, M = PsbtValue> {
+    iter: I,
+    _marker: PhantomData<M>,
 }
 
-impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE>
+/// Value-encoding mode: encode `V` via its [`PsbtEncode`] impl.
+pub(crate) struct PsbtValue;
+
+/// Value-encoding mode: encode `V: AsRef<[u8]>` as raw unprefixed bytes.
+pub(crate) struct BytesValue;
+
+impl<I, const TYPE: u64> KeyValueIter<I, TYPE, PsbtValue> {
+    /// Constructs a pair iterator from the given underlying iterator.
+    pub(crate) fn new(iter: I) -> Self { Self { iter, _marker: PhantomData } }
+}
+
+impl<I, const TYPE: u64> KeyValueIter<I, TYPE, BytesValue> {
+    /// Constructs a pair iterator that encodes each value as raw unprefixed
+    /// bytes (no length prefix; the pair framing supplies the length).
+    pub(crate) fn new_bytes(iter: I) -> Self { Self { iter, _marker: PhantomData } }
+}
+
+impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE, PsbtValue>
 where
     I: Iterator<Item = (&'e K, &'e V)>,
     K: PsbtEncode + 'e,
@@ -175,10 +197,28 @@ where
     type Item = KeyValueEncoder<Encoder2<CompactSizeEncoder, K::Encoder<'e>>, V::Encoder<'e>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (key, value) = self.0.next()?;
+        let (key, value) = self.iter.next()?;
         Some(KeyValueEncoder::from_sized_kv(
             Encoder2::new(CompactSizeEncoder::new_u64(TYPE), key.psbt_encoder()),
             value.psbt_encoder(),
+        ))
+    }
+}
+
+impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE, BytesValue>
+where
+    I: Iterator<Item = (&'e K, &'e V)>,
+    K: PsbtEncode + 'e,
+    V: AsRef<[u8]> + 'e,
+    for<'a> K::Encoder<'a>: ExactSizeEncoder,
+{
+    type Item = KeyValueEncoder<Encoder2<CompactSizeEncoder, K::Encoder<'e>>, BytesEncoder<'e>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.iter.next()?;
+        Some(KeyValueEncoder::from_sized_kv(
+            Encoder2::new(CompactSizeEncoder::new_u64(TYPE), key.psbt_encoder()),
+            BytesEncoder::without_length_prefix(value.as_ref()),
         ))
     }
 }
@@ -282,6 +322,53 @@ impl<'e, T: PsbtEncode> Encoder for PrefixedSliceEncoder<'e, T> {
     fn advance(&mut self) -> EncoderStatus { self.0.advance() }
 }
 
+/// An encoder for a slice of PSBT-encodable types with a compact size length
+/// prefix, whose overall length is known before encoding begins.
+///
+/// Combines [`PrefixedSliceEncoder`] (compact-size prefix) with
+/// [`ExactSliceEncoder`] (statically known total length). Hence this type
+/// implements [`ExactSizeEncoder`]; use [`PrefixedSliceEncoder`] for elements
+/// with value-dependent lengths.
+pub struct ExactPrefixedSliceEncoder<'e, T: PsbtEncode> {
+    inner: Encoder2<CompactSizeEncoder, ExactSliceEncoder<'e, T>>,
+    /// Remaining bytes to be yielded. Decremented on each `advance()`.
+    ///
+    /// Tracked manually: [`CompactSizeEncoder::len`] is static (does not
+    /// decrement), so delegating to [`Encoder2`]'s `len` cannot count down.
+    remaining: usize,
+}
+
+impl<'e, T: PsbtEncode> ExactPrefixedSliceEncoder<'e, T>
+where
+    for<'a> T::Encoder<'a>: ExactSizeEncoder,
+{
+    /// Constructs an encoder which encodes the slice, adding a compact size length prefix.
+    pub fn new(sl: &'e [T]) -> Self {
+        let compact = CompactSizeEncoder::new(sl.len());
+        let slice = ExactSliceEncoder::without_length_prefix(sl);
+        let remaining = compact.len() + slice.len();
+        Self { inner: Encoder2::new(compact, slice), remaining }
+    }
+}
+
+impl<'e, T: PsbtEncode> Encoder for ExactPrefixedSliceEncoder<'e, T> {
+    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let chunk_len = self.inner.current_chunk().len();
+        let status = self.inner.advance();
+        self.remaining = self.remaining.saturating_sub(chunk_len);
+        status
+    }
+}
+
+impl<'e, T: PsbtEncode> ExactSizeEncoder for ExactPrefixedSliceEncoder<'e, T>
+where
+    for<'a> T::Encoder<'a>: ExactSizeEncoder,
+{
+    fn len(&self) -> usize { self.remaining }
+}
+
 /// A decoder for a vector of PSBT-decodable types with a compact-size length prefix.
 ///
 /// Mirrors [`bitcoin_consensus_encoding::VecDecoder`] but bound to [`PsbtDecode`] instead
@@ -315,11 +402,54 @@ impl<T: PsbtDecode> Decoder for VecDecoder<T> {
     fn read_limit(&self) -> usize { self.0.read_limit() }
 }
 
+/// An encoder whose remaining length is known up front, delegating chunk
+/// production to the inner consensus encoder.
+///
+/// Used for types whose consensus encoder does not implement
+/// [`ExactSizeEncoder`] because its inner chain contains iterator-based
+/// components (e.g. [`Transaction`], [`Witness`]). The caller
+/// supplies the total serialized size, e.g. [`Transaction::total_size`],
+/// or `Witness::size()`.
+pub(crate) struct ExactLenEncoder<'e, T: Encode + 'e> {
+    inner: T::Encoder<'e>,
+    remaining: usize,
+}
+
+impl<'e, T: Encode> ExactLenEncoder<'e, T> {
+    /// Wraps `value`'s consensus encoder; `len` is its total serialized size.
+    pub(crate) fn new(value: &'e T, len: usize) -> Self {
+        Self { inner: value.encoder(), remaining: len }
+    }
+}
+
+impl<'e, T: Encode> Encoder for ExactLenEncoder<'e, T>
+where
+    T: 'e,
+{
+    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus {
+        let chunk_len = self.inner.current_chunk().len();
+        let status = self.inner.advance();
+        self.remaining = self.remaining.saturating_sub(chunk_len);
+        status
+    }
+}
+
+impl<T: Encode> ExactSizeEncoder for ExactLenEncoder<'_, T> {
+    fn len(&self) -> usize { self.remaining }
+}
+
 #[cfg(test)]
 mod tests {
-    use bitcoin::Sequence;
+    use bitcoin::hashes::Hash as _;
+    use bitcoin::{
+        absolute, transaction, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
+        Witness,
+    };
 
     use super::*;
+    use crate::encoding::encode_to_vec;
 
     #[test]
     fn encoders_next_yields_items_then_none() {
@@ -332,16 +462,122 @@ mod tests {
     }
 
     #[test]
+    fn key_value_iter_bytes_value_yields_items_then_none() {
+        let mut map = alloc::collections::BTreeMap::new();
+        map.insert(Sequence::ZERO, alloc::vec![0xaa, 0xbb]);
+        map.insert(Sequence::MAX, alloc::vec![0xcc]);
+
+        let mut iter = KeyValueIter::<_, 0x02, BytesValue>::new_bytes(map.iter());
+
+        // <keylen=5> <type=0x02> <sequence ZERO> <vallen=2> <value>
+        let mut first = iter.next().expect("yields first pair");
+        assert_eq!(
+            bitcoin_consensus_encoding::drain_to_vec(&mut first),
+            alloc::vec![0x05, 0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0xaa, 0xbb],
+        );
+        assert!(iter.next().is_some(), "yields second pair");
+        assert!(iter.next().is_none(), "exhausted after two items");
+    }
+
+    #[test]
     fn exact_slice_encoder_len_tracks_remaining() {
         let items = [Sequence::ZERO, Sequence::MAX];
         let mut encoder = <ExactSliceEncoder<'_, Sequence>>::without_length_prefix(&items);
 
+        assert_eq!(encoder.current_chunk(), [0x00; 4], "first sequence bytes");
         assert_eq!(encoder.len(), 8, "two sequences encode to 4 bytes each");
 
         assert!(encoder.advance().has_more(), "second sequence remains");
+        assert_eq!(encoder.current_chunk(), [0xff; 4], "second sequence bytes");
         assert_eq!(encoder.len(), 4, "first sequence consumed");
 
         assert!(encoder.advance().has_finished(), "both items consumed");
         assert_eq!(encoder.len(), 0, "nothing remains after finish");
+    }
+
+    #[test]
+    fn exact_prefixed_slice_encoder_len_tracks_remaining() {
+        let items = [Sequence::ZERO, Sequence::MAX];
+        let mut encoder = <ExactPrefixedSliceEncoder<'_, Sequence>>::new(&items);
+
+        assert_eq!(encoder.current_chunk(), [0x02], "compact-size prefix chunk");
+        assert_eq!(encoder.len(), 9, "compact-size prefix plus two 4-byte sequences");
+
+        assert!(encoder.advance().has_more(), "body remains");
+        assert_eq!(encoder.current_chunk(), [0x00; 4], "first sequence bytes");
+        assert_eq!(encoder.len(), 8, "prefix consumed");
+
+        assert!(encoder.advance().has_more(), "second sequence remains");
+        assert_eq!(encoder.current_chunk(), [0xff; 4], "second sequence bytes");
+        assert_eq!(encoder.len(), 4, "first sequence consumed");
+
+        assert!(encoder.advance().has_finished(), "finished");
+        assert_eq!(encoder.len(), 0, "nothing remains after finish");
+    }
+
+    fn sample_txin(with_witness: bool) -> TxIn {
+        TxIn {
+            previous_output: OutPoint { txid: Txid::all_zeros(), vout: 0 },
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: if with_witness {
+                Witness::from_slice(&[alloc::vec![0x51], alloc::vec![0x52]])
+            } else {
+                Witness::new()
+            },
+        }
+    }
+
+    fn sample_tx(with_witness: bool) -> Transaction {
+        Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: alloc::vec![sample_txin(with_witness)],
+            output: alloc::vec![sample_txout()],
+        }
+    }
+
+    fn sample_txout() -> TxOut {
+        TxOut {
+            value: bitcoin::Amount::from_sat(500),
+            script_pubkey: ScriptBuf::from_bytes(alloc::vec![0x51]),
+        }
+    }
+
+    fn finalize(mut encoder: impl ExactSizeEncoder) {
+        let mut expected = encoder.len();
+        loop {
+            let consumed = encoder.current_chunk().len();
+            expected -= consumed;
+            if encoder.advance().has_finished() {
+                break;
+            }
+            assert_eq!(encoder.len(), expected, "len counts down on advance");
+        }
+        assert_eq!(encoder.len(), expected);
+    }
+
+    #[test]
+    fn exact_len_encoder_counts_down() {
+        for tx in [sample_tx(false), sample_tx(true)] {
+            let encoder = ExactLenEncoder::new(&tx, tx.total_size());
+            assert_eq!(encoder.len(), tx.total_size());
+            finalize(encoder);
+        }
+    }
+
+    #[test]
+    fn exact_len_encoder_matches_encode_to_vec() {
+        for tx in [sample_tx(false), sample_tx(true)] {
+            let mut wrapper = ExactLenEncoder::new(&tx, tx.total_size());
+            let mut bytes = alloc::vec::Vec::new();
+            loop {
+                bytes.extend_from_slice(wrapper.current_chunk());
+                if wrapper.advance().has_finished() {
+                    break;
+                }
+            }
+            assert_eq!(bytes, encode_to_vec(&tx));
+        }
     }
 }

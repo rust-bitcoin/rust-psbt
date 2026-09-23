@@ -31,9 +31,9 @@ use crate::encoding::delegates::{
     FallbackLockTimeKeyValueEncoder, FallbackLockTimeValueDecoder, TxVersionKeyValueEncoder,
     TxVersionValueDecoder,
 };
-use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::{write_err, InconsistentKeySourcesError};
 use crate::map::Map;
@@ -772,7 +772,6 @@ impl Decoder for GlobalDecoder {
 
 type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
 type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
-type Separator = ArrayEncoder<1>;
 
 /// State of the global map encoder, one key-value pair group per variant.
 enum State<'e> {
@@ -789,7 +788,7 @@ enum State<'e> {
     Dleq(IterEncoder<DleqKeyValueIter<'e>>),
     Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
     Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
-    Separator(Separator),
+    Separator(SeparatorEncoder),
 }
 
 /// Encoder for the PSBT global map.
@@ -827,7 +826,7 @@ impl<'e> GlobalMapEncoder<'e> {
             #[cfg(feature = "silent-payments")]
             State::Dleq(_) => Some(State::Proprietaries(self.proprietary_iter())),
             State::Proprietaries(_) => Some(State::Unknowns(self.unknown_iter())),
-            State::Unknowns(_) => Some(State::Separator(Separator::without_length_prefix([0x00]))),
+            State::Unknowns(_) => Some(State::Separator(SeparatorEncoder::new())),
             State::Separator(_) => None,
         }
     }

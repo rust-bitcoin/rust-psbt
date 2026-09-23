@@ -7,6 +7,12 @@
 
 #![allow(dead_code)]
 
+/// Encoding only: The record separator.
+///
+/// Notice this field differs from PSBT_GLOBAL_UNSIGNED_TX in that this is only used as separator,
+/// while the later is always key-len prefixed, making both fields unambiguous.
+pub(crate) const PSBT_SEPARATOR: u8 = 0x00;
+
 /// Type: Unsigned Transaction PSBT_GLOBAL_UNSIGNED_TX = 0x00
 pub(crate) const PSBT_GLOBAL_UNSIGNED_TX: u64 = 0x00;
 /// Type: Extended Public Key PSBT_GLOBAL_XPUB = 0x01
