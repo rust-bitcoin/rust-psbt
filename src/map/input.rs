@@ -1732,7 +1732,7 @@ mod test {
         for pair in input.pairs() {
             from_pairs.extend(pair.serialize());
         }
-        from_pairs.push(0x00);
+        from_pairs.push(crate::consts::PSBT_SEPARATOR);
 
         assert_eq!(from_pairs, input.serialize_map());
     }
@@ -1743,7 +1743,11 @@ mod test {
         let bytes = crate::encoding::encode_to_vec(&input);
         assert!(!bytes.is_empty());
         assert!(bytes.len() > 1, "map must have at least one keypair before separator");
-        assert_eq!(bytes.last(), Some(&0x00), "input map must end with separator");
+        assert_eq!(
+            bytes.last(),
+            Some(&crate::consts::PSBT_SEPARATOR),
+            "input map must end with separator"
+        );
     }
 
     #[test]
@@ -1815,7 +1819,11 @@ mod test {
     fn check_input(input: &Input) {
         let encoded = crate::encoding::encode_to_vec(input);
         assert_eq!(encoded, input.serialize_map());
-        assert_eq!(encoded.last(), Some(&0x00), "input map must end with separator");
+        assert_eq!(
+            encoded.last(),
+            Some(&crate::consts::PSBT_SEPARATOR),
+            "input map must end with separator"
+        );
 
         let mut slice: &[u8] = &encoded;
         let decoded = Input::decode(&mut slice).expect("failed to decode");

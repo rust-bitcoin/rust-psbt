@@ -860,7 +860,7 @@ mod tests {
         for pair in output.pairs() {
             from_pairs.extend(pair.serialize());
         }
-        from_pairs.push(0x00);
+        from_pairs.push(crate::consts::PSBT_SEPARATOR);
 
         assert_eq!(from_pairs, output.serialize_map());
     }
@@ -880,7 +880,11 @@ mod tests {
         let bytes = crate::encoding::encode_to_vec(&output);
         assert!(!bytes.is_empty());
         assert!(bytes.len() > 1, "map must have at least one keypair before separator");
-        assert_eq!(bytes.last(), Some(&0x00), "output map must end with separator");
+        assert_eq!(
+            bytes.last(),
+            Some(&crate::consts::PSBT_SEPARATOR),
+            "output map must end with separator"
+        );
     }
 
     #[test]

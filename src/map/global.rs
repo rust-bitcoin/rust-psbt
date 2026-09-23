@@ -21,7 +21,7 @@ use bitcoin_consensus_encoding::{
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_TX_MODIFIABLE, PSBT_GLOBAL_TX_VERSION,
-    PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
+    PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB, PSBT_SEPARATOR,
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
@@ -234,7 +234,7 @@ type FlagsValueDecoder = ValueDecoder<ArrayDecoder<1>>;
 /// The internal state of the global map push decoder.
 #[derive(Debug)]
 enum DecoderStage {
-    /// Checking the next byte for the `0x00` separator.
+    /// Checking the next byte for the map separator.
     DecodingSeparator,
     /// Reading the next key from the stream. The caller has already confirmed the
     /// stream does not start with a separator, so this decoder only sees real key data.
@@ -263,7 +263,7 @@ enum DecoderStage {
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
     DecodingSpDleqProof { key: raw::Key, decoder: ValueDecoder<ArrayDecoder<64>> },
-    /// The end-of-map separator (`0x00`) has been reached.
+    /// The end-of-map separator has been reached.
     Done(Global),
     /// The decoder has entered a non-recoverable error state.
     Errored,
@@ -361,7 +361,7 @@ impl Decoder for GlobalDecoder {
             // DecodingSeparator: check for separator or transition to key decode.
             if matches!(&self.stage, DecoderStage::DecodingSeparator) {
                 match bytes.split_first() {
-                    Some((&0x00, rest)) => {
+                    Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
                         let version = self.version.take().ok_or(DecodeError::MissingVersion)?;
                         let tx_version =
@@ -960,7 +960,7 @@ impl PsbtEncode for Global {
     type Encoder<'e> = GlobalMapEncoder<'e>;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        // `<global-map> := <keypair>* 0x00`
+        // `<global-map> := <keypair>* <PSBT_SEPARATOR>`
         GlobalMapEncoder::new(self)
     }
 }
@@ -1390,7 +1390,7 @@ mod tests {
     fn check_global(global: &Global) {
         let encoded = encode_to_vec(global);
         assert_eq!(encoded, Map::serialize_map(global));
-        assert_eq!(encoded.last(), Some(&0x00), "global map must end with separator");
+        assert_eq!(encoded.last(), Some(&PSBT_SEPARATOR), "global map must end with separator");
 
         let mut slice: &[u8] = &encoded;
         let mut decoder = GlobalDecoder::default();
@@ -1407,7 +1407,7 @@ mod tests {
         for pair in global.pairs() {
             from_pairs.extend(pair.serialize());
         }
-        from_pairs.push(0x00);
+        from_pairs.push(PSBT_SEPARATOR);
 
         assert_eq!(from_pairs, Map::serialize_map(&global));
     }
@@ -1424,7 +1424,7 @@ mod tests {
         let bytes = encode_to_vec(&global);
         assert!(!bytes.is_empty());
         assert!(bytes.len() > 1, "map must have at least one keypair before separator");
-        assert_eq!(bytes.last(), Some(&0x00), "global map must end with separator");
+        assert_eq!(bytes.last(), Some(&PSBT_SEPARATOR), "global map must end with separator");
     }
 
     #[test]
@@ -1530,7 +1530,7 @@ mod tests {
         data.push(0x03);
         data.extend_from_slice(&[0xde, 0xad, 0xbe]);
         // separator
-        data.push(0x00);
+        data.push(PSBT_SEPARATOR);
         let res = decoder.push_bytes(&mut data.as_slice());
         assert!(
             matches!(res, Err(DecodeError::InsertPair(InsertPairError::XpubValueTooShort(3)))),
