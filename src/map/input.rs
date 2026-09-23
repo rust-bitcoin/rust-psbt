@@ -1873,8 +1873,6 @@ impl<'e> InputMapEncoder<'e> {
 
     #[cfg(feature = "silent-payments")]
     fn dleq_state(&self) -> EncoderState<'e> {
-        use crate::encoding::native::DleqPairIter;
-
         EncoderState::Dleq(IterEncoder::new(DleqPairIter::new(self.input.sp_dleq_proofs.iter())))
     }
 
