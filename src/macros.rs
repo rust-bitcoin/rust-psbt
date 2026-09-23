@@ -18,29 +18,3 @@ macro_rules! v2_combine_map {
         $slf.$thing.extend($other.$thing)
     };
 }
-
-#[rustfmt::skip]
-macro_rules! v2_impl_psbt_get_pair {
-    ($rv:ident.push($slf:ident.$unkeyed_name:ident, $unkeyed_typeval:ident)) => {
-        if let Some(ref $unkeyed_name) = $slf.$unkeyed_name {
-            $rv.push($crate::raw::Pair {
-                key: $crate::raw::Key {
-                    type_value: $unkeyed_typeval,
-                    key: ::alloc::vec![],
-                },
-                value: $crate::encoding::encode_to_vec($unkeyed_name),
-            });
-        }
-    };
-    ($rv:ident.push_map($slf:ident.$keyed_name:ident, $keyed_typeval:ident)) => {
-        for (key, val) in &$slf.$keyed_name {
-            $rv.push($crate::raw::Pair {
-                key: $crate::raw::Key {
-                    type_value: $keyed_typeval,
-                    key: $crate::encoding::encode_to_vec(key),
-                },
-                value: $crate::encoding::encode_to_vec(val),
-            });
-        }
-    };
-}

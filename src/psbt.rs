@@ -1504,10 +1504,9 @@ impl From<output::CombineError> for CombineError {
 
 #[cfg(test)]
 mod tests {
-    use ::bitcoin::key::XOnlyPublicKey;
     use ::bitcoin::script::Builder;
     use ::bitcoin::{opcodes, taproot, OutPoint};
-    use bitcoin::{ScriptBuf, TapSighashType};
+    use bitcoin::{ScriptBuf, TapSighashType, XOnlyPublicKey};
 
     use super::*;
     use crate::PsbtSighashType;
@@ -1999,6 +1998,7 @@ mod tests {
         use ::bitcoin::hashes::Hash as _;
 
         use crate::consts::PSBT_OUT_SCRIPT;
+        use crate::raw;
 
         let mut output = output_without_script();
         output.sp_v0_info = Some(vec![0; 66]);
@@ -2013,10 +2013,28 @@ mod tests {
         let decoded = Psbt::deserialize(&encoded).expect("psbt must decode");
 
         assert!(decoded.outputs[0].script_pubkey.is_empty());
-        assert!(
-            !decoded.outputs[0].pairs().iter().any(|pair| pair.key.type_value == PSBT_OUT_SCRIPT),
-            "underived silent payment output must not encode PSBT_OUT_SCRIPT"
-        );
+
+        // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so inspect
+        // the encoded key-value pairs directly.
+
+        let output_encoded = encode_to_vec(&decoded.outputs[0]);
+        let slice = &mut output_encoded.as_slice();
+
+        loop {
+            use bitcoin_consensus_encoding::Decoder2Error;
+
+            use crate::KeyDecodeError;
+
+            match crate::encoding::decode_from_slice_unbounded::<raw::Pair>(slice) {
+                Ok(pair) => assert_ne!(
+                    pair.key.type_value, PSBT_OUT_SCRIPT,
+                    "underived silent payment output must not encode PSBT_OUT_SCRIPT"
+                ),
+                Err(Decoder2Error::First(KeyDecodeError::Empty)) => break,
+                Err(e) => panic!("pair decode failed: {:?}", e),
+            }
+        }
+
         assert_eq!(decoded.serialize(), encoded);
     }
 

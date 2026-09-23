@@ -33,9 +33,7 @@ use crate::encoding::native::{
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
-use crate::map::Map;
-use crate::raw;
-use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
+use crate::raw::{self, ProprietaryKeyValueIter, UnknownKeyValueIter};
 
 /// A key-value map for an output of the corresponding index in the unsigned
 /// transaction.
@@ -100,9 +98,6 @@ impl Output {
             unknowns: BTreeMap::new(),
         }
     }
-
-    /// Returns all key-value pairs for this output map in serialization order.
-    pub fn pairs(&self) -> Vec<raw::Pair> { Map::get_pairs(self) }
 
     /// Creates the [`TxOut`] associated with this `Output`.
     pub(crate) fn tx_out(&self) -> TxOut {
@@ -936,82 +931,6 @@ impl PsbtEncode for Output {
     }
 }
 
-impl Map for Output {
-    fn get_pairs(&self) -> Vec<raw::Pair> {
-        let mut rv: Vec<raw::Pair> = Default::default();
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_OUT_AMOUNT, key: vec![] },
-            value: crate::encoding::encode_to_vec(&self.amount),
-        });
-
-        // BIP-375 represents an underived silent payment output by omitting the script, so
-        // encoding one has to leave the field out rather than write it empty. Whether that
-        // state is legal in the first place is decided by `validate`, not here.
-        #[cfg(feature = "silent-payments")]
-        let omit_script = self.sp_v0_info.is_some() && self.script_pubkey.is_empty();
-        #[cfg(not(feature = "silent-payments"))]
-        let omit_script = false;
-
-        if !omit_script {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_OUT_SCRIPT, key: vec![] },
-                value: crate::encoding::encode_to_vec(&self.script_pubkey),
-            });
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.redeem_script, PSBT_OUT_REDEEM_SCRIPT)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.witness_script, PSBT_OUT_WITNESS_SCRIPT)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.bip32_derivations, PSBT_OUT_BIP32_DERIVATION)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.tap_internal_key, PSBT_OUT_TAP_INTERNAL_KEY)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.tap_tree, PSBT_OUT_TAP_TREE)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.tap_key_origins, PSBT_OUT_TAP_BIP32_DERIVATION)
-        }
-
-        #[cfg(feature = "silent-payments")]
-        if let Some(sp_info) = &self.sp_v0_info {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_OUT_SP_V0_INFO, key: vec![] },
-                value: sp_info.clone(),
-            });
-        }
-
-        #[cfg(feature = "silent-payments")]
-        if let Some(label) = self.sp_v0_label {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_OUT_SP_V0_LABEL, key: vec![] },
-                value: label.to_le_bytes().to_vec(),
-            });
-        }
-
-        for (key, value) in self.proprietaries.iter() {
-            rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
-        }
-
-        for (key, value) in self.unknowns.iter() {
-            rv.push(raw::Pair { key: key.clone(), value: value.clone() });
-        }
-
-        rv
-    }
-}
-
 /// Enables building an [`Output`] using the standard builder pattern.
 // This is only provided for uniformity with the `InputBuilder`.
 pub struct OutputBuilder(Output);
@@ -1289,6 +1208,7 @@ impl std::error::Error for CombineError {
 mod tests {
 
     use super::*;
+    use crate::encode_to_vec;
 
     fn tx_out() -> TxOut {
         // Arbitrary script, may not even be a valid scriptPubkey.
@@ -1299,36 +1219,14 @@ mod tests {
     }
 
     #[test]
-    fn serialize_roundtrip() {
+    fn encode_roundtrip() {
         let output = Output::new(tx_out());
 
-        let ser = output.serialize_map();
+        let ser = encode_to_vec(&output);
 
         let decoded = crate::encoding::decode_from_slice::<Output>(&ser).expect("failed to decode");
 
         assert_eq!(decoded, output);
-    }
-
-    #[test]
-    fn pairs_matches_serialize_map() {
-        let output = Output::new(tx_out());
-
-        let mut from_pairs = Vec::new();
-        for pair in output.pairs() {
-            from_pairs.extend(crate::encoding::encode_to_vec(&pair));
-        }
-        from_pairs.push(crate::consts::PSBT_SEPARATOR);
-
-        assert_eq!(from_pairs, output.serialize_map());
-    }
-
-    // Asserts the native pull-based encoder produces exactly `Map::serialize_map`'s bytes.
-    #[test]
-    fn encoder_matches_serialize_map() {
-        let output = Output::new(tx_out());
-
-        let encoded = crate::encoding::encode_to_vec(&output);
-        assert_eq!(encoded, Map::serialize_map(&output));
     }
 
     #[test]
@@ -1360,26 +1258,41 @@ mod tests {
     #[cfg(feature = "silent-payments")]
     #[test]
     fn silent_payment_output_script_pair() {
+        use alloc::vec;
+
+        // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so
+        // inspect the encoded key-value pairs directly.
+        fn has_script_pair(output: &Output) -> bool {
+            let encoded = encode_to_vec(output);
+
+            let slice = &mut encoded.as_slice();
+            loop {
+                use crate::KeyDecodeError;
+
+                std::println!("{}", slice.len());
+                if slice.is_empty() {
+                    return false;
+                };
+
+                match crate::encoding::decode_from_slice_unbounded::<raw::Pair>(slice) {
+                    Ok(pair) if pair.key.type_value == PSBT_OUT_SCRIPT => return true,
+                    Ok(_) => {}
+                    Err(Decoder2Error::First(KeyDecodeError::Empty)) => return false,
+                    Err(e) => panic!("pair decode failed: {:?}", e),
+                }
+            }
+        }
+
         let ordinary = Output::new(tx_out());
-        let has_script = |output: &Output| {
-            output.pairs().iter().any(|pair| pair.key.type_value == PSBT_OUT_SCRIPT)
-        };
-        // Asserts the pull-based encoder applies the same omit rule as `pairs`.
-        let encoder_matches_pairs = |output: &Output| {
-            assert_eq!(crate::encoding::encode_to_vec(output), output.serialize_map());
-        };
-        assert!(has_script(&ordinary));
-        encoder_matches_pairs(&ordinary);
+        assert!(has_script_pair(&ordinary));
 
         let mut derived_sp = ordinary;
         derived_sp.sp_v0_info = Some(vec![0; 66]);
-        assert!(has_script(&derived_sp));
-        encoder_matches_pairs(&derived_sp);
+        assert!(has_script_pair(&derived_sp));
 
         let mut underived_sp = derived_sp;
         underived_sp.script_pubkey = ScriptBuf::new();
-        assert!(!has_script(&underived_sp));
-        encoder_matches_pairs(&underived_sp);
+        assert!(!has_script_pair(&underived_sp));
     }
 
     #[test]
