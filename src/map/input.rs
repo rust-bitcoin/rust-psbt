@@ -53,7 +53,6 @@ use crate::encoding::native::{
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::{write_err, FundingUtxoError};
-use crate::map::Map;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
@@ -239,9 +238,6 @@ impl Input {
         let output_type = self.output_type()?;
         Ok(output_type.signing_algorithm())
     }
-
-    /// Returns all key-value pairs for this input map in serialization order.
-    pub fn pairs(&self) -> Vec<raw::Pair> { Map::get_pairs(self) }
 
     /// Creates a new finalized input.
     ///
@@ -1989,163 +1985,6 @@ impl PsbtEncode for Input {
     }
 }
 
-impl Map for Input {
-    fn get_pairs(&self) -> Vec<raw::Pair> {
-        let mut rv: Vec<raw::Pair> = Default::default();
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_IN_PREVIOUS_TXID, key: vec![] },
-            value: crate::encoding::encode_to_vec(&self.previous_txid),
-        });
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_IN_OUTPUT_INDEX, key: vec![] },
-            value: self.spent_output_index.to_le_bytes().to_vec(),
-        });
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.sequence, PSBT_IN_SEQUENCE)
-        }
-        v2_impl_psbt_get_pair! {
-            rv.push(self.min_time, PSBT_IN_REQUIRED_TIME_LOCKTIME)
-        }
-        v2_impl_psbt_get_pair! {
-            rv.push(self.min_height, PSBT_IN_REQUIRED_HEIGHT_LOCKTIME)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.non_witness_utxo, PSBT_IN_NON_WITNESS_UTXO)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.witness_utxo, PSBT_IN_WITNESS_UTXO)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.partial_sigs, PSBT_IN_PARTIAL_SIG)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.sighash_type, PSBT_IN_SIGHASH_TYPE)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.redeem_script, PSBT_IN_REDEEM_SCRIPT)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.witness_script, PSBT_IN_WITNESS_SCRIPT)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.bip32_derivations, PSBT_IN_BIP32_DERIVATION)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.final_script_sig, PSBT_IN_FINAL_SCRIPTSIG)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.final_script_witness, PSBT_IN_FINAL_SCRIPTWITNESS)
-        }
-
-        for (hash, preimage) in &self.ripemd160_preimages {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_IN_RIPEMD160,
-                    key: crate::encoding::encode_to_vec(hash),
-                },
-                value: preimage.clone(),
-            });
-        }
-
-        for (hash, preimage) in &self.sha256_preimages {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_IN_SHA256,
-                    key: crate::encoding::encode_to_vec(hash),
-                },
-                value: preimage.clone(),
-            });
-        }
-
-        for (hash, preimage) in &self.hash160_preimages {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_IN_HASH160,
-                    key: crate::encoding::encode_to_vec(hash),
-                },
-                value: preimage.clone(),
-            });
-        }
-
-        for (hash, preimage) in &self.hash256_preimages {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_IN_HASH256,
-                    key: crate::encoding::encode_to_vec(hash),
-                },
-                value: preimage.clone(),
-            });
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.tap_key_sig, PSBT_IN_TAP_KEY_SIG)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.tap_script_sigs, PSBT_IN_TAP_SCRIPT_SIG)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.tap_scripts, PSBT_IN_TAP_LEAF_SCRIPT)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.tap_key_origins, PSBT_IN_TAP_BIP32_DERIVATION)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.tap_internal_key, PSBT_IN_TAP_INTERNAL_KEY)
-        }
-
-        v2_impl_psbt_get_pair! {
-            rv.push(self.tap_merkle_root, PSBT_IN_TAP_MERKLE_ROOT)
-        }
-
-        #[cfg(feature = "silent-payments")]
-        for (scan_key, ecdh_share) in &self.sp_ecdh_shares {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_IN_SP_ECDH_SHARE,
-                    key: scan_key.to_bytes().to_vec(),
-                },
-                value: ecdh_share.to_bytes().to_vec(),
-            });
-        }
-
-        #[cfg(feature = "silent-payments")]
-        for (scan_key, dleq_proof) in &self.sp_dleq_proofs {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_IN_SP_DLEQ, key: scan_key.to_bytes().to_vec() },
-                value: dleq_proof.as_bytes().to_vec(),
-            });
-        }
-
-        for (key, value) in self.proprietaries.iter() {
-            rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
-        }
-
-        for (key, value) in self.unknowns.iter() {
-            rv.push(raw::Pair { key: key.clone(), value: value.clone() });
-        }
-
-        rv
-    }
-}
-
-// TODO: This is an exact duplicate of that in v0.
-
 /// Enables building an [`Input`] using the standard builder pattern.
 pub struct InputBuilder(Input);
 
@@ -2607,9 +2446,12 @@ impl std::error::Error for CombineError {
 #[cfg(test)]
 #[cfg(feature = "std")]
 mod test {
+    use alloc::vec;
+
     use bitcoin::Amount;
 
     use super::*;
+    use crate::encoding::encode_to_vec;
 
     fn out_point() -> OutPoint {
         let txid = Txid::hash(b"some arbitrary bytes");
@@ -2621,24 +2463,12 @@ mod test {
     fn serialize_roundtrip() {
         let input = Input::new(&out_point());
 
-        let ser = input.serialize_map();
+        let encoded = encode_to_vec(&input);
 
-        let decoded = crate::encoding::decode_from_slice::<Input>(&ser).expect("failed to decode");
+        let decoded =
+            crate::encoding::decode_from_slice::<Input>(&encoded).expect("failed to decode");
 
         assert_eq!(decoded, input);
-    }
-
-    #[test]
-    fn pairs_matches_serialize_map() {
-        let input = Input::new(&out_point());
-
-        let mut from_pairs = Vec::new();
-        for pair in input.pairs() {
-            from_pairs.extend(crate::encoding::encode_to_vec(&pair));
-        }
-        from_pairs.push(crate::consts::PSBT_SEPARATOR);
-
-        assert_eq!(from_pairs, input.serialize_map());
     }
 
     #[test]
@@ -2718,11 +2548,9 @@ mod test {
         }
     }
 
-    // Asserts byte-equality between the native pull-encoder and `Map::serialize_map`, and
-    // decodability of that output through the legacy `Input::decode(Read)` waiter.
+    // Asserts encode-decode roundtrip for input
     fn check_input(input: &Input) {
         let encoded = crate::encoding::encode_to_vec(input);
-        assert_eq!(encoded, input.serialize_map());
         assert_eq!(
             encoded.last(),
             Some(&crate::consts::PSBT_SEPARATOR),
