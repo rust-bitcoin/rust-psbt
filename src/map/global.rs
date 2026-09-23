@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: CC0-1.0
 
 use alloc::collections::{btree_map, BTreeMap};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
@@ -12,9 +11,9 @@ use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
-    drain_to_vec, ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError,
-    CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2Error,
-    DecoderStatus, Encoder, EncoderStatus, IterEncoder, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoderError,
+    CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2Error, DecoderStatus, Encoder,
+    EncoderStatus, IterEncoder, UnexpectedEofError,
 };
 
 use crate::consts::{
@@ -33,12 +32,11 @@ use crate::encoding::delegates::{
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
-use crate::encoding::{encode_to_vec, KeyValueEncoder, PsbtEncode, ValueDecoder};
-use crate::error::{write_err, InconsistentKeySourcesError};
-use crate::map::Map;
+use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::error::write_err;
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
-use crate::{consts, raw, V2};
+use crate::{consts, raw, InconsistentKeySourcesError, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
 const INPUTS_MODIFIABLE: u8 = 0x01 << 0;
@@ -112,9 +110,6 @@ impl Global {
             unknowns: Default::default(),
         }
     }
-
-    /// Returns all key-value pairs for this global map in serialization order.
-    pub fn pairs(&self) -> Vec<raw::Pair> { Map::get_pairs(self) }
 
     pub(crate) fn set_inputs_modifiable_flag(&mut self) {
         self.tx_modifiable_flags |= INPUTS_MODIFIABLE;
@@ -963,88 +958,6 @@ impl PsbtEncode for Global {
     }
 }
 
-impl Map for Global {
-    fn get_pairs(&self) -> Vec<raw::Pair> {
-        let mut rv: Vec<raw::Pair> = Default::default();
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_GLOBAL_VERSION, key: vec![] },
-            value: encode_to_vec(&self.version),
-        });
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_GLOBAL_TX_VERSION, key: vec![] },
-            value: encode_to_vec(&self.tx_version),
-        });
-
-        if let Some(ref fallback_lock_time) = self.fallback_lock_time {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_GLOBAL_FALLBACK_LOCKTIME, key: vec![] },
-                value: encode_to_vec(fallback_lock_time),
-            });
-        }
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_GLOBAL_INPUT_COUNT, key: vec![] },
-            value: drain_to_vec(&mut CompactSizeEncoder::new(self.input_count)),
-        });
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_GLOBAL_OUTPUT_COUNT, key: vec![] },
-            value: drain_to_vec(&mut CompactSizeEncoder::new(self.output_count)),
-        });
-
-        rv.push(raw::Pair {
-            key: raw::Key { type_value: PSBT_GLOBAL_TX_MODIFIABLE, key: vec![] },
-            value: vec![self.tx_modifiable_flags],
-        });
-
-        for (xpub, (fingerprint, derivation)) in &self.xpubs {
-            rv.push(raw::Pair {
-                key: raw::Key { type_value: PSBT_GLOBAL_XPUB, key: xpub.encode().to_vec() },
-                value: {
-                    let mut ret = Vec::with_capacity(4 + derivation.len() * 4);
-                    ret.extend(fingerprint.as_bytes());
-                    derivation.into_iter().for_each(|n| ret.extend(&u32::from(*n).to_le_bytes()));
-                    ret
-                },
-            });
-        }
-
-        #[cfg(feature = "silent-payments")]
-        for (scan_key, ecdh_share) in &self.sp_ecdh_shares {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_GLOBAL_SP_ECDH_SHARE,
-                    key: scan_key.to_bytes().to_vec(),
-                },
-                value: ecdh_share.to_bytes().to_vec(),
-            });
-        }
-
-        #[cfg(feature = "silent-payments")]
-        for (scan_key, dleq_proof) in &self.sp_dleq_proofs {
-            rv.push(raw::Pair {
-                key: raw::Key {
-                    type_value: PSBT_GLOBAL_SP_DLEQ,
-                    key: scan_key.to_bytes().to_vec(),
-                },
-                value: dleq_proof.as_bytes().to_vec(),
-            });
-        }
-
-        for (key, value) in self.proprietaries.iter() {
-            rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
-        }
-
-        for (key, value) in self.unknowns.iter() {
-            rv.push(raw::Pair { key: key.clone(), value: value.clone() });
-        }
-
-        rv
-    }
-}
-
 /// Error decoding a PSBT value (compact-size length prefix + payload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueDecodeError {
@@ -1357,11 +1270,11 @@ impl From<InconsistentKeySourcesError> for CombineError {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use core::str::FromStr;
 
     use super::*;
     use crate::encoding::encode_to_vec;
-    use crate::map::Map;
 
     fn sample_xpub() -> Xpub {
         Xpub::from_str(
@@ -1370,11 +1283,9 @@ mod tests {
         .unwrap()
     }
 
-    // Asserts the native pull-based encoder produces exactly `Map::serialize_map`'s bytes and
-    // that the map round-trips through the Read-based `Global::decode`.
+    // Asserts the encoder round-trips
     fn check_global(global: &Global) {
         let encoded = encode_to_vec(global);
-        assert_eq!(encoded, Map::serialize_map(global));
         assert_eq!(encoded.last(), Some(&PSBT_SEPARATOR), "global map must end with separator");
 
         let mut slice: &[u8] = &encoded;
@@ -1382,19 +1293,6 @@ mod tests {
         decoder.push_bytes(&mut slice).unwrap();
         let decoded = decoder.end().unwrap();
         assert_eq!(decoded, global.clone());
-    }
-
-    #[test]
-    fn pairs_matches_serialize_map() {
-        let global = Global::default();
-
-        let mut from_pairs = Vec::new();
-        for pair in global.pairs() {
-            from_pairs.extend(encode_to_vec(&pair));
-        }
-        from_pairs.push(PSBT_SEPARATOR);
-
-        assert_eq!(from_pairs, Map::serialize_map(&global));
     }
 
     #[test]
