@@ -5,9 +5,6 @@ on:
     - cron: '0 0 * * 0'  # Weekly on Sunday at 00:00 UTC.
   workflow_dispatch:     # Allow manual triggering.
 
-permissions:
-  contents: write
-
 # Use a custom rustup home on the same filesystem to avoid cross-device link errors
 # in container environments with layered filesystems (e.g., Docker/overlayfs).
 env:
