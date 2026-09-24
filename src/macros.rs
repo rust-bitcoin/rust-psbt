@@ -46,37 +46,6 @@ macro_rules! v2_impl_psbt_serialize {
     };
 }
 
-// Note we purposefully do not use the fully qualified path for `InsertPairError`.
-#[rustfmt::skip]
-macro_rules! v2_impl_psbt_insert_pair {
-    ($slf:ident.$unkeyed_name:ident <= <$raw_key:ident: _>|<$raw_value:ident: $unkeyed_value_type:ty>) => {
-        if $raw_key.key.is_empty() {
-            if $slf.$unkeyed_name.is_none() {
-                let val: $unkeyed_value_type = $crate::serialize::Deserialize::deserialize(&$raw_value)?;
-                $slf.$unkeyed_name = Some(val)
-            } else {
-                return Err(InsertPairError::DuplicateKey($raw_key).into());
-            }
-        } else {
-            return Err(InsertPairError::InvalidKeyDataNotEmpty($raw_key).into());
-        }
-    };
-    ($slf:ident.$keyed_name:ident <= <$raw_key:ident: $keyed_key_type:ty>|<$raw_value:ident: $keyed_value_type:ty>) => {
-        if !$raw_key.key.is_empty() {
-            let key_val: $keyed_key_type = $crate::serialize::Deserialize::deserialize(&$raw_key.key)?;
-            match $slf.$keyed_name.entry(key_val) {
-                alloc::collections::btree_map::Entry::Vacant(empty_key) => {
-                    let val: $keyed_value_type = $crate::serialize::Deserialize::deserialize(&$raw_value)?;
-                    empty_key.insert(val);
-                }
-                alloc::collections::btree_map::Entry::Occupied(_) => return Err(InsertPairError::DuplicateKey($raw_key).into()),
-            }
-        } else {
-            return Err(InsertPairError::InvalidKeyDataEmpty($raw_key).into());
-        }
-    };
-}
-
 #[rustfmt::skip]
 macro_rules! v2_impl_psbt_get_pair {
     ($rv:ident.push($slf:ident.$unkeyed_name:ident, $unkeyed_typeval:ident)) => {
