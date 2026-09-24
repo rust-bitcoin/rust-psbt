@@ -8,6 +8,8 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::bip32::KeySource;
+use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
+use bitcoin::blockdata::witness::WitnessDecoderError;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::hex::DisplayHex;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
@@ -20,8 +22,9 @@ use bitcoin::{
     ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus,
-    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
+    ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoderError,
+    CompactSizeEncoder, Decoder, Decoder2Error, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
 use crate::consts::{
@@ -749,13 +752,13 @@ enum InputDecodeStage {
     /// Decoding an ECDH share for silent payments.
     DecodingSpEcdhShare {
         key: raw::Key,
-        decoder: ByteVecDecoder,
+        decoder: ValueDecoder<ArrayDecoder<33>>,
     },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
     DecodingSpDleqProof {
         key: raw::Key,
-        decoder: ByteVecDecoder,
+        decoder: ValueDecoder<ArrayDecoder<64>>,
     },
     /// The end-of-map separator has been reached.
     Done(Input),
@@ -816,10 +819,10 @@ impl InputDecodeStage {
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             #[cfg(feature = "silent-payments")]
             PSBT_IN_SP_ECDH_SHARE =>
-                Ok(Self::DecodingSpEcdhShare { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingSpEcdhShare { key, decoder: ValueDecoder::default() }),
             #[cfg(feature = "silent-payments")]
             PSBT_IN_SP_DLEQ =>
-                Ok(Self::DecodingSpDleqProof { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
         }
     }
@@ -942,69 +945,145 @@ impl Decoder for InputDecoder {
             let status = match &mut self.stage {
                 InputDecodeStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(DecodeError::KeyDecode)?,
-                InputDecodeStage::DecodingPreviousTxid { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapInternalKey { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapMerkleRoot { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                InputDecodeStage::DecodingPreviousTxid { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::PreviousTxid(e)),
                     })?,
-                InputDecodeStage::DecodingOutputIndex { ref mut decoder, .. }
-                | InputDecodeStage::DecodingSighashType { ref mut decoder, .. }
-                | InputDecodeStage::DecodingSequence { ref mut decoder, .. }
-                | InputDecodeStage::DecodingMinTime { ref mut decoder, .. }
-                | InputDecodeStage::DecodingMinHeight { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                InputDecodeStage::DecodingTapInternalKey { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::TapInternalKey(e)),
+                    })?,
+                InputDecodeStage::DecodingTapMerkleRoot { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::TapMerkleRoot(e)),
+                    })?,
+                InputDecodeStage::DecodingOutputIndex { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::OutputIndex(e)),
+                    })?,
+                InputDecodeStage::DecodingSighashType { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SighashType(e)),
+                    })?,
+                InputDecodeStage::DecodingSequence { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::Sequence(e)),
+                    })?,
+                InputDecodeStage::DecodingMinTime { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::MinTime(e)),
+                    })?,
+                InputDecodeStage::DecodingMinHeight { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::MinHeight(e)),
                     })?,
                 InputDecodeStage::DecodingNonWitnessUtxo { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::NonWitnessUtxo(e)),
                     })?,
                 InputDecodeStage::DecodingWitnessUtxo { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::WitnessUtxo(e)),
                     })?,
                 InputDecodeStage::DecodingFinalScriptWitness { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::FinalScriptWitness(e)),
                     })?,
-                InputDecodeStage::DecodingRedeemScript { ref mut decoder, .. }
-                | InputDecodeStage::DecodingWitnessScript { ref mut decoder, .. }
-                | InputDecodeStage::DecodingFinalScriptSig { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapKeySig { ref mut decoder, .. }
-                | InputDecodeStage::DecodingPartialSig { ref mut decoder, .. }
-                | InputDecodeStage::DecodingBip32Derivation { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapBip32Derivation { ref mut decoder, .. }
-                | InputDecodeStage::DecodingRipemd160 { ref mut decoder, .. }
-                | InputDecodeStage::DecodingSha256 { ref mut decoder, .. }
-                | InputDecodeStage::DecodingHash160 { ref mut decoder, .. }
-                | InputDecodeStage::DecodingHash256 { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapScriptSig { ref mut decoder, .. }
-                | InputDecodeStage::DecodingTapLeafScript { ref mut decoder, .. }
-                | InputDecodeStage::DecodingProprietary { ref mut decoder, .. }
-                | InputDecodeStage::DecodingUnknown { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                InputDecodeStage::DecodingRedeemScript { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::RedeemScript(e)))?,
+                InputDecodeStage::DecodingWitnessScript { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::WitnessScript(e)))?,
+                InputDecodeStage::DecodingFinalScriptSig { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::FinalScriptSig(e)))?,
+                InputDecodeStage::DecodingTapKeySig { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::TapKeySig(e)))?,
+                InputDecodeStage::DecodingPartialSig { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::PartialSig(e)))?,
+                InputDecodeStage::DecodingBip32Derivation { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::Bip32Derivation(e)))?,
+                InputDecodeStage::DecodingTapBip32Derivation { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::TapBip32Derivation(e))
+                    })?,
+                InputDecodeStage::DecodingRipemd160 { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Ripemd160Preimage(e))
+                    })?,
+                InputDecodeStage::DecodingSha256 { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::Sha256Preimage(e)))?,
+                InputDecodeStage::DecodingHash160 { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::Hash160Preimage(e)))?,
+                InputDecodeStage::DecodingHash256 { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::Hash256Preimage(e)))?,
+                InputDecodeStage::DecodingTapScriptSig { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::TapScriptSig(e)))?,
+                InputDecodeStage::DecodingTapLeafScript { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::TapLeafScript(e)))?,
+                InputDecodeStage::DecodingProprietary { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e)))?,
+                InputDecodeStage::DecodingUnknown { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::UnknownValue(e)))?,
+                #[cfg(feature = "silent-payments")]
+                InputDecodeStage::DecodingSpEcdhShare { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
                     })?,
                 #[cfg(feature = "silent-payments")]
-                InputDecodeStage::DecodingSpEcdhShare { ref mut decoder, .. }
-                | InputDecodeStage::DecodingSpDleqProof { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                InputDecodeStage::DecodingSpDleqProof { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
                     })?,
                 InputDecodeStage::Done(_) => return Ok(DecoderStatus::Ready),
                 InputDecodeStage::DecodingSeparator | InputDecodeStage::Errored =>
@@ -1022,10 +1101,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::from_key(key)?;
                 }
                 InputDecodeStage::DecodingPreviousTxid { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::PreviousTxid(e)),
                     })?;
                     if self.previous_txid.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1037,10 +1117,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingOutputIndex { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::OutputIndex(e)),
                     })?;
                     if self.spent_output_index.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1049,10 +1130,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingSequence { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::Sequence(e)),
                     })?;
                     if self.sequence.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1061,10 +1143,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingMinTime { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::MinTime(e)),
                     })?;
                     if self.min_time.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1082,10 +1165,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingMinHeight { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::MinHeight(e)),
                     })?;
                     if self.min_height.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1103,10 +1187,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingNonWitnessUtxo { key, decoder } => {
-                    let (_, tx) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, tx) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::NonWitnessUtxo(e)),
                     })?;
                     if self.non_witness_utxo.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1115,10 +1200,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingWitnessUtxo { key, decoder } => {
-                    let (_, txout) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, txout) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::WitnessUtxo(e)),
                     })?;
                     if self.witness_utxo.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1127,10 +1213,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingSighashType { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SighashType(e)),
                     })?;
                     if self.sighash_type.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1139,11 +1226,9 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingRedeemScript { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
-                    })?;
+                    let value = decoder
+                        .end()
+                        .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::RedeemScript(e)))?;
                     if self.redeem_script.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
@@ -1151,10 +1236,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingWitnessScript { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1163,10 +1246,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingFinalScriptSig { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::FinalScriptSig(e))
                     })?;
                     if self.final_script_sig.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1175,10 +1256,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingFinalScriptWitness { key, decoder } => {
-                    let (_, witness) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, witness) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::FinalScriptWitness(e)),
                     })?;
                     if self.final_script_witness.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1187,11 +1269,9 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapKeySig { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
-                    })?;
+                    let value = decoder
+                        .end()
+                        .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::TapKeySig(e)))?;
                     if self.tap_key_sig.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
@@ -1206,10 +1286,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapInternalKey { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::TapInternalKey(e)),
                     })?;
                     if self.tap_internal_key.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1221,10 +1302,11 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapMerkleRoot { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::TapMerkleRoot(e)),
                     })?;
                     if self.tap_merkle_root.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
@@ -1236,11 +1318,9 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingPartialSig { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
-                    })?;
+                    let value = decoder
+                        .end()
+                        .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::PartialSig(e)))?;
                     let pk = PublicKey::from_slice(&key.key).map_err(|e| {
                         DecodeError::DeserPair(serialize::Error::InvalidPublicKey(e))
                     })?;
@@ -1257,10 +1337,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingBip32Derivation { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Bip32Derivation(e))
                     })?;
                     use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint};
                     let fprint =
@@ -1284,10 +1362,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingRipemd160 { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Ripemd160Preimage(e))
                     })?;
                     let hash = ripemd160::Hash::from_slice(&key.key)
                         .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
@@ -1301,10 +1377,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingSha256 { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Sha256Preimage(e))
                     })?;
                     let hash = sha256::Hash::from_slice(&key.key)
                         .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
@@ -1318,10 +1392,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingHash160 { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Hash160Preimage(e))
                     })?;
                     let hash = hash160::Hash::from_slice(&key.key)
                         .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
@@ -1335,10 +1407,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingHash256 { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::Hash256Preimage(e))
                     })?;
                     let hash = sha256d::Hash::from_slice(&key.key)
                         .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
@@ -1352,11 +1422,9 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapScriptSig { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
-                    })?;
+                    let value = decoder
+                        .end()
+                        .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::TapScriptSig(e)))?;
                     if key.key.len() != 64 {
                         return Err(DecodeError::InsertPair(InsertPairError::KeyWrongLength(
                             key.key.len(),
@@ -1384,10 +1452,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapLeafScript { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::TapLeafScript(e))
                     })?;
                     let cb = ControlBlock::decode(&key.key).map_err(|_| {
                         DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
@@ -1416,10 +1482,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingTapBip32Derivation { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::TapBip32Derivation(e))
                     })?;
                     let pair = if value.is_empty() {
                         use bitcoin::bip32::{DerivationPath, Fingerprint};
@@ -1457,10 +1521,8 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingProprietary { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let value = decoder.end().map_err(|e| {
+                        DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
                     let pk = raw::ProprietaryKey::try_from(key.clone())
                         .map_err(InsertPairError::Deser)?;
@@ -1474,11 +1536,9 @@ impl Decoder for InputDecoder {
                     self.stage = InputDecodeStage::DecodingSeparator;
                 }
                 InputDecodeStage::DecodingUnknown { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
-                    })?;
+                    let value = decoder
+                        .end()
+                        .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::UnknownValue(e)))?;
                     match self.unknowns.entry(key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1492,10 +1552,11 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 InputDecodeStage::DecodingSpEcdhShare { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
                     })?;
                     if key.key.is_empty() {
                         return Err(DecodeError::InsertPair(InsertPairError::InvalidKeyDataEmpty(
@@ -1504,8 +1565,8 @@ impl Decoder for InputDecoder {
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key)
                         .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
-                    let share = CompressedPublicKey::from_slice(&value)
-                        .map_err(|_| InsertPairError::ValueWrongLength(value.len(), 33))?;
+                    let share = CompressedPublicKey::from_slice(&bytes)
+                        .map_err(|_| InsertPairError::ValueWrongLength(33, 33))?;
                     match self.sp_ecdh_shares.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(share);
@@ -1517,10 +1578,11 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 InputDecodeStage::DecodingSpDleqProof { key, decoder } => {
-                    let value = decoder.end().map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
-                        ))
+                    let (_, bytes) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            DecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
                     })?;
                     if key.key.is_empty() {
                         return Err(DecodeError::InsertPair(InsertPairError::InvalidKeyDataEmpty(
@@ -1529,8 +1591,8 @@ impl Decoder for InputDecoder {
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key)
                         .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
-                    let proof = DleqProof::try_from(value.as_slice())
-                        .map_err(|_| InsertPairError::ValueWrongLength(value.len(), 64))?;
+                    let proof = DleqProof::try_from(bytes.as_slice())
+                        .map_err(|_| InsertPairError::ValueWrongLength(64, 64))?;
                     match self.sp_dleq_proofs.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(proof);
@@ -1601,8 +1663,9 @@ impl Decoder for InputDecoder {
             | InputDecodeStage::DecodingProprietary { decoder, .. }
             | InputDecodeStage::DecodingUnknown { decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
-            InputDecodeStage::DecodingSpEcdhShare { decoder, .. }
-            | InputDecodeStage::DecodingSpDleqProof { decoder, .. } => decoder.read_limit(),
+            InputDecodeStage::DecodingSpEcdhShare { decoder, .. } => decoder.read_limit(),
+            #[cfg(feature = "silent-payments")]
+            InputDecodeStage::DecodingSpDleqProof { decoder, .. } => decoder.read_limit(),
             InputDecodeStage::Done(_) | InputDecodeStage::Errored => 0,
         }
     }
@@ -2202,6 +2265,150 @@ impl InputBuilder {
     pub fn build(self) -> Input { self.0 }
 }
 
+/// Error decoding the body of a value.
+#[derive(Debug)]
+pub enum ValueDecodeError {
+    /// Error decoding the value's compact-size length prefix.
+    LengthPrefix(CompactSizeDecoderError),
+    /// Error decoding the previous transaction ID (32-byte fixed value).
+    PreviousTxid(UnexpectedEofError),
+    /// Error decoding the output index (4-byte fixed value).
+    OutputIndex(UnexpectedEofError),
+    /// Error decoding the sequence number (4-byte fixed value).
+    Sequence(UnexpectedEofError),
+    /// Error decoding the minimum lock time (4-byte fixed value).
+    MinTime(UnexpectedEofError),
+    /// Error decoding the minimum lock height (4-byte fixed value).
+    MinHeight(UnexpectedEofError),
+    /// Error decoding the sighash type (4-byte fixed value).
+    SighashType(UnexpectedEofError),
+    /// Error decoding the taproot internal key (32-byte fixed value).
+    TapInternalKey(UnexpectedEofError),
+    /// Error decoding the taproot merkle root (32-byte fixed value).
+    TapMerkleRoot(UnexpectedEofError),
+    /// Error decoding the non-witness UTXO (full transaction).
+    NonWitnessUtxo(TransactionDecoderError),
+    /// Error decoding the witness UTXO (transaction output).
+    WitnessUtxo(TxOutDecoderError),
+    /// Error decoding the final script witness (witness stack).
+    FinalScriptWitness(WitnessDecoderError),
+    /// Error decoding the redeem script.
+    RedeemScript(ByteVecDecoderError),
+    /// Error decoding the witness script.
+    WitnessScript(ByteVecDecoderError),
+    /// Error decoding the final scriptSig.
+    FinalScriptSig(ByteVecDecoderError),
+    /// Error decoding the taproot key signature.
+    TapKeySig(ByteVecDecoderError),
+    /// Error decoding an ECDSA partial signature.
+    PartialSig(ByteVecDecoderError),
+    /// Error decoding the BIP32 derivation key source.
+    Bip32Derivation(ByteVecDecoderError),
+    /// Error decoding the taproot BIP32 derivation key source.
+    TapBip32Derivation(ByteVecDecoderError),
+    /// Error decoding a RIPEMD160 preimage.
+    Ripemd160Preimage(ByteVecDecoderError),
+    /// Error decoding a SHA256 preimage.
+    Sha256Preimage(ByteVecDecoderError),
+    /// Error decoding a HASH160 preimage.
+    Hash160Preimage(ByteVecDecoderError),
+    /// Error decoding a HASH256 preimage.
+    Hash256Preimage(ByteVecDecoderError),
+    /// Error decoding a taproot script signature.
+    TapScriptSig(ByteVecDecoderError),
+    /// Error decoding a tap leaf script.
+    TapLeafScript(ByteVecDecoderError),
+    /// Error decoding a proprietary value.
+    ProprietaryValue(ByteVecDecoderError),
+    /// Error decoding an unknown value.
+    UnknownValue(ByteVecDecoderError),
+    /// Error decoding a silent payments ECDH share (33-byte fixed value).
+    #[cfg(feature = "silent-payments")]
+    SpEcdh(UnexpectedEofError),
+    /// Error decoding a silent payments DLEQ proof (64-byte fixed value).
+    #[cfg(feature = "silent-payments")]
+    SpDleq(UnexpectedEofError),
+}
+
+impl fmt::Display for ValueDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
+            Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
+            Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
+            Self::Sequence(ref e) => write_err!(f, "error decoding sequence"; e),
+            Self::MinTime(ref e) => write_err!(f, "error decoding min time"; e),
+            Self::MinHeight(ref e) => write_err!(f, "error decoding min height"; e),
+            Self::SighashType(ref e) => write_err!(f, "error decoding sighash type"; e),
+            Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
+            Self::TapMerkleRoot(ref e) => write_err!(f, "error decoding tap merkle root"; e),
+            Self::NonWitnessUtxo(ref e) => write_err!(f, "error decoding non-witness UTXO"; e),
+            Self::WitnessUtxo(ref e) => write_err!(f, "error decoding witness UTXO"; e),
+            Self::FinalScriptWitness(ref e) =>
+                write_err!(f, "error decoding final script witness"; e),
+            Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
+            Self::WitnessScript(ref e) => write_err!(f, "error decoding witness script"; e),
+            Self::FinalScriptSig(ref e) => write_err!(f, "error decoding final scriptSig"; e),
+            Self::TapKeySig(ref e) => write_err!(f, "error decoding tap key signature"; e),
+            Self::PartialSig(ref e) => write_err!(f, "error decoding partial signature"; e),
+            Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
+            Self::TapBip32Derivation(ref e) =>
+                write_err!(f, "error decoding tap BIP32 derivation"; e),
+            Self::Ripemd160Preimage(ref e) => write_err!(f, "error decoding RIPEMD160 preimage"; e),
+            Self::Sha256Preimage(ref e) => write_err!(f, "error decoding SHA256 preimage"; e),
+            Self::Hash160Preimage(ref e) => write_err!(f, "error decoding HASH160 preimage"; e),
+            Self::Hash256Preimage(ref e) => write_err!(f, "error decoding HASH256 preimage"; e),
+            Self::TapScriptSig(ref e) => write_err!(f, "error decoding tap script signature"; e),
+            Self::TapLeafScript(ref e) => write_err!(f, "error decoding tap leaf script"; e),
+            Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
+            Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpDleq(ref e) => write_err!(f, "error decoding SP DLEQ proof"; e),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ValueDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LengthPrefix(ref e) => Some(e),
+            Self::PreviousTxid(ref e) => Some(e),
+            Self::OutputIndex(ref e) => Some(e),
+            Self::Sequence(ref e) => Some(e),
+            Self::MinTime(ref e) => Some(e),
+            Self::MinHeight(ref e) => Some(e),
+            Self::SighashType(ref e) => Some(e),
+            Self::TapInternalKey(ref e) => Some(e),
+            Self::TapMerkleRoot(ref e) => Some(e),
+            Self::NonWitnessUtxo(ref e) => Some(e),
+            Self::WitnessUtxo(ref e) => Some(e),
+            Self::FinalScriptWitness(ref e) => Some(e),
+            Self::RedeemScript(ref e) => Some(e),
+            Self::WitnessScript(ref e) => Some(e),
+            Self::FinalScriptSig(ref e) => Some(e),
+            Self::TapKeySig(ref e) => Some(e),
+            Self::PartialSig(ref e) => Some(e),
+            Self::Bip32Derivation(ref e) => Some(e),
+            Self::TapBip32Derivation(ref e) => Some(e),
+            Self::Ripemd160Preimage(ref e) => Some(e),
+            Self::Sha256Preimage(ref e) => Some(e),
+            Self::Hash160Preimage(ref e) => Some(e),
+            Self::Hash256Preimage(ref e) => Some(e),
+            Self::TapScriptSig(ref e) => Some(e),
+            Self::TapLeafScript(ref e) => Some(e),
+            Self::ProprietaryValue(ref e) => Some(e),
+            Self::UnknownValue(ref e) => Some(e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpEcdh(ref e) => Some(e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpDleq(ref e) => Some(e),
+        }
+    }
+}
+
 /// An error while decoding.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -2212,6 +2419,8 @@ pub enum DecodeError {
     DeserPair(serialize::Error),
     /// Error decoding key.
     KeyDecode(raw::KeyDecodeError),
+    /// Error decoding a value.
+    ValueDecode(ValueDecodeError),
     /// Input must contain a previous txid.
     MissingPreviousTxid,
     /// Input must contain a spent output index.
@@ -2233,6 +2442,7 @@ impl fmt::Display for DecodeError {
             Self::InsertPair(ref e) => write_err!(f, "error inserting a key-value pair"; e),
             Self::DeserPair(ref e) => write_err!(f, "error decoding pair"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
             Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
             Self::FieldMismatch => {
@@ -2256,6 +2466,7 @@ impl std::error::Error for DecodeError {
             Self::InsertPair(ref e) => Some(e),
             Self::DeserPair(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
+            Self::ValueDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
             | Self::MissingSpentOutputIndex
             | Self::FieldMismatch
