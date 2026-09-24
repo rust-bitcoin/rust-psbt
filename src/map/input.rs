@@ -8,9 +8,8 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::bip32::KeySource;
-use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
+use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d};
 use bitcoin::hex::DisplayHex;
-use bitcoin::io::Read;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
 use bitcoin::sighash::{EcdsaSighashType, NonStandardSighashTypeError, TapSighashType};
@@ -18,11 +17,11 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{
-    ecdsa, hashes, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
+    ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus,
-    ExactVecDecoderWith, IterEncoder,
+    ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder,
+    EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
 use crate::consts::{
@@ -51,11 +50,10 @@ use crate::encoding::native::{
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode};
 use crate::error::{write_err, FundingUtxoError};
-use crate::io::Cursor;
 use crate::map::Map;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
-use crate::serialize::{Deserialize, Serialize};
+use crate::serialize::Serialize;
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 use crate::{raw, serialize, SignError};
 
@@ -518,214 +516,6 @@ impl Input {
             .unwrap_or(Ok(TapSighashType::Default))
     }
 
-    pub(crate) fn decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, DecodeError> {
-        // These are placeholder values that never exist in a encode `Input`.
-        let invalid = OutPoint { txid: Txid::all_zeros(), vout: u32::MAX };
-        let mut rv = Self::new(&invalid);
-
-        loop {
-            match raw::Pair::decode(r) {
-                Ok(pair) => rv.insert_pair(pair)?,
-                Err(serialize::Error::NoMorePairs) => break,
-                Err(e) => return Err(DecodeError::DeserPair(e)),
-            }
-        }
-
-        if rv.previous_txid == Txid::all_zeros() {
-            return Err(DecodeError::MissingPreviousTxid);
-        }
-        if rv.spent_output_index == u32::MAX {
-            return Err(DecodeError::MissingSpentOutputIndex);
-        }
-
-        #[cfg(feature = "silent-payments")]
-        {
-            let has_ecdh = !rv.sp_ecdh_shares.is_empty();
-            let has_dleq = !rv.sp_dleq_proofs.is_empty();
-            if has_ecdh != has_dleq {
-                return Err(DecodeError::FieldMismatch);
-            }
-        }
-
-        Ok(rv)
-    }
-
-    fn insert_pair(&mut self, pair: raw::Pair) -> Result<(), InsertPairError> {
-        let raw::Pair { key: raw_key, value: raw_value } = pair;
-
-        match raw_key.type_value {
-            PSBT_IN_PREVIOUS_TXID => {
-                if self.previous_txid != Txid::all_zeros() {
-                    return Err(InsertPairError::DuplicateKey(raw_key));
-                }
-                let txid: Txid = Deserialize::deserialize(&raw_value)?;
-                self.previous_txid = txid;
-            }
-            PSBT_IN_OUTPUT_INDEX => {
-                if self.spent_output_index != u32::MAX {
-                    return Err(InsertPairError::DuplicateKey(raw_key));
-                }
-                let vout: u32 = Deserialize::deserialize(&raw_value)?;
-                self.spent_output_index = vout;
-            }
-            PSBT_IN_SEQUENCE => {
-                v2_impl_psbt_insert_pair! {
-                    self.sequence <= <raw_key: _>|<raw_value: Sequence>
-                }
-            }
-            PSBT_IN_REQUIRED_TIME_LOCKTIME => {
-                v2_impl_psbt_insert_pair! {
-                    self.min_time <= <raw_key: _>|<raw_value: absolute::Time>
-                }
-            }
-            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME => {
-                v2_impl_psbt_insert_pair! {
-                    self.min_height <= <raw_key: _>|<raw_value: absolute::Height>
-                }
-            }
-            PSBT_IN_NON_WITNESS_UTXO => {
-                v2_impl_psbt_insert_pair! {
-                    self.non_witness_utxo <= <raw_key: _>|<raw_value: Transaction>
-                }
-            }
-            PSBT_IN_WITNESS_UTXO => {
-                v2_impl_psbt_insert_pair! {
-                    self.witness_utxo <= <raw_key: _>|<raw_value: TxOut>
-                }
-            }
-            PSBT_IN_PARTIAL_SIG => {
-                v2_impl_psbt_insert_pair! {
-                    self.partial_sigs <= <raw_key: PublicKey>|<raw_value: ecdsa::Signature>
-                }
-            }
-            PSBT_IN_SIGHASH_TYPE => {
-                v2_impl_psbt_insert_pair! {
-                    self.sighash_type <= <raw_key: _>|<raw_value: PsbtSighashType>
-                }
-            }
-            PSBT_IN_REDEEM_SCRIPT => {
-                v2_impl_psbt_insert_pair! {
-                    self.redeem_script <= <raw_key: _>|<raw_value: ScriptBuf>
-                }
-            }
-            PSBT_IN_WITNESS_SCRIPT => {
-                v2_impl_psbt_insert_pair! {
-                    self.witness_script <= <raw_key: _>|<raw_value: ScriptBuf>
-                }
-            }
-            PSBT_IN_BIP32_DERIVATION => {
-                v2_impl_psbt_insert_pair! {
-                    self.bip32_derivations <= <raw_key: PublicKey>|<raw_value: KeySource>
-                }
-            }
-            PSBT_IN_FINAL_SCRIPTSIG => {
-                v2_impl_psbt_insert_pair! {
-                    self.final_script_sig <= <raw_key: _>|<raw_value: ScriptBuf>
-                }
-            }
-            PSBT_IN_FINAL_SCRIPTWITNESS => {
-                v2_impl_psbt_insert_pair! {
-                    self.final_script_witness <= <raw_key: _>|<raw_value: Witness>
-                }
-            }
-            PSBT_IN_RIPEMD160 => {
-                psbt_insert_hash_pair(
-                    &mut self.ripemd160_preimages,
-                    raw_key,
-                    raw_value,
-                    HashType::Ripemd,
-                )?;
-            }
-            PSBT_IN_SHA256 => {
-                psbt_insert_hash_pair(
-                    &mut self.sha256_preimages,
-                    raw_key,
-                    raw_value,
-                    HashType::Sha256,
-                )?;
-            }
-            PSBT_IN_HASH160 => {
-                psbt_insert_hash_pair(
-                    &mut self.hash160_preimages,
-                    raw_key,
-                    raw_value,
-                    HashType::Hash160,
-                )?;
-            }
-            PSBT_IN_HASH256 => {
-                psbt_insert_hash_pair(
-                    &mut self.hash256_preimages,
-                    raw_key,
-                    raw_value,
-                    HashType::Hash256,
-                )?;
-            }
-            PSBT_IN_TAP_KEY_SIG => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_key_sig <= <raw_key: _>|<raw_value: taproot::Signature>
-                }
-            }
-            PSBT_IN_TAP_SCRIPT_SIG => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_script_sigs <= <raw_key: (XOnlyPublicKey, TapLeafHash)>|<raw_value: taproot::Signature>
-                }
-            }
-            PSBT_IN_TAP_LEAF_SCRIPT => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_scripts <= <raw_key: ControlBlock>|< raw_value: (ScriptBuf, LeafVersion)>
-                }
-            }
-            PSBT_IN_TAP_BIP32_DERIVATION => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_key_origins <= <raw_key: XOnlyPublicKey>|< raw_value: (Vec<TapLeafHash>, KeySource)>
-                }
-            }
-            PSBT_IN_TAP_INTERNAL_KEY => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_internal_key <= <raw_key: _>|< raw_value: XOnlyPublicKey>
-                }
-            }
-            PSBT_IN_TAP_MERKLE_ROOT => {
-                v2_impl_psbt_insert_pair! {
-                    self.tap_merkle_root <= <raw_key: _>|< raw_value: TapNodeHash>
-                }
-            }
-            #[cfg(feature = "silent-payments")]
-            PSBT_IN_SP_ECDH_SHARE => {
-                v2_impl_psbt_insert_sp_pair!(
-                    self.sp_ecdh_shares,
-                    raw_key,
-                    raw_value,
-                    compressed_pubkey
-                );
-            }
-            #[cfg(feature = "silent-payments")]
-            PSBT_IN_SP_DLEQ => {
-                v2_impl_psbt_insert_sp_pair!(self.sp_dleq_proofs, raw_key, raw_value, dleq_proof);
-            }
-            PSBT_IN_PROPRIETARY => {
-                let key = raw::ProprietaryKey::try_from(raw_key.clone())?;
-                match self.proprietaries.entry(key) {
-                    btree_map::Entry::Vacant(empty_key) => {
-                        empty_key.insert(raw_value);
-                    }
-                    btree_map::Entry::Occupied(_) =>
-                        return Err(InsertPairError::DuplicateKey(raw_key)),
-                }
-            }
-            // Note, PSBT v2 does not exclude any keys from the input map.
-            _ => match self.unknowns.entry(raw_key) {
-                btree_map::Entry::Vacant(empty_key) => {
-                    empty_key.insert(raw_value);
-                }
-                btree_map::Entry::Occupied(k) =>
-                    return Err(InsertPairError::DuplicateKey(k.key().clone())),
-            },
-        }
-
-        Ok(())
-    }
-
     /// Combines this [`Input`] with `other`.
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         if self.previous_txid != other.previous_txid {
@@ -782,56 +572,522 @@ impl Input {
     }
 }
 
-/// Decoder for a PSBT input map.
-#[derive(Debug, Default)]
+/// Decoder for a single PSBT input map.
+///
+/// Incrementally decodes `<keypair>* <PSBT_SEPARATOR>`.
+#[derive(Debug)]
 pub struct InputDecoder {
-    // TODO: Make into a push decoder. Temporary hack to connect to the legacy io decode impl.
-    buf: Vec<u8>,
-    done: bool,
+    stage: InputDecodeStage,
+    previous_txid: Option<Txid>,
+    spent_output_index: Option<u32>,
+    sequence: Option<Sequence>,
+    min_time: Option<absolute::Time>,
+    min_height: Option<absolute::Height>,
+    non_witness_utxo: Option<Transaction>,
+    witness_utxo: Option<TxOut>,
+    partial_sigs: BTreeMap<PublicKey, ecdsa::Signature>,
+    sighash_type: Option<PsbtSighashType>,
+    redeem_script: Option<ScriptBuf>,
+    witness_script: Option<ScriptBuf>,
+    bip32_derivations: BTreeMap<PublicKey, KeySource>,
+    final_script_sig: Option<ScriptBuf>,
+    final_script_witness: Option<Witness>,
+    ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
+    sha256_preimages: BTreeMap<sha256::Hash, Vec<u8>>,
+    hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>>,
+    hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
+    tap_key_sig: Option<taproot::Signature>,
+    tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
+    tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    tap_internal_key: Option<XOnlyPublicKey>,
+    tap_merkle_root: Option<TapNodeHash>,
+    #[cfg(feature = "silent-payments")]
+    sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
+    #[cfg(feature = "silent-payments")]
+    sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
+    proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    unknowns: BTreeMap<raw::Key, Vec<u8>>,
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+enum InputDecodeStage {
+    DecodingSeparator,
+    DecodingKey(raw::KeyDecoder),
+    DecodingValue { key: raw::Key, decoder: ByteVecDecoder },
+    Done(Input),
+    Errored,
+}
+
+impl InputDecodeStage {
+    fn from_key(key: raw::Key) -> Result<Self, DecodeError> {
+        Ok(Self::DecodingValue { key, decoder: ByteVecDecoder::new() })
+    }
+}
+
+impl Default for InputDecoder {
+    fn default() -> Self {
+        Self {
+            stage: InputDecodeStage::DecodingSeparator,
+            previous_txid: None,
+            spent_output_index: None,
+            sequence: None,
+            min_time: None,
+            min_height: None,
+            non_witness_utxo: None,
+            witness_utxo: None,
+            partial_sigs: BTreeMap::default(),
+            sighash_type: None,
+            redeem_script: None,
+            witness_script: None,
+            bip32_derivations: BTreeMap::default(),
+            final_script_sig: None,
+            final_script_witness: None,
+            ripemd160_preimages: BTreeMap::default(),
+            sha256_preimages: BTreeMap::default(),
+            hash160_preimages: BTreeMap::default(),
+            hash256_preimages: BTreeMap::default(),
+            tap_key_sig: None,
+            tap_script_sigs: BTreeMap::default(),
+            tap_scripts: BTreeMap::default(),
+            tap_key_origins: BTreeMap::default(),
+            tap_internal_key: None,
+            tap_merkle_root: None,
+            #[cfg(feature = "silent-payments")]
+            sp_ecdh_shares: BTreeMap::default(),
+            #[cfg(feature = "silent-payments")]
+            sp_dleq_proofs: BTreeMap::default(),
+            proprietaries: BTreeMap::default(),
+            unknowns: BTreeMap::default(),
+        }
+    }
+}
+
+impl crate::encoding::PsbtDecode for Input {
+    type Decoder = InputDecoder;
 }
 
 impl Decoder for InputDecoder {
     type Output = Input;
     type Error = DecodeError;
 
+    #[allow(clippy::too_many_lines)] // State machine.
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        let had = self.buf.len();
-        self.buf.extend_from_slice(bytes);
+        use crate::consts::PSBT_SEPARATOR;
 
-        let mut cursor = Cursor::new(&self.buf[..]);
-        match Input::decode(&mut cursor) {
-            Ok(_) => {
-                *bytes = &bytes[(cursor.position() as usize).saturating_sub(had)..];
-                self.done = true;
-                Ok(DecoderStatus::Ready)
+        if matches!(&self.stage, InputDecodeStage::Done(_)) {
+            return Ok(DecoderStatus::Ready);
+        }
+
+        loop {
+            if matches!(&self.stage, InputDecodeStage::DecodingSeparator) {
+                match bytes.split_first() {
+                    Some((&PSBT_SEPARATOR, rest)) => {
+                        *bytes = rest;
+                        let previous_txid =
+                            self.previous_txid.take().ok_or(DecodeError::MissingPreviousTxid)?;
+                        let spent_output_index = self
+                            .spent_output_index
+                            .take()
+                            .ok_or(DecodeError::MissingSpentOutputIndex)?;
+                        #[cfg(feature = "silent-payments")]
+                        {
+                            let has_ecdh = !self.sp_ecdh_shares.is_empty();
+                            let has_dleq = !self.sp_dleq_proofs.is_empty();
+                            if has_ecdh != has_dleq {
+                                return Err(DecodeError::FieldMismatch);
+                            }
+                        }
+                        self.stage = InputDecodeStage::Done(Input {
+                            previous_txid,
+                            spent_output_index,
+                            sequence: self.sequence.take(),
+                            min_time: self.min_time.take(),
+                            min_height: self.min_height.take(),
+                            non_witness_utxo: self.non_witness_utxo.take(),
+                            witness_utxo: self.witness_utxo.take(),
+                            partial_sigs: core::mem::take(&mut self.partial_sigs),
+                            sighash_type: self.sighash_type.take(),
+                            redeem_script: self.redeem_script.take(),
+                            witness_script: self.witness_script.take(),
+                            bip32_derivations: core::mem::take(&mut self.bip32_derivations),
+                            final_script_sig: self.final_script_sig.take(),
+                            final_script_witness: self.final_script_witness.take(),
+                            ripemd160_preimages: core::mem::take(&mut self.ripemd160_preimages),
+                            sha256_preimages: core::mem::take(&mut self.sha256_preimages),
+                            hash160_preimages: core::mem::take(&mut self.hash160_preimages),
+                            hash256_preimages: core::mem::take(&mut self.hash256_preimages),
+                            tap_key_sig: self.tap_key_sig.take(),
+                            tap_script_sigs: core::mem::take(&mut self.tap_script_sigs),
+                            tap_scripts: core::mem::take(&mut self.tap_scripts),
+                            tap_key_origins: core::mem::take(&mut self.tap_key_origins),
+                            tap_internal_key: self.tap_internal_key.take(),
+                            tap_merkle_root: self.tap_merkle_root.take(),
+                            #[cfg(feature = "silent-payments")]
+                            sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
+                            #[cfg(feature = "silent-payments")]
+                            sp_dleq_proofs: core::mem::take(&mut self.sp_dleq_proofs),
+                            proprietaries: core::mem::take(&mut self.proprietaries),
+                            unknowns: core::mem::take(&mut self.unknowns),
+                        });
+                        return Ok(DecoderStatus::Ready);
+                    }
+                    Some((_, _)) => {
+                        self.stage = InputDecodeStage::DecodingKey(raw::KeyDecoder::default());
+                    }
+                    None => return Ok(DecoderStatus::NeedsMore),
+                }
             }
-            Err(_) => {
-                *bytes = &[];
-                Ok(DecoderStatus::NeedsMore)
+
+            let status = match &mut self.stage {
+                InputDecodeStage::DecodingKey(d) =>
+                    d.push_bytes(bytes).map_err(DecodeError::KeyDecode)?,
+                InputDecodeStage::DecodingValue { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|_| {
+                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
+                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
+                        ))
+                    })?,
+                InputDecodeStage::Done(_) => return Ok(DecoderStatus::Ready),
+                InputDecodeStage::DecodingSeparator | InputDecodeStage::Errored =>
+                    panic!("push_bytes in unexpected stage"),
+            };
+
+            if status.needs_more() {
+                return Ok(DecoderStatus::NeedsMore);
+            }
+
+            let old = core::mem::replace(&mut self.stage, InputDecodeStage::Errored);
+            match old {
+                InputDecodeStage::DecodingKey(decoder) => {
+                    let key = decoder.end().map_err(DecodeError::KeyDecode)?;
+                    self.stage = InputDecodeStage::from_key(key)?;
+                }
+                InputDecodeStage::DecodingValue { key, decoder } => {
+                    let value = decoder.end().map_err(|_| {
+                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
+                            bitcoin::consensus::encode::Error::ParseFailed("value decode"),
+                        ))
+                    })?;
+                    self.insert_value(key, value)?;
+                    self.stage = InputDecodeStage::DecodingSeparator;
+                }
+                InputDecodeStage::Done(input) => {
+                    self.stage = InputDecodeStage::Done(input);
+                    return Ok(DecoderStatus::Ready);
+                }
+                InputDecodeStage::Errored => unreachable!(),
+                InputDecodeStage::DecodingSeparator => unreachable!(),
             }
         }
     }
 
     fn end(self) -> Result<Input, Self::Error> {
-        let input = Input::decode(&mut Cursor::new(&self.buf[..]))?;
-        if let Some(ref tx) = input.non_witness_utxo {
-            let txid = tx.compute_txid();
-            if txid != input.previous_txid {
-                return Err(DecodeError::IncorrectNonWitnessUtxo {
-                    previous_txid: input.previous_txid,
-                    non_witness_utxo_txid: txid,
-                });
+        match self.stage {
+            InputDecodeStage::Done(input) => {
+                if let Some(ref tx) = input.non_witness_utxo {
+                    let txid = tx.compute_txid();
+                    if txid != input.previous_txid {
+                        return Err(DecodeError::IncorrectNonWitnessUtxo {
+                            previous_txid: input.previous_txid,
+                            non_witness_utxo_txid: txid,
+                        });
+                    }
+                }
+                Ok(input)
             }
+            _ => Err(DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
+                bitcoin::consensus::encode::Error::ParseFailed("unexpected end"),
+            ))),
         }
-        Ok(input)
     }
 
     fn read_limit(&self) -> usize {
-        if self.done {
-            0
-        } else {
-            1
+        match &self.stage {
+            InputDecodeStage::DecodingSeparator => 1,
+            InputDecodeStage::DecodingKey(d) => d.read_limit(),
+            InputDecodeStage::DecodingValue { decoder, .. } => decoder.read_limit(),
+            InputDecodeStage::Done(_) | InputDecodeStage::Errored => 0,
         }
+    }
+}
+
+impl InputDecoder {
+    #[allow(clippy::too_many_lines)]
+    fn insert_value(&mut self, key: raw::Key, value: Vec<u8>) -> Result<(), DecodeError> {
+        use crate::serialize::Deserialize;
+        match key.type_value {
+            PSBT_IN_PREVIOUS_TXID => {
+                if self.previous_txid.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.previous_txid =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_OUTPUT_INDEX => {
+                if self.spent_output_index.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.spent_output_index =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_SEQUENCE => {
+                if self.sequence.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.sequence =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_REQUIRED_TIME_LOCKTIME => {
+                if self.min_time.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.min_time =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME => {
+                if self.min_height.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.min_height =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_NON_WITNESS_UTXO => {
+                if self.non_witness_utxo.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.non_witness_utxo =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_WITNESS_UTXO => {
+                if self.witness_utxo.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.witness_utxo =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_SIGHASH_TYPE => {
+                if self.sighash_type.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.sighash_type =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_REDEEM_SCRIPT => {
+                if self.redeem_script.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.redeem_script =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_WITNESS_SCRIPT => {
+                if self.witness_script.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.witness_script =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_FINAL_SCRIPTSIG => {
+                if self.final_script_sig.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.final_script_sig =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_FINAL_SCRIPTWITNESS => {
+                if self.final_script_witness.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.final_script_witness =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_TAP_KEY_SIG => {
+                if self.tap_key_sig.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.tap_key_sig =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_TAP_INTERNAL_KEY => {
+                if self.tap_internal_key.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.tap_internal_key =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_TAP_MERKLE_ROOT => {
+                if self.tap_merkle_root.is_some() {
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
+                }
+                self.tap_merkle_root =
+                    Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+            }
+            PSBT_IN_PARTIAL_SIG => {
+                let pk: PublicKey =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                let sig: ecdsa::Signature =
+                    Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                match self.partial_sigs.entry(pk) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(sig);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_BIP32_DERIVATION => {
+                let pk: PublicKey =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                let ks: KeySource =
+                    Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                match self.bip32_derivations.entry(pk) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(ks);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_RIPEMD160 => {
+                let hash: ripemd160::Hash =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                match self.ripemd160_preimages.entry(hash) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_SHA256 => {
+                let hash: sha256::Hash =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                match self.sha256_preimages.entry(hash) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_HASH160 => {
+                let hash: hash160::Hash =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                match self.hash160_preimages.entry(hash) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_HASH256 => {
+                let hash: sha256d::Hash =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                match self.hash256_preimages.entry(hash) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_TAP_SCRIPT_SIG => {
+                let (xonly, leaf_hash): (XOnlyPublicKey, TapLeafHash) =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                let sig: taproot::Signature =
+                    Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                match self.tap_script_sigs.entry((xonly, leaf_hash)) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(sig);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_TAP_LEAF_SCRIPT => {
+                let cb: ControlBlock =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                let (script, ver): (ScriptBuf, LeafVersion) =
+                    Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                match self.tap_scripts.entry(cb) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert((script, ver));
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_TAP_BIP32_DERIVATION => {
+                let xonly: XOnlyPublicKey =
+                    Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
+                let (leaf_hashes, ks): (Vec<TapLeafHash>, KeySource) =
+                    Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                match self.tap_key_origins.entry(xonly) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert((leaf_hashes, ks));
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            PSBT_IN_PROPRIETARY => {
+                let pk =
+                    raw::ProprietaryKey::try_from(key.clone()).map_err(InsertPairError::Deser)?;
+                match self.proprietaries.entry(pk) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            #[cfg(feature = "silent-payments")]
+            PSBT_IN_SP_ECDH_SHARE => {
+                if key.key.is_empty() {
+                    return Err(DecodeError::InsertPair(InsertPairError::InvalidKeyDataEmpty(key)));
+                }
+                let scan_key = CompressedPublicKey::from_slice(&key.key)
+                    .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
+                let share = CompressedPublicKey::from_slice(&value)
+                    .map_err(|_| InsertPairError::ValueWrongLength(value.len(), 33))?;
+                match self.sp_ecdh_shares.entry(scan_key) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(share);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            #[cfg(feature = "silent-payments")]
+            PSBT_IN_SP_DLEQ => {
+                if key.key.is_empty() {
+                    return Err(DecodeError::InsertPair(InsertPairError::InvalidKeyDataEmpty(key)));
+                }
+                let scan_key = CompressedPublicKey::from_slice(&key.key)
+                    .map_err(|_| InsertPairError::KeyWrongLength(key.key.len(), 33))?;
+                let proof = DleqProof::try_from(value.as_slice())
+                    .map_err(|_| InsertPairError::ValueWrongLength(value.len(), 64))?;
+                match self.sp_dleq_proofs.entry(scan_key) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(proof);
+                    }
+                    btree_map::Entry::Occupied(_) =>
+                        return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                }
+            }
+            _ => match self.unknowns.entry(key) {
+                btree_map::Entry::Vacant(e) => {
+                    e.insert(value);
+                }
+                btree_map::Entry::Occupied(k) =>
+                    return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(
+                        k.key().clone(),
+                    ))),
+            },
+        }
+        Ok(())
     }
 }
 
@@ -1389,38 +1645,6 @@ impl Map for Input {
 }
 
 // TODO: This is an exact duplicate of that in v0.
-fn psbt_insert_hash_pair<H>(
-    map: &mut BTreeMap<H, Vec<u8>>,
-    raw_key: raw::Key,
-    raw_value: Vec<u8>,
-    hash_type: HashType,
-) -> Result<(), InsertPairError>
-where
-    H: hashes::Hash + Deserialize,
-{
-    if raw_key.key.is_empty() {
-        return Err(InsertPairError::InvalidKeyDataEmpty(raw_key));
-    }
-
-    let key_val: H = Deserialize::deserialize(&raw_key.key)?;
-    match map.entry(key_val) {
-        btree_map::Entry::Vacant(empty_key) => {
-            let val: Vec<u8> = Deserialize::deserialize(&raw_value)?;
-
-            if <H as hashes::Hash>::hash(&val) != key_val {
-                return Err(HashPreimageError {
-                    preimage: val.into_boxed_slice(),
-                    hash: Box::from(key_val.borrow()),
-                    hash_type,
-                }
-                .into());
-            }
-            empty_key.insert(val);
-            Ok(())
-        }
-        btree_map::Entry::Occupied(_) => Err(InsertPairError::DuplicateKey(raw_key)),
-    }
-}
 
 /// Enables building an [`Input`] using the standard builder pattern.
 pub struct InputBuilder(Input);
@@ -1469,6 +1693,8 @@ pub enum DecodeError {
     InsertPair(InsertPairError),
     /// Error decoding a pair.
     DeserPair(serialize::Error),
+    /// Error decoding key.
+    KeyDecode(raw::KeyDecodeError),
     /// Input must contain a previous txid.
     MissingPreviousTxid,
     /// Input must contain a spent output index.
@@ -1489,6 +1715,7 @@ impl fmt::Display for DecodeError {
         match self {
             Self::InsertPair(ref e) => write_err!(f, "error inserting a key-value pair"; e),
             Self::DeserPair(ref e) => write_err!(f, "error decoding pair"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
             Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
             Self::FieldMismatch => {
@@ -1511,6 +1738,7 @@ impl std::error::Error for DecodeError {
         match self {
             Self::InsertPair(ref e) => Some(e),
             Self::DeserPair(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
             | Self::MissingSpentOutputIndex
             | Self::FieldMismatch
@@ -1702,6 +1930,9 @@ impl std::error::Error for CombineError {
 #[cfg(test)]
 #[cfg(feature = "std")]
 mod test {
+    use bitcoin::hashes::Hash as _;
+    use bitcoin::Amount;
+
     use super::*;
 
     fn out_point() -> OutPoint {
@@ -1712,14 +1943,11 @@ mod test {
 
     #[test]
     fn serialize_roundtrip() {
-        use bitcoin::io::Cursor;
-
         let input = Input::new(&out_point());
 
         let ser = input.serialize_map();
-        let mut d = Cursor::new(ser);
 
-        let decoded = Input::decode(&mut d).expect("failed to decode");
+        let decoded = crate::encoding::decode_from_slice::<Input>(&ser).expect("failed to decode");
 
         assert_eq!(decoded, input);
     }
@@ -1732,7 +1960,7 @@ mod test {
         for pair in input.pairs() {
             from_pairs.extend(pair.serialize());
         }
-        from_pairs.push(0x00);
+        from_pairs.push(crate::consts::PSBT_SEPARATOR);
 
         assert_eq!(from_pairs, input.serialize_map());
     }
@@ -1743,7 +1971,11 @@ mod test {
         let bytes = crate::encoding::encode_to_vec(&input);
         assert!(!bytes.is_empty());
         assert!(bytes.len() > 1, "map must have at least one keypair before separator");
-        assert_eq!(bytes.last(), Some(&0x00), "input map must end with separator");
+        assert_eq!(
+            bytes.last(),
+            Some(&crate::consts::PSBT_SEPARATOR),
+            "input map must end with separator"
+        );
     }
 
     #[test]
@@ -1815,10 +2047,14 @@ mod test {
     fn check_input(input: &Input) {
         let encoded = crate::encoding::encode_to_vec(input);
         assert_eq!(encoded, input.serialize_map());
-        assert_eq!(encoded.last(), Some(&0x00), "input map must end with separator");
+        assert_eq!(
+            encoded.last(),
+            Some(&crate::consts::PSBT_SEPARATOR),
+            "input map must end with separator"
+        );
 
-        let mut slice: &[u8] = &encoded;
-        let decoded = Input::decode(&mut slice).expect("failed to decode");
+        let decoded =
+            crate::encoding::decode_from_slice::<Input>(&encoded).expect("failed to decode");
         assert_eq!(decoded, input.clone());
     }
 
@@ -1976,5 +2212,84 @@ mod test {
 
         assert_eq!(input.unsigned_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
         assert_eq!(input.signed_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
+    }
+
+    #[test]
+    fn roundtrip_encoding() {
+        use bitcoin::bip32::{DerivationPath, Fingerprint};
+        use bitcoin::secp256k1;
+
+        let mut input = Input::new(&out_point());
+
+        // Generate valid keys from secp256k1
+        let secp = secp256k1::Secp256k1::new();
+        let sk = secp256k1::SecretKey::from_slice(&[4u8; 32]).unwrap();
+        let secp_pk = sk.public_key(&secp);
+        let pk = PublicKey::new(secp_pk);
+        let (xonly, _parity) = secp_pk.x_only_public_key();
+
+        input.witness_utxo =
+            Some(TxOut { value: Amount::from_sat(1000), script_pubkey: ScriptBuf::new() });
+        input.final_script_witness = Some(Witness::from_slice(&[&[0x02u8, 0x03u8]]));
+        input.redeem_script = Some(ScriptBuf::from_bytes(vec![0x51]));
+        input.witness_script = Some(ScriptBuf::from_bytes(vec![0x52]));
+        input.sighash_type = Some(PsbtSighashType::ALL);
+
+        input.tap_key_sig = Some(taproot::Signature {
+            signature: secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: TapSighashType::Default,
+        });
+        input.tap_internal_key = Some(xonly);
+        input.tap_merkle_root = Some(TapNodeHash::from_byte_array([3u8; 32]));
+
+        input.partial_sigs.insert(
+            pk,
+            ecdsa::Signature {
+                signature: secp256k1::ecdsa::Signature::from_compact(&[5u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::All,
+            },
+        );
+
+        let ks: KeySource = (Fingerprint::from([6u8; 4]), DerivationPath::default());
+        input.bip32_derivations.insert(pk, ks.clone());
+
+        input
+            .ripemd160_preimages
+            .insert(ripemd160::Hash::from_byte_array([7u8; 20]), vec![0x42; 32]);
+        input.sha256_preimages.insert(sha256::Hash::from_byte_array([8u8; 32]), vec![0x43; 32]);
+        input.hash160_preimages.insert(hash160::Hash::from_byte_array([9u8; 20]), vec![0x44; 20]);
+        input.hash256_preimages.insert(sha256d::Hash::from_byte_array([10u8; 32]), vec![0x45; 32]);
+
+        let leaf = TapLeafHash::from_slice(&[12u8; 32]).unwrap();
+        input.tap_script_sigs.insert(
+            (xonly, leaf),
+            taproot::Signature {
+                signature: secp256k1::schnorr::Signature::from_slice(&[13u8; 64]).unwrap(),
+                sighash_type: TapSighashType::Default,
+            },
+        );
+
+        let mut cb_bytes = vec![0x01u8];
+        cb_bytes.extend_from_slice(&xonly.serialize());
+        input.tap_scripts.insert(
+            ControlBlock::decode(&cb_bytes).unwrap(),
+            (ScriptBuf::from_bytes(vec![0x53]), LeafVersion::TapScript),
+        );
+
+        input.tap_key_origins.insert(xonly, (vec![leaf], ks));
+
+        input.proprietaries.insert(
+            raw::ProprietaryKey::<raw::ProprietaryType> {
+                prefix: vec![0xde, 0xad],
+                subtype: 42,
+                key: vec![0xbe, 0xef],
+            },
+            vec![0x01, 0x02],
+        );
+
+        let encoded = crate::encoding::encode_to_vec(&input);
+        let decoded =
+            crate::encoding::decode_from_slice::<Input>(&encoded).expect("roundtrip decode failed");
+        assert_eq!(decoded, input);
     }
 }

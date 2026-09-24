@@ -46,37 +46,6 @@ macro_rules! v2_impl_psbt_serialize {
     };
 }
 
-// Note we purposefully do not use the fully qualified path for `InsertPairError`.
-#[rustfmt::skip]
-macro_rules! v2_impl_psbt_insert_pair {
-    ($slf:ident.$unkeyed_name:ident <= <$raw_key:ident: _>|<$raw_value:ident: $unkeyed_value_type:ty>) => {
-        if $raw_key.key.is_empty() {
-            if $slf.$unkeyed_name.is_none() {
-                let val: $unkeyed_value_type = $crate::serialize::Deserialize::deserialize(&$raw_value)?;
-                $slf.$unkeyed_name = Some(val)
-            } else {
-                return Err(InsertPairError::DuplicateKey($raw_key).into());
-            }
-        } else {
-            return Err(InsertPairError::InvalidKeyDataNotEmpty($raw_key).into());
-        }
-    };
-    ($slf:ident.$keyed_name:ident <= <$raw_key:ident: $keyed_key_type:ty>|<$raw_value:ident: $keyed_value_type:ty>) => {
-        if !$raw_key.key.is_empty() {
-            let key_val: $keyed_key_type = $crate::serialize::Deserialize::deserialize(&$raw_key.key)?;
-            match $slf.$keyed_name.entry(key_val) {
-                alloc::collections::btree_map::Entry::Vacant(empty_key) => {
-                    let val: $keyed_value_type = $crate::serialize::Deserialize::deserialize(&$raw_value)?;
-                    empty_key.insert(val);
-                }
-                alloc::collections::btree_map::Entry::Occupied(_) => return Err(InsertPairError::DuplicateKey($raw_key).into()),
-            }
-        } else {
-            return Err(InsertPairError::InvalidKeyDataEmpty($raw_key).into());
-        }
-    };
-}
-
 #[rustfmt::skip]
 macro_rules! v2_impl_psbt_get_pair {
     ($rv:ident.push($slf:ident.$unkeyed_name:ident, $unkeyed_typeval:ident)) => {
@@ -127,43 +96,4 @@ macro_rules! v2_impl_psbt_hash_serialize {
             fn serialize(&self) -> alloc::vec::Vec<u8> { self.as_byte_array().to_vec() }
         }
     };
-}
-
-/// Macro for inserting BIP-375 silent payment fields with CompressedPublicKey keys.
-#[cfg(feature = "silent-payments")]
-macro_rules! v2_impl_psbt_insert_sp_pair {
-    // For CompressedPublicKey values (ECDH shares)
-    ($map:expr, $raw_key:expr, $raw_value:expr, compressed_pubkey) => {{
-        if $raw_key.key.is_empty() {
-            return Err(InsertPairError::InvalidKeyDataEmpty($raw_key).into());
-        }
-        let scan_key = bitcoin::CompressedPublicKey::from_slice(&$raw_key.key)
-            .map_err(|_| InsertPairError::KeyWrongLength($raw_key.key.len(), 33))?;
-        let value = bitcoin::CompressedPublicKey::from_slice(&$raw_value)
-            .map_err(|_| InsertPairError::ValueWrongLength($raw_value.len(), 33))?;
-        match $map.entry(scan_key) {
-            alloc::collections::btree_map::Entry::Vacant(empty_key) => {
-                empty_key.insert(value);
-            }
-            alloc::collections::btree_map::Entry::Occupied(_) =>
-                return Err(InsertPairError::DuplicateKey($raw_key).into()),
-        }
-    }};
-    // For DleqProof values (DLEQ proofs)
-    ($map:expr, $raw_key:expr, $raw_value:expr, dleq_proof) => {{
-        if $raw_key.key.is_empty() {
-            return Err(InsertPairError::InvalidKeyDataEmpty($raw_key).into());
-        }
-        let scan_key = bitcoin::CompressedPublicKey::from_slice(&$raw_key.key)
-            .map_err(|_| InsertPairError::KeyWrongLength($raw_key.key.len(), 33))?;
-        let value = $crate::dleq::DleqProof::try_from($raw_value.as_slice())
-            .map_err(|_| InsertPairError::ValueWrongLength($raw_value.len(), 64))?;
-        match $map.entry(scan_key) {
-            alloc::collections::btree_map::Entry::Vacant(empty_key) => {
-                empty_key.insert(value);
-            }
-            alloc::collections::btree_map::Entry::Occupied(_) =>
-                return Err(InsertPairError::DuplicateKey($raw_key).into()),
-        }
-    }};
 }
