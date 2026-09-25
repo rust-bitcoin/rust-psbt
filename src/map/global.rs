@@ -7,7 +7,6 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
-use bitcoin::consensus::encode as consensus;
 use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
@@ -40,7 +39,7 @@ use crate::map::Map;
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::serialize::Serialize;
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
-use crate::{consts, raw, serialize, V2};
+use crate::{consts, raw, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
 const INPUTS_MODIFIABLE: u8 = 0x01 << 0;
@@ -1200,10 +1199,6 @@ pub enum InsertPairError {
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
     InvalidKeyDataNotEmpty(raw::Key),
-    /// Error deserializing raw value.
-    Deser(serialize::Error),
-    /// Error consensus deserializing value.
-    Consensus(consensus::Error),
     /// Value was not the correct length (got, want).
     // TODO: Use struct instead of tuple.
     ValueWrongLength(usize, usize),
@@ -1239,8 +1234,6 @@ impl fmt::Display for InsertPairError {
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
-            Self::Deser(ref e) => write_err!(f, "error deserializing raw value"; e),
-            Self::Consensus(ref e) => write_err!(f, "error consensus deserializing type"; e),
             Self::ValueWrongLength(got, want) => {
                 write!(f, "value (keyvalue pair) wrong length (got, want) {} {}", got, want)
             }
@@ -1286,8 +1279,6 @@ impl fmt::Display for InsertPairError {
 impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Deser(ref e) => Some(e),
-            Self::Consensus(ref e) => Some(e),
             Self::Bip32(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
@@ -1304,14 +1295,6 @@ impl std::error::Error for InsertPairError {
             | Self::KeyWrongLength(..) => None,
         }
     }
-}
-
-impl From<serialize::Error> for InsertPairError {
-    fn from(e: serialize::Error) -> Self { Self::Deser(e) }
-}
-
-impl From<consensus::Error> for InsertPairError {
-    fn from(e: consensus::Error) -> Self { Self::Consensus(e) }
 }
 
 impl From<bip32::Error> for InsertPairError {
