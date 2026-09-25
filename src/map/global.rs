@@ -6,16 +6,15 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
-use bitcoin::consensus::encode as consensus;
+use bitcoin::bip32::{self, ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
 use bitcoin::locktime::absolute;
+use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
-use bitcoin::{bip32, transaction, VarInt};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoderError,
-    CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2Error, DecoderStatus, Encoder,
-    EncoderStatus, IterEncoder, UnexpectedEofError,
+    drain_to_vec, ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError,
+    CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2Error,
+    DecoderStatus, Encoder, EncoderStatus, IterEncoder, UnexpectedEofError,
 };
 
 use crate::consts::{
@@ -34,13 +33,12 @@ use crate::encoding::delegates::{
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::{encode_to_vec, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::{write_err, InconsistentKeySourcesError};
 use crate::map::Map;
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
-use crate::serialize::Serialize;
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
-use crate::{consts, raw, serialize, V2};
+use crate::{consts, raw, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
 const INPUTS_MODIFIABLE: u8 = 0x01 << 0;
@@ -971,26 +969,29 @@ impl Map for Global {
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_GLOBAL_VERSION, key: vec![] },
-            value: self.version.serialize(),
+            value: encode_to_vec(&self.version),
         });
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_GLOBAL_TX_VERSION, key: vec![] },
-            value: self.tx_version.serialize(),
+            value: encode_to_vec(&self.tx_version),
         });
 
-        v2_impl_psbt_get_pair! {
-            rv.push(self.fallback_lock_time, PSBT_GLOBAL_FALLBACK_LOCKTIME)
+        if let Some(ref fallback_lock_time) = self.fallback_lock_time {
+            rv.push(raw::Pair {
+                key: raw::Key { type_value: PSBT_GLOBAL_FALLBACK_LOCKTIME, key: vec![] },
+                value: encode_to_vec(fallback_lock_time),
+            });
         }
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_GLOBAL_INPUT_COUNT, key: vec![] },
-            value: VarInt::from(self.input_count).serialize(),
+            value: drain_to_vec(&mut CompactSizeEncoder::new(self.input_count)),
         });
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_GLOBAL_OUTPUT_COUNT, key: vec![] },
-            value: VarInt::from(self.output_count).serialize(),
+            value: drain_to_vec(&mut CompactSizeEncoder::new(self.output_count)),
         });
 
         rv.push(raw::Pair {
@@ -1200,10 +1201,6 @@ pub enum InsertPairError {
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
     InvalidKeyDataNotEmpty(raw::Key),
-    /// Error deserializing raw value.
-    Deser(serialize::Error),
-    /// Error consensus deserializing value.
-    Consensus(consensus::Error),
     /// Value was not the correct length (got, want).
     // TODO: Use struct instead of tuple.
     ValueWrongLength(usize, usize),
@@ -1239,8 +1236,6 @@ impl fmt::Display for InsertPairError {
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
-            Self::Deser(ref e) => write_err!(f, "error deserializing raw value"; e),
-            Self::Consensus(ref e) => write_err!(f, "error consensus deserializing type"; e),
             Self::ValueWrongLength(got, want) => {
                 write!(f, "value (keyvalue pair) wrong length (got, want) {} {}", got, want)
             }
@@ -1286,8 +1281,6 @@ impl fmt::Display for InsertPairError {
 impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Deser(ref e) => Some(e),
-            Self::Consensus(ref e) => Some(e),
             Self::Bip32(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
@@ -1304,14 +1297,6 @@ impl std::error::Error for InsertPairError {
             | Self::KeyWrongLength(..) => None,
         }
     }
-}
-
-impl From<serialize::Error> for InsertPairError {
-    fn from(e: serialize::Error) -> Self { Self::Deser(e) }
-}
-
-impl From<consensus::Error> for InsertPairError {
-    fn from(e: consensus::Error) -> Self { Self::Consensus(e) }
 }
 
 impl From<bip32::Error> for InsertPairError {
@@ -1405,7 +1390,7 @@ mod tests {
 
         let mut from_pairs = Vec::new();
         for pair in global.pairs() {
-            from_pairs.extend(pair.serialize());
+            from_pairs.extend(encode_to_vec(&pair));
         }
         from_pairs.push(PSBT_SEPARATOR);
 
