@@ -1155,13 +1155,7 @@ impl Decoder for InputDecoder {
                     }
                     self.min_time =
                         Some(absolute::Time::from_consensus(u32::from_le_bytes(bytes)).map_err(
-                            |_e| {
-                                DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                                    bitcoin::consensus::encode::Error::ParseFailed(
-                                        "invalid min_time",
-                                    ),
-                                ))
-                            },
+                            |_| DecodeError::ValueDecode(ValueDecodeError::InvalidMinTime),
                         )?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -1177,13 +1171,7 @@ impl Decoder for InputDecoder {
                     }
                     self.min_height =
                         Some(absolute::Height::from_consensus(u32::from_le_bytes(bytes)).map_err(
-                            |_e| {
-                                DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                                    bitcoin::consensus::encode::Error::ParseFailed(
-                                        "invalid min_height",
-                                    ),
-                                ))
-                            },
+                            |_| DecodeError::ValueDecode(ValueDecodeError::InvalidMinHeight),
                         )?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -1278,11 +1266,7 @@ impl Decoder for InputDecoder {
                     }
                     self.tap_key_sig =
                         Some(taproot::Signature::from_slice(&value).map_err(|_e| {
-                            DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                                bitcoin::consensus::encode::Error::ParseFailed(
-                                    "invalid taproot signature",
-                                ),
-                            ))
+                            DecodeError::ValueDecode(ValueDecodeError::InvalidTaprootSignature)
                         })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -1437,11 +1421,7 @@ impl Decoder for InputDecoder {
                     let leaf_hash = TapLeafHash::from_slice(&key.key[32..64])
                         .map_err(|_| InsertPairError::KeyWrongLength(32, 32))?;
                     let sig = taproot::Signature::from_slice(&value).map_err(|_e| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed(
-                                "invalid taproot signature",
-                            ),
-                        ))
+                        DecodeError::ValueDecode(ValueDecodeError::InvalidTaprootSignature)
                     })?;
                     match self.tap_script_sigs.entry((xonly, leaf_hash)) {
                         btree_map::Entry::Vacant(e) => {
@@ -1457,9 +1437,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::TapLeafScript(e))
                     })?;
                     let cb = ControlBlock::decode(&key.key).map_err(|_| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("invalid control block"),
-                        ))
+                        DecodeError::ValueDecode(ValueDecodeError::InvalidControlBlock)
                     })?;
                     if value.is_empty() {
                         return Err(DecodeError::InsertPair(InsertPairError::ValueWrongLength(
@@ -1469,9 +1447,7 @@ impl Decoder for InputDecoder {
                     let last = value.len() - 1;
                     let script = ScriptBuf::from_bytes(value[..last].to_vec());
                     let ver = LeafVersion::from_consensus(value[last]).map_err(|_| {
-                        DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                            bitcoin::consensus::encode::Error::ParseFailed("invalid leaf version"),
-                        ))
+                        DecodeError::ValueDecode(ValueDecodeError::InvalidLeafVersion)
                     })?;
                     match self.tap_scripts.entry(cb) {
                         btree_map::Entry::Vacant(e) => {
@@ -1627,9 +1603,7 @@ impl Decoder for InputDecoder {
                 }
                 Ok(input)
             }
-            _ => Err(DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                bitcoin::consensus::encode::Error::ParseFailed("unexpected end"),
-            ))),
+            _ => Err(DecodeError::EarlyEnd),
         }
     }
 
@@ -2323,6 +2297,16 @@ pub enum ValueDecodeError {
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
     UnknownValue(ByteVecDecoderError),
+    /// The decoded value is not a valid minimum lock time.
+    InvalidMinTime,
+    /// The decoded value is not a valid minimum lock height.
+    InvalidMinHeight,
+    /// The decoded value is not a valid taproot signature.
+    InvalidTaprootSignature,
+    /// The decoded value is not a valid taproot control block.
+    InvalidControlBlock,
+    /// The decoded value is not a valid taproot leaf version.
+    InvalidLeafVersion,
     /// Error decoding a silent payments ECDH share (33-byte fixed value).
     #[cfg(feature = "silent-payments")]
     SpEcdh(UnexpectedEofError),
@@ -2363,6 +2347,11 @@ impl fmt::Display for ValueDecodeError {
             Self::TapLeafScript(ref e) => write_err!(f, "error decoding tap leaf script"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
+            Self::InvalidMinTime => write!(f, "invalid minimum lock time"),
+            Self::InvalidMinHeight => write!(f, "invalid minimum lock height"),
+            Self::InvalidTaprootSignature => write!(f, "invalid taproot signature"),
+            Self::InvalidControlBlock => write!(f, "invalid control block"),
+            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
             #[cfg(feature = "silent-payments")]
@@ -2402,6 +2391,11 @@ impl std::error::Error for ValueDecodeError {
             Self::TapLeafScript(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
+            Self::InvalidMinTime
+            | Self::InvalidMinHeight
+            | Self::InvalidTaprootSignature
+            | Self::InvalidControlBlock
+            | Self::InvalidLeafVersion => None,
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
@@ -2426,6 +2420,8 @@ pub enum DecodeError {
     MissingPreviousTxid,
     /// Input must contain a spent output index.
     MissingSpentOutputIndex,
+    /// Called build() before fully decoding the input map.
+    EarlyEnd,
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
     FieldMismatch,
     /// Non-witness UTXO txid does not match the input's previous txid.
@@ -2446,6 +2442,7 @@ impl fmt::Display for DecodeError {
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
             Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
+            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
             Self::FieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
@@ -2470,6 +2467,7 @@ impl std::error::Error for DecodeError {
             Self::ValueDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
             | Self::MissingSpentOutputIndex
+            | Self::EarlyEnd
             | Self::FieldMismatch
             | Self::IncorrectNonWitnessUtxo { .. } => None,
         }
