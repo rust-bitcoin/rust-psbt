@@ -7,6 +7,7 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::bip32::KeySource;
+use bitcoin::hashes::Hash;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
@@ -427,8 +428,7 @@ impl Decoder for OutputDecoder {
                     if self.amount.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.amount =
-                        Some(Deserialize::deserialize(&bytes).map_err(DecodeError::DeserPair)?);
+                    self.amount = Some(Amount::from_sat(u64::from_le_bytes(bytes)));
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingScript { key, decoder } => {
@@ -438,8 +438,7 @@ impl Decoder for OutputDecoder {
                     if self.script_pubkey.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.script_pubkey =
-                        Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+                    self.script_pubkey = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingRedeemScript { key, decoder } => {
@@ -449,8 +448,7 @@ impl Decoder for OutputDecoder {
                     if self.redeem_script.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.redeem_script =
-                        Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+                    self.redeem_script = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingWitnessScript { key, decoder } => {
@@ -460,18 +458,25 @@ impl Decoder for OutputDecoder {
                     if self.witness_script.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.witness_script =
-                        Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+                    self.witness_script = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingBip32Derivation { key, decoder } => {
                     let value = decoder.end().map_err(|e| {
                         DecodeError::ValueDecode(ValueDecodeError::Bip32Derivation(e))
                     })?;
-                    let pk: PublicKey =
-                        Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
-                    let ks: KeySource =
-                        Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                    use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint};
+                    let fprint =
+                        Fingerprint::from(<[u8; 4]>::try_from(&value[..4]).expect("4 bytes"));
+                    let mut dpath: Vec<ChildNumber> = Default::default();
+                    for chunk in value[4..].chunks_exact(4) {
+                        let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
+                        dpath.push(ChildNumber::from(index));
+                    }
+                    let ks = (fprint, DerivationPath::from(dpath));
+                    let pk = PublicKey::from_slice(&key.key).map_err(|e| {
+                        DecodeError::DeserPair(serialize::Error::InvalidPublicKey(e))
+                    })?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(ks);
@@ -491,8 +496,10 @@ impl Decoder for OutputDecoder {
                     if self.tap_internal_key.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.tap_internal_key =
-                        Some(Deserialize::deserialize(&bytes).map_err(DecodeError::DeserPair)?);
+                    self.tap_internal_key = Some(
+                        XOnlyPublicKey::from_slice(&bytes)
+                            .map_err(|_| InsertPairError::ValueWrongLength(32, 32))?,
+                    );
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapTree { key, decoder } => {
@@ -510,13 +517,36 @@ impl Decoder for OutputDecoder {
                     let value = decoder.end().map_err(|e| {
                         DecodeError::ValueDecode(ValueDecodeError::TapBip32Derivation(e))
                     })?;
-                    let xonly: XOnlyPublicKey =
-                        Deserialize::deserialize(&key.key).map_err(DecodeError::DeserPair)?;
-                    let (leaf_hashes, ks): (Vec<TapLeafHash>, KeySource) =
-                        Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?;
+                    let pair = if value.is_empty() {
+                        use bitcoin::bip32::{DerivationPath, Fingerprint};
+                        let fprint =
+                            Fingerprint::from(<[u8; 4]>::try_from(&value[..]).unwrap_or_default());
+                        (vec![], (fprint, DerivationPath::default()))
+                    } else {
+                        use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint};
+                        let count = value[0] as usize;
+                        let hash_end = 1 + count * 32;
+                        let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
+                            .chunks_exact(32)
+                            .map(|chunk| TapLeafHash::from_slice(chunk).expect("32 bytes"))
+                            .collect();
+                        let fprint = Fingerprint::from(
+                            <[u8; 4]>::try_from(&value[hash_end..hash_end + 4]).expect("4 bytes"),
+                        );
+                        let mut dpath: Vec<ChildNumber> = Default::default();
+                        for chunk in value[hash_end + 4..].chunks_exact(4) {
+                            let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
+                            dpath.push(ChildNumber::from(index));
+                        }
+                        let ks = (fprint, DerivationPath::from(dpath));
+                        (leaf_hashes, ks)
+                    };
+                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
+                        DecodeError::DeserPair(serialize::Error::InvalidXOnlyPublicKey)
+                    })?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
-                            e.insert((leaf_hashes, ks));
+                            e.insert(pair);
                         }
                         btree_map::Entry::Occupied(_) =>
                             return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
@@ -607,9 +637,7 @@ impl Decoder for OutputDecoder {
                 output.validate()?;
                 Ok(output)
             }
-            _ => Err(DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
-                bitcoin::consensus::encode::Error::ParseFailed("unexpected end"),
-            ))),
+            _ => Err(DecodeError::EarlyEnd),
         }
     }
 
@@ -1082,6 +1110,8 @@ pub enum DecodeError {
     KeyDecode(raw::KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(ValueDecodeError),
+    /// Called build() before fully decoding the output map.
+    EarlyEnd,
     /// Encoded output is missing a value.
     MissingValue,
     /// Encoded output is missing a script pubkey.
@@ -1097,6 +1127,7 @@ impl fmt::Display for DecodeError {
             Self::DeserPair(ref e) => write_err!(f, "error deserializing a pair"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
+            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
             Self::MissingValue => write!(f, "encoded output is missing a value"),
             Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
             Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
@@ -1112,7 +1143,10 @@ impl std::error::Error for DecodeError {
             Self::DeserPair(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
-            Self::MissingValue | Self::MissingScriptPubkey | Self::LabelWithoutInfo => None,
+            Self::EarlyEnd
+            | Self::MissingValue
+            | Self::MissingScriptPubkey
+            | Self::LabelWithoutInfo => None,
         }
     }
 }
