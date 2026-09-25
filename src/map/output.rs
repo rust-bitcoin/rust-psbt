@@ -475,7 +475,7 @@ impl Decoder for OutputDecoder {
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
                     let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        DecodeError::DeserPair(serialize::Error::InvalidPublicKey(e))
+                        DecodeError::InsertPair(InsertPairError::InvalidPublicKey(e))
                     })?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
@@ -542,7 +542,7 @@ impl Decoder for OutputDecoder {
                         (leaf_hashes, ks)
                     };
                     let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
-                        DecodeError::DeserPair(serialize::Error::InvalidXOnlyPublicKey)
+                        DecodeError::InsertPair(InsertPairError::InvalidXOnlyPublicKey)
                     })?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
@@ -1175,6 +1175,10 @@ pub enum InsertPairError {
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
     InvalidKeyDataNotEmpty(raw::Key),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(bitcoin::key::FromSliceError),
+    /// Invalid xonly public key when parsing key data.
+    InvalidXOnlyPublicKey,
     /// Value was not the correct length (got, expected).
     ValueWrongLength(usize, usize),
 }
@@ -1187,6 +1191,8 @@ impl fmt::Display for InsertPairError {
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
             Self::ValueWrongLength(got, expected) => {
                 write!(f, "value wrong length (got: {}, expected: {})", got, expected)
             }
@@ -1199,9 +1205,11 @@ impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Deser(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
             | Self::InvalidKeyDataNotEmpty(_)
+            | Self::InvalidXOnlyPublicKey
             | Self::ValueWrongLength(..) => None,
         }
     }

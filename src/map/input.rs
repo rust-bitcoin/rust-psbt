@@ -1112,7 +1112,7 @@ impl Decoder for InputDecoder {
                     }
                     self.previous_txid =
                         Some(Txid::from_slice(&bytes).map_err(|e| {
-                            DecodeError::DeserPair(serialize::Error::InvalidHash(e))
+                            DecodeError::InsertPair(InsertPairError::InvalidHash(e))
                         })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -1297,7 +1297,7 @@ impl Decoder for InputDecoder {
                     }
                     self.tap_merkle_root =
                         Some(TapNodeHash::from_slice(&bytes).map_err(|e| {
-                            DecodeError::DeserPair(serialize::Error::InvalidHash(e))
+                            DecodeError::InsertPair(InsertPairError::InvalidHash(e))
                         })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -1306,10 +1306,10 @@ impl Decoder for InputDecoder {
                         .end()
                         .map_err(|e| DecodeError::ValueDecode(ValueDecodeError::PartialSig(e)))?;
                     let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        DecodeError::DeserPair(serialize::Error::InvalidPublicKey(e))
+                        DecodeError::InsertPair(InsertPairError::InvalidPublicKey(e))
                     })?;
                     let sig = ecdsa::Signature::from_slice(&value).map_err(|e| {
-                        DecodeError::DeserPair(serialize::Error::InvalidEcdsaSignature(e))
+                        DecodeError::InsertPair(InsertPairError::InvalidEcdsaSignature(e))
                     })?;
                     match self.partial_sigs.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
@@ -1334,7 +1334,7 @@ impl Decoder for InputDecoder {
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
                     let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        DecodeError::DeserPair(serialize::Error::InvalidPublicKey(e))
+                        DecodeError::InsertPair(InsertPairError::InvalidPublicKey(e))
                     })?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
@@ -1350,7 +1350,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::Ripemd160Preimage(e))
                     })?;
                     let hash = ripemd160::Hash::from_slice(&key.key)
-                        .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
+                        .map_err(|e| DecodeError::InsertPair(InsertPairError::InvalidHash(e)))?;
                     match self.ripemd160_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1365,7 +1365,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::Sha256Preimage(e))
                     })?;
                     let hash = sha256::Hash::from_slice(&key.key)
-                        .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
+                        .map_err(|e| DecodeError::InsertPair(InsertPairError::InvalidHash(e)))?;
                     match self.sha256_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1380,7 +1380,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::Hash160Preimage(e))
                     })?;
                     let hash = hash160::Hash::from_slice(&key.key)
-                        .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
+                        .map_err(|e| DecodeError::InsertPair(InsertPairError::InvalidHash(e)))?;
                     match self.hash160_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1395,7 +1395,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::Hash256Preimage(e))
                     })?;
                     let hash = sha256d::Hash::from_slice(&key.key)
-                        .map_err(|e| DecodeError::DeserPair(serialize::Error::InvalidHash(e)))?;
+                        .map_err(|e| DecodeError::InsertPair(InsertPairError::InvalidHash(e)))?;
                     match self.hash256_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -2512,6 +2512,12 @@ pub enum InsertPairError {
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
     InvalidKeyDataNotEmpty(raw::Key),
+    /// Invalid hash when parsing key or value data.
+    InvalidHash(bitcoin::hashes::FromSliceError),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(bitcoin::key::FromSliceError),
+    /// Invalid ECDSA signature when parsing value data.
+    InvalidEcdsaSignature(ecdsa::Error),
     /// The pre-image must hash to the correponding psbt hash
     HashPreimage(HashPreimageError),
     /// Key was not the correct length (got, expected).
@@ -2528,6 +2534,10 @@ impl fmt::Display for InsertPairError {
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
+            Self::InvalidHash(ref e) =>
+                write_err!(f, "invalid hash when parsing key or value data"; e),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
             Self::HashPreimage(ref e) => write_err!(f, "invalid hash preimage"; e),
             Self::KeyWrongLength(got, expected) => {
                 write!(f, "key wrong length (got: {}, expected: {})", got, expected)
@@ -2544,6 +2554,9 @@ impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Deser(ref e) => Some(e),
+            Self::InvalidHash(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::InvalidEcdsaSignature(ref e) => Some(e),
             Self::HashPreimage(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
