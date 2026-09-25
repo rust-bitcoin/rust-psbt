@@ -150,34 +150,44 @@ where
     }
 }
 
+/// Error when attempting to construct a [`ProprietaryKey`] from a [`Key`]
+/// whose type byte is not `0xFC` or whose key data is malformed.
+#[derive(Debug)]
+pub struct InvalidProprietaryKeyError;
+
+impl fmt::Display for InvalidProprietaryKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid proprietary key")
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for InvalidProprietaryKeyError {}
+
 impl<Subtype> TryFrom<Key> for ProprietaryKey<Subtype>
 where
     Subtype: Copy + From<u64> + Into<u64>,
 {
-    type Error = serialize::Error;
+    type Error = InvalidProprietaryKeyError;
 
     /// Constructs a [`ProprietaryKey`] from a [`Key`].
     ///
     /// # Errors
     ///
-    /// Returns [`serialize::Error::InvalidProprietaryKey`] if `key` does not start with `0xFC`.
+    /// Returns [`InvalidProprietaryKeyError`] if `key` does not start with `0xFC`.
     fn try_from(key: Key) -> Result<Self, Self::Error> {
         if key.type_value != 0xFC {
-            return Err(serialize::Error::InvalidProprietaryKey);
+            return Err(InvalidProprietaryKeyError);
         }
 
         let mut inner = Decoder2::<ByteVecDecoder, CompactSizeU64Decoder>::default();
 
         let mut bytes = key.key.as_slice();
-        if inner
-            .push_bytes(&mut bytes)
-            .map_err(|_| serialize::Error::InvalidProprietaryKey)?
-            .needs_more()
-        {
-            return Err(serialize::Error::InvalidProprietaryKey);
+        if inner.push_bytes(&mut bytes).map_err(|_| InvalidProprietaryKeyError)?.needs_more() {
+            return Err(InvalidProprietaryKeyError);
         }
 
-        let (prefix, subtype) = inner.end().map_err(|_| serialize::Error::InvalidProprietaryKey)?;
+        let (prefix, subtype) = inner.end().map_err(|_| InvalidProprietaryKeyError)?;
 
         Ok(Self { prefix, subtype: subtype.into(), key: bytes.to_vec() })
     }

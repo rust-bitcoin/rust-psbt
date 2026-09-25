@@ -596,7 +596,7 @@ impl Decoder for OutputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
                     let pk = raw::ProprietaryKey::try_from(key.clone())
-                        .map_err(InsertPairError::Deser)?;
+                        .map_err(|_| InsertPairError::InvalidProprietaryKey)?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1179,6 +1179,8 @@ pub enum InsertPairError {
     InvalidPublicKey(bitcoin::key::FromSliceError),
     /// Invalid xonly public key when parsing key data.
     InvalidXOnlyPublicKey,
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
     /// Value was not the correct length (got, expected).
     ValueWrongLength(usize, usize),
 }
@@ -1193,6 +1195,7 @@ impl fmt::Display for InsertPairError {
                 write!(f, "key should not contain data: {}", key),
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
             Self::ValueWrongLength(got, expected) => {
                 write!(f, "value wrong length (got: {}, expected: {})", got, expected)
             }
@@ -1210,6 +1213,7 @@ impl std::error::Error for InsertPairError {
             | Self::InvalidKeyDataEmpty(_)
             | Self::InvalidKeyDataNotEmpty(_)
             | Self::InvalidXOnlyPublicKey
+            | Self::InvalidProprietaryKey
             | Self::ValueWrongLength(..) => None,
         }
     }

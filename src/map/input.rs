@@ -1501,7 +1501,7 @@ impl Decoder for InputDecoder {
                         DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
                     let pk = raw::ProprietaryKey::try_from(key.clone())
-                        .map_err(InsertPairError::Deser)?;
+                        .map_err(|_| InsertPairError::InvalidProprietaryKey)?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -2518,6 +2518,8 @@ pub enum InsertPairError {
     InvalidPublicKey(bitcoin::key::FromSliceError),
     /// Invalid ECDSA signature when parsing value data.
     InvalidEcdsaSignature(ecdsa::Error),
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
     /// The pre-image must hash to the correponding psbt hash
     HashPreimage(HashPreimageError),
     /// Key was not the correct length (got, expected).
@@ -2538,6 +2540,7 @@ impl fmt::Display for InsertPairError {
                 write_err!(f, "invalid hash when parsing key or value data"; e),
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
             Self::HashPreimage(ref e) => write_err!(f, "invalid hash preimage"; e),
             Self::KeyWrongLength(got, expected) => {
                 write!(f, "key wrong length (got: {}, expected: {})", got, expected)
@@ -2561,6 +2564,7 @@ impl std::error::Error for InsertPairError {
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
             | Self::InvalidKeyDataNotEmpty(_)
+            | Self::InvalidProprietaryKey
             | Self::KeyWrongLength(..)
             | Self::ValueWrongLength(..) => None,
         }
