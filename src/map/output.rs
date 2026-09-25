@@ -9,12 +9,12 @@ use core::fmt;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::Hash;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{TapLeafHash, TapTree};
+use bitcoin::taproot::{self, LeafVersion, TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoderError, CompactSizeEncoder,
-    Decoder, Decoder2Error, DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith,
-    IterEncoder, UnexpectedEofError,
+    ArrayDecoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoder, CompactSizeDecoderError,
+    CompactSizeEncoder, Decoder, Decoder2Error, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
 use crate::consts::{
@@ -34,9 +34,8 @@ use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
 use crate::map::Map;
+use crate::raw;
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
-use crate::serialize::Deserialize;
-use crate::{raw, serialize};
 
 /// A key-value map for an output of the corresponding index in the unsigned
 /// transaction.
@@ -509,8 +508,36 @@ impl Decoder for OutputDecoder {
                     if self.tap_tree.is_some() {
                         return Err(DecodeError::InsertPair(InsertPairError::DuplicateKey(key)));
                     }
-                    self.tap_tree =
-                        Some(Deserialize::deserialize(&value).map_err(DecodeError::DeserPair)?);
+                    self.tap_tree = {
+                        let mut builder = taproot::TaprootBuilder::new();
+                        let mut slice = &value[..];
+                        while let Some((&depth, rest)) = slice.split_first() {
+                            let (&version, rest) = rest.split_first().ok_or(
+                                DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree),
+                            )?;
+                            let mut cs = CompactSizeDecoder::default();
+                            let mut remaining = rest;
+                            cs.push_bytes(&mut remaining).map_err(|_| {
+                                DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree)
+                            })?;
+                            let script_len = cs.end().map_err(|_| {
+                                DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree)
+                            })?;
+                            let script = ScriptBuf::from(remaining[..script_len].to_vec());
+                            let leaf_version =
+                                LeafVersion::from_consensus(version).map_err(|_| {
+                                    DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree)
+                                })?;
+                            builder =
+                                builder.add_leaf_with_ver(depth, script, leaf_version).map_err(
+                                    |_| DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree),
+                                )?;
+                            slice = &remaining[script_len..];
+                        }
+                        Some(TapTree::try_from(builder).map_err(|_| {
+                            DecodeError::ValueDecode(ValueDecodeError::InvalidTapTree)
+                        })?)
+                    };
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapBip32Derivation { key, decoder } => {
@@ -1038,6 +1065,8 @@ pub enum ValueDecodeError {
     TapInternalKey(UnexpectedEofError),
     /// Error decoding the taproot tree.
     TapTree(ByteVecDecoderError),
+    /// The decoded value is not a valid taproot tree.
+    InvalidTapTree,
     /// Error decoding the taproot BIP32 derivation value.
     TapBip32Derivation(ByteVecDecoderError),
     /// Error decoding a proprietary value.
@@ -1063,6 +1092,7 @@ impl fmt::Display for ValueDecodeError {
             Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
             Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
             Self::TapTree(ref e) => write_err!(f, "error decoding tap tree"; e),
+            Self::InvalidTapTree => write!(f, "invalid tap tree"),
             Self::TapBip32Derivation(ref e) =>
                 write_err!(f, "error decoding tap BIP32 derivation"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
@@ -1094,6 +1124,7 @@ impl std::error::Error for ValueDecodeError {
             Self::SpV0Info(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpV0Label(ref e) => Some(e),
+            Self::InvalidTapTree => None,
         }
     }
 }
@@ -1104,8 +1135,6 @@ impl std::error::Error for ValueDecodeError {
 pub enum DecodeError {
     /// Error inserting a key-value pair.
     InsertPair(InsertPairError),
-    /// Error deserializing a pair.
-    DeserPair(serialize::Error),
     /// Error decoding a raw PSBT key.
     KeyDecode(raw::KeyDecodeError),
     /// Error decoding a value.
@@ -1124,7 +1153,6 @@ impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InsertPair(ref e) => write_err!(f, "error inserting a pair"; e),
-            Self::DeserPair(ref e) => write_err!(f, "error deserializing a pair"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
@@ -1140,7 +1168,6 @@ impl std::error::Error for DecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InsertPair(ref e) => Some(e),
-            Self::DeserPair(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::EarlyEnd
@@ -1169,8 +1196,6 @@ impl From<ValidationError> for DecodeError {
 pub enum InsertPairError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(raw::Key),
-    /// Error deserializing raw value.
-    Deser(serialize::Error),
     /// Key should contain data.
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
@@ -1189,7 +1214,6 @@ impl fmt::Display for InsertPairError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::Deser(ref e) => write_err!(f, "error deserializing raw value"; e),
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
@@ -1207,7 +1231,6 @@ impl fmt::Display for InsertPairError {
 impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Deser(ref e) => Some(e),
             Self::InvalidPublicKey(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
@@ -1217,10 +1240,6 @@ impl std::error::Error for InsertPairError {
             | Self::ValueWrongLength(..) => None,
         }
     }
-}
-
-impl From<serialize::Error> for InsertPairError {
-    fn from(e: serialize::Error) -> Self { Self::Deser(e) }
 }
 
 /// Error combining two output maps.

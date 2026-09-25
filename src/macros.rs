@@ -19,24 +19,6 @@ macro_rules! v2_combine_map {
     };
 }
 
-// Implements our Deserialize trait using bitcoin consensus deserialization.
-macro_rules! v2_impl_psbt_de_serialize {
-    ($thing:ty) => {
-        v2_impl_psbt_deserialize!($thing);
-    };
-}
-
-macro_rules! v2_impl_psbt_deserialize {
-    ($thing:ty) => {
-        impl $crate::serialize::Deserialize for $thing {
-            fn deserialize(bytes: &[u8]) -> Result<Self, $crate::serialize::Error> {
-                bitcoin::consensus::deserialize(&bytes[..])
-                    .map_err(|e| $crate::serialize::Error::from(e))
-            }
-        }
-    };
-}
-
 #[rustfmt::skip]
 macro_rules! v2_impl_psbt_get_pair {
     ($rv:ident.push($slf:ident.$unkeyed_name:ident, $unkeyed_typeval:ident)) => {
@@ -59,23 +41,6 @@ macro_rules! v2_impl_psbt_get_pair {
                 },
                 value: $crate::encoding::encode_to_vec(val),
             });
-        }
-    };
-}
-
-// macros for serde of hashes
-macro_rules! v2_impl_psbt_hash_de_serialize {
-    ($hash_type:ty) => {
-        v2_impl_psbt_hash_deserialize!($hash_type);
-    };
-}
-
-macro_rules! v2_impl_psbt_hash_deserialize {
-    ($hash_type:ty) => {
-        impl $crate::serialize::Deserialize for $hash_type {
-            fn deserialize(bytes: &[u8]) -> Result<Self, $crate::serialize::Error> {
-                <$hash_type>::from_slice(&bytes[..]).map_err(|e| $crate::serialize::Error::from(e))
-            }
         }
     };
 }

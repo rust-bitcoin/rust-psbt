@@ -57,7 +57,7 @@ use crate::map::Map;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
-use crate::{raw, serialize, SignError};
+use crate::{raw, SignError};
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -2433,8 +2433,6 @@ impl std::error::Error for ValueDecodeError {
 pub enum DecodeError {
     /// Error inserting a key-value pair.
     InsertPair(InsertPairError),
-    /// Error decoding a pair.
-    DeserPair(serialize::Error),
     /// Error decoding key.
     KeyDecode(raw::KeyDecodeError),
     /// Error decoding a value.
@@ -2460,7 +2458,6 @@ impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InsertPair(ref e) => write_err!(f, "error inserting a key-value pair"; e),
-            Self::DeserPair(ref e) => write_err!(f, "error decoding pair"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
@@ -2485,7 +2482,6 @@ impl std::error::Error for DecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InsertPair(ref e) => Some(e),
-            Self::DeserPair(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
@@ -2506,8 +2502,6 @@ impl From<InsertPairError> for DecodeError {
 pub enum InsertPairError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(raw::Key),
-    /// Error deserializing raw value.
-    Deser(serialize::Error),
     /// Key should contain data.
     InvalidKeyDataEmpty(raw::Key),
     /// Key should not contain data.
@@ -2532,7 +2526,6 @@ impl fmt::Display for InsertPairError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::Deser(ref e) => write_err!(f, "error deserializing raw value"; e),
             Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
             Self::InvalidKeyDataNotEmpty(ref key) =>
                 write!(f, "key should not contain data: {}", key),
@@ -2556,7 +2549,6 @@ impl fmt::Display for InsertPairError {
 impl std::error::Error for InsertPairError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Deser(ref e) => Some(e),
             Self::InvalidHash(ref e) => Some(e),
             Self::InvalidPublicKey(ref e) => Some(e),
             Self::InvalidEcdsaSignature(ref e) => Some(e),
@@ -2569,10 +2561,6 @@ impl std::error::Error for InsertPairError {
             | Self::ValueWrongLength(..) => None,
         }
     }
-}
-
-impl From<serialize::Error> for InsertPairError {
-    fn from(e: serialize::Error) -> Self { Self::Deser(e) }
 }
 
 impl From<HashPreimageError> for InsertPairError {
