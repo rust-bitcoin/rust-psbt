@@ -6,11 +6,11 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
+use bitcoin::bip32::{self, ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
 use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
-use bitcoin::{bip32, transaction, VarInt};
+use bitcoin::{transaction, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, CompactSizeDecoderError,
     CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2Error, DecoderStatus, Encoder,
