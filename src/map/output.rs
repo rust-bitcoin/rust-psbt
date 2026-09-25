@@ -168,7 +168,7 @@ impl Output {
 /// Push-based decoder for a single PSBT output map.
 #[derive(Debug)]
 pub struct OutputDecoder {
-    stage: OutputDecodeStage,
+    stage: DecoderStage,
     amount: Option<Amount>,
     script_pubkey: Option<ScriptBuf>,
     redeem_script: Option<ScriptBuf>,
@@ -187,7 +187,7 @@ pub struct OutputDecoder {
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-enum OutputDecodeStage {
+enum DecoderStage {
     DecodingSeparator,
     DecodingKey(raw::KeyDecoder),
     DecodingValue { key: raw::Key, decoder: ByteVecDecoder },
@@ -195,7 +195,7 @@ enum OutputDecodeStage {
     Errored,
 }
 
-impl OutputDecodeStage {
+impl DecoderStage {
     fn from_key(key: raw::Key) -> Result<Self, DecodeError> {
         Ok(Self::DecodingValue { key, decoder: ByteVecDecoder::new() })
     }
@@ -204,7 +204,7 @@ impl OutputDecodeStage {
 impl Default for OutputDecoder {
     fn default() -> Self {
         Self {
-            stage: OutputDecodeStage::DecodingSeparator,
+            stage: DecoderStage::DecodingSeparator,
             amount: None,
             script_pubkey: None,
             redeem_script: None,
@@ -234,18 +234,18 @@ impl Decoder for OutputDecoder {
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
         use crate::consts::PSBT_SEPARATOR;
 
-        if matches!(&self.stage, OutputDecodeStage::Done(_)) {
+        if matches!(&self.stage, DecoderStage::Done(_)) {
             return Ok(DecoderStatus::Ready);
         }
 
         loop {
-            if matches!(&self.stage, OutputDecodeStage::DecodingSeparator) {
+            if matches!(&self.stage, DecoderStage::DecodingSeparator) {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
                         let amount = self.amount.take().ok_or(DecodeError::MissingValue)?;
                         let script_pubkey = self.script_pubkey.take().unwrap_or_default();
-                        self.stage = OutputDecodeStage::Done(Output {
+                        self.stage = DecoderStage::Done(Output {
                             amount,
                             script_pubkey,
                             redeem_script: self.redeem_script.take(),
@@ -264,23 +264,23 @@ impl Decoder for OutputDecoder {
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {
-                        self.stage = OutputDecodeStage::DecodingKey(raw::KeyDecoder::default());
+                        self.stage = DecoderStage::DecodingKey(raw::KeyDecoder::default());
                     }
                     None => return Ok(DecoderStatus::NeedsMore),
                 }
             }
 
             let status = match &mut self.stage {
-                OutputDecodeStage::DecodingKey(d) =>
+                DecoderStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(DecodeError::KeyDecode)?,
-                OutputDecodeStage::DecodingValue { ref mut decoder, .. } =>
+                DecoderStage::DecodingValue { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|_| {
                         DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
                             bitcoin::consensus::encode::Error::ParseFailed("value decode"),
                         ))
                     })?,
-                OutputDecodeStage::Done(_) => return Ok(DecoderStatus::Ready),
-                OutputDecodeStage::DecodingSeparator | OutputDecodeStage::Errored =>
+                DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
+                DecoderStage::DecodingSeparator | DecoderStage::Errored =>
                     panic!("push_bytes in unexpected stage"),
             };
 
@@ -288,34 +288,34 @@ impl Decoder for OutputDecoder {
                 return Ok(DecoderStatus::NeedsMore);
             }
 
-            let old = core::mem::replace(&mut self.stage, OutputDecodeStage::Errored);
+            let old = core::mem::replace(&mut self.stage, DecoderStage::Errored);
             match old {
-                OutputDecodeStage::DecodingKey(decoder) => {
+                DecoderStage::DecodingKey(decoder) => {
                     let key = decoder.end().map_err(DecodeError::KeyDecode)?;
-                    self.stage = OutputDecodeStage::from_key(key)?;
+                    self.stage = DecoderStage::from_key(key)?;
                 }
-                OutputDecodeStage::DecodingValue { key, decoder } => {
+                DecoderStage::DecodingValue { key, decoder } => {
                     let value = decoder.end().map_err(|_| {
                         DecodeError::DeserPair(serialize::Error::ConsensusEncoding(
                             bitcoin::consensus::encode::Error::ParseFailed("value decode"),
                         ))
                     })?;
                     self.insert_value(key, value)?;
-                    self.stage = OutputDecodeStage::DecodingSeparator;
+                    self.stage = DecoderStage::DecodingSeparator;
                 }
-                OutputDecodeStage::Done(output) => {
-                    self.stage = OutputDecodeStage::Done(output);
+                DecoderStage::Done(output) => {
+                    self.stage = DecoderStage::Done(output);
                     return Ok(DecoderStatus::Ready);
                 }
-                OutputDecodeStage::Errored => unreachable!(),
-                OutputDecodeStage::DecodingSeparator => unreachable!(),
+                DecoderStage::Errored => unreachable!(),
+                DecoderStage::DecodingSeparator => unreachable!(),
             }
         }
     }
 
     fn end(self) -> Result<Output, Self::Error> {
         match self.stage {
-            OutputDecodeStage::Done(output) => {
+            DecoderStage::Done(output) => {
                 output.validate()?;
                 Ok(output)
             }
@@ -327,10 +327,10 @@ impl Decoder for OutputDecoder {
 
     fn read_limit(&self) -> usize {
         match &self.stage {
-            OutputDecodeStage::DecodingSeparator => 1,
-            OutputDecodeStage::DecodingKey(d) => d.read_limit(),
-            OutputDecodeStage::DecodingValue { decoder, .. } => decoder.read_limit(),
-            OutputDecodeStage::Done(_) | OutputDecodeStage::Errored => 0,
+            DecoderStage::DecodingSeparator => 1,
+            DecoderStage::DecodingKey(d) => d.read_limit(),
+            DecoderStage::DecodingValue { decoder, .. } => decoder.read_limit(),
+            DecoderStage::Done(_) | DecoderStage::Errored => 0,
         }
     }
 }
