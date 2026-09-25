@@ -9,7 +9,7 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::serialize::{Deserialize, Serialize};
+use crate::serialize::Deserialize;
 
 /// A 64-byte DLEQ proof (BIP-374).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -106,10 +106,6 @@ impl TryFrom<Vec<u8>> for DleqProof {
     type Error = InvalidLengthError;
 
     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> { Self::try_from(v.as_slice()) }
-}
-
-impl Serialize for DleqProof {
-    fn serialize(&self) -> Vec<u8> { self.0.to_vec() }
 }
 
 impl Deserialize for DleqProof {

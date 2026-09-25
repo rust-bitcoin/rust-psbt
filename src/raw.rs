@@ -28,7 +28,7 @@ use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 use crate::io::{self, Write};
 use crate::serialize;
-use crate::serialize::{Deserialize, Serialize};
+use crate::serialize::Deserialize;
 
 /// A PSBT key-value pair in its raw byte form.
 ///
@@ -54,16 +54,6 @@ impl Pair {
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "type: {:#x}, key: {:x}", self.type_value, self.key.as_hex())
-    }
-}
-
-impl Serialize for Pair {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend(self.key.serialize());
-        // <value> := <valuelen> <valuedata>
-        self.value.consensus_encode(&mut buf).unwrap();
-        buf
     }
 }
 
@@ -125,24 +115,6 @@ impl Key {
         }
 
         Ok(Self { type_value: type_value.0, key })
-    }
-}
-
-impl Serialize for Key {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let type_value = VarInt::from(self.type_value);
-        VarInt::from(self.key.len() + type_value.size())
-            .consensus_encode(&mut buf)
-            .expect("in-memory writers don't error");
-
-        type_value.consensus_encode(&mut buf).expect("in-memory writers don't error");
-
-        for key in &self.key {
-            key.consensus_encode(&mut buf).expect("in-memory writers don't error");
-        }
-
-        buf
     }
 }
 

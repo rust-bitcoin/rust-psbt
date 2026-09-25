@@ -458,7 +458,7 @@ pub struct TapTreeEncoder<'e> {
 
 impl<'e> TapTreeEncoder<'e> {
     fn new(tree: &'e TapTree) -> Self {
-        // Per-leaf layout mirrors `Serialize::serialize`: 1-byte depth, 1-byte
+        // Per-leaf layout: 1-byte depth, 1-byte
         // version, compact-size-prefixed script.
         let remaining = tree
             .script_leaves()
@@ -663,9 +663,6 @@ mod tests {
 
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
-    // Byte-equality gates against the legacy `Serialize::serialize`/consensus path that the
-    // current `Map::get_pairs` implementations emit for these field value types.
-    use crate::serialize::Serialize;
 
     fn sample_xpub() -> Xpub {
         use core::str::FromStr;
@@ -762,27 +759,6 @@ mod tests {
     }
 
     #[test]
-    fn sighash_type_matches_serialize() {
-        let v = PsbtSighashType::from_u32(0x01u32);
-        assert_eq!(encode_to_vec(&v), v.serialize());
-    }
-
-    #[test]
-    fn public_key_matches_serialize() {
-        use core::str::FromStr;
-
-        let pk = PublicKey::from_str(
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-        )
-        .unwrap();
-        assert_eq!(encode_to_vec(&pk), Serialize::serialize(&pk));
-
-        // Uncompressed key exercises the 65-byte branch of PublicKeyEncoder.
-        let pk_uc = PublicKey { compressed: false, inner: pk.inner };
-        assert_eq!(encode_to_vec(&pk_uc), Serialize::serialize(&pk_uc));
-    }
-
-    #[test]
     fn public_key_encoder_len_is_key_size() {
         use core::str::FromStr;
 
@@ -794,15 +770,6 @@ mod tests {
 
         let pk_uc = PublicKey { compressed: false, inner: pk.inner };
         assert_eq!(pk_uc.psbt_encoder().len(), 65, "uncompressed public key");
-    }
-
-    #[test]
-    fn ecdsa_signature_matches_serialize() {
-        let der = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01];
-        let der_sig = bitcoin::secp256k1::ecdsa::Signature::from_der(&der).unwrap();
-        let sighash_enum: bitcoin::EcdsaSighashType = bitcoin::EcdsaSighashType::All;
-        let sig = ecdsa::Signature { signature: der_sig, sighash_type: sighash_enum };
-        assert_eq!(encode_to_vec(&sig), Serialize::serialize(&sig));
     }
 
     // Exercises `PsbtEncode for bitcoin::ecdsa::SerializedSignature` (the `BytesEncoder` impl).
@@ -890,56 +857,12 @@ mod tests {
     }
 
     #[test]
-    fn xonly_public_key_matches_serialize() {
-        use core::str::FromStr;
-
-        let pk = XOnlyPublicKey::from_str(
-            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-        )
-        .unwrap();
-        assert_eq!(encode_to_vec(&pk), Serialize::serialize(&pk));
-    }
-
-    #[test]
-    fn hash_types_match_serialize() {
-        let rmd = ripemd160::Hash::hash(&[0x42]);
-        let h160 = hash160::Hash::hash(&[0x42]);
-        let sha = sha256::Hash::hash(&[0x42]);
-        let dsha = sha256d::Hash::hash(&[0x42]);
-        assert_eq!(encode_to_vec(&rmd), Serialize::serialize(&rmd));
-        assert_eq!(encode_to_vec(&h160), Serialize::serialize(&h160));
-        assert_eq!(encode_to_vec(&sha), Serialize::serialize(&sha));
-        assert_eq!(encode_to_vec(&dsha), Serialize::serialize(&dsha));
-    }
-
-    #[test]
     fn leaf_version_matches_serialize() {
         let lv = LeafVersion::TapScript;
         let bytes = encode_to_vec(&lv);
         // Game between byte form used by `(ScriptBuf, LeafVersion)` serialization; LeafVersion
         // itself is only ever encoded as the trailing byte within that tuple.
         assert_eq!(bytes, vec![lv.to_consensus()]);
-    }
-
-    #[test]
-    fn script_buf_matches_serialize() {
-        let script = bitcoin::ScriptBuf::from_bytes(vec::Vec::from([0x76, 0xa9, 0x14, 0xcd, 0xbd]));
-        assert_eq!(encode_to_vec(&script), Serialize::serialize(&script));
-        assert_eq!(encode_to_vec(&script), script.as_bytes());
-    }
-
-    #[test]
-    fn taproot_signature_matches_serialize() {
-        let raw_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
-        // Non-default sighash adds one byte (65 bytes total); default drops to 64 bytes.
-        let sig =
-            taproot::Signature { signature: raw_sig, sighash_type: bitcoin::TapSighashType::All };
-        assert_eq!(encode_to_vec(&sig), Serialize::serialize(&sig));
-        let default_sig = taproot::Signature {
-            signature: raw_sig,
-            sighash_type: bitcoin::TapSighashType::Default,
-        };
-        assert_eq!(encode_to_vec(&default_sig), Serialize::serialize(&default_sig));
     }
 
     // Taproot signatures are fixed-size: 64 bytes for the default sighash (no trailing
@@ -966,49 +889,6 @@ mod tests {
     }
 
     #[test]
-    fn control_block_matches_serialize() {
-        use bitcoin::taproot::TaprootBuilder;
-
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        let xonly_key = bitcoin::secp256k1::XOnlyPublicKey::from_slice(&[0x51; 32]).unwrap();
-        let builder = TaprootBuilder::new()
-            .add_leaf(0x00, bitcoin::ScriptBuf::from_bytes(Vec::from([0x51])))
-            .expect("leaf");
-        let info = builder.finalize(&secp, xonly_key).expect("finalize succeeds");
-        let script_vec = bitcoin::ScriptBuf::from_bytes(Vec::from([0x51]));
-        let ctrl = info.control_block(&(script_vec, LeafVersion::TapScript)).expect("gets ctrl");
-        assert_eq!(encode_to_vec(&ctrl), Serialize::serialize(&ctrl));
-    }
-
-    #[test]
-    fn xonly_leaf_hash_pair_matches_serialize() {
-        let key_raw = [0x51u8; 32];
-        let leaf = TapLeafHash::hash(&[0x51]);
-        let xkey = XOnlyPublicKey::from_slice(&key_raw).unwrap();
-        let pair = (xkey, leaf);
-        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
-    }
-
-    #[test]
-    fn tap_tree_matches_serialize() {
-        use bitcoin::taproot::TaprootBuilder;
-
-        let builder = TaprootBuilder::new()
-            .add_leaf(0x00, ScriptBuf::from_bytes(Vec::from([0x51])))
-            .expect("leaf");
-        let single = TapTree::try_from(builder).expect("complete single leaf tree");
-        assert_eq!(encode_to_vec(&single), Serialize::serialize(&single));
-
-        let builder = TaprootBuilder::new()
-            .add_leaf(1, ScriptBuf::from_bytes(Vec::from([0x51])))
-            .expect("leaf")
-            .add_leaf(1, ScriptBuf::from_bytes(Vec::from([0x52])))
-            .expect("leaf");
-        let multi = TapTree::try_from(builder).expect("complete tree");
-        assert_eq!(encode_to_vec(&multi), Serialize::serialize(&multi));
-    }
-
-    #[test]
     fn tap_tree_encoder_len_counts_down() {
         use bitcoin::taproot::TaprootBuilder;
 
@@ -1018,7 +898,7 @@ mod tests {
         let tree = TapTree::try_from(builder).expect("tree");
         let mut encoder = tree.psbt_encoder();
         let mut remaining = encoder.len();
-        assert_eq!(remaining, Serialize::serialize(&tree).len());
+        assert_eq!(remaining, encode_to_vec(&tree).len());
         loop {
             remaining -= encoder.current_chunk().len();
             if encoder.advance().has_finished() {
@@ -1048,21 +928,5 @@ mod tests {
         let leaf_encoder = iter.next().expect("one leaf");
         // 1 depth byte + 1 version byte + 1 compact-size byte + 3 script bytes.
         assert_eq!(leaf_encoder.len(), 6);
-    }
-
-    #[test]
-    fn scriptbuf_leaf_version_matches_serialize() {
-        let script = ScriptBuf::from_bytes(Vec::from([0x51, 0xac]));
-        let pair = (script, LeafVersion::TapScript);
-        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
-    }
-
-    #[test]
-    fn leafhash_vec_keysource_matches_serialize() {
-        let hashes = vec![TapLeafHash::hash(&[0x01]), TapLeafHash::hash(&[0x02])];
-        let key_source: KeySource =
-            (Fingerprint::from([0x12, 0x34, 0x56, 0x78]), Default::default());
-        let pair = (hashes, key_source);
-        assert_eq!(encode_to_vec(&pair), Serialize::serialize(&pair));
     }
 }

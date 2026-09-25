@@ -10,7 +10,7 @@ use core::convert::{TryFrom, TryInto};
 use core::fmt;
 
 use bitcoin::bip32::{ChildNumber, Fingerprint, KeySource};
-use bitcoin::consensus::{self, Decodable, Encodable};
+use bitcoin::consensus::{self, Decodable};
 use bitcoin::hashes::{self, hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::PublicKey;
 use bitcoin::secp256k1::{self, XOnlyPublicKey};
@@ -27,13 +27,6 @@ use crate::dleq;
 use crate::error::write_err;
 use crate::sighash_type::PsbtSighashType;
 use crate::version;
-
-/// A trait for serializing a value as raw data for insertion into PSBT
-/// key-value maps.
-pub(crate) trait Serialize {
-    /// Serializes a value as raw data.
-    fn serialize(&self) -> Vec<u8>;
-}
 
 /// A trait for deserializing a value from raw data in PSBT key-value maps.
 pub(crate) trait Deserialize: Sized {
@@ -62,20 +55,8 @@ v2_impl_psbt_hash_de_serialize!(sha256d::Hash);
 // taproot
 v2_impl_psbt_de_serialize!(Vec<TapLeafHash>);
 
-impl Serialize for ScriptBuf {
-    fn serialize(&self) -> Vec<u8> { self.to_bytes() }
-}
-
 impl Deserialize for ScriptBuf {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> { Ok(Self::from(bytes.to_vec())) }
-}
-
-impl Serialize for PublicKey {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        self.write_into(&mut buf).expect("vecs don't error");
-        buf
-    }
 }
 
 impl Deserialize for PublicKey {
@@ -84,18 +65,10 @@ impl Deserialize for PublicKey {
     }
 }
 
-impl Serialize for secp256k1::PublicKey {
-    fn serialize(&self) -> Vec<u8> { self.serialize().to_vec() }
-}
-
 impl Deserialize for secp256k1::PublicKey {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         Self::from_slice(bytes).map_err(Error::InvalidSecp256k1PublicKey)
     }
-}
-
-impl Serialize for ecdsa::Signature {
-    fn serialize(&self) -> Vec<u8> { self.to_vec() }
 }
 
 impl Deserialize for ecdsa::Signature {
@@ -123,20 +96,6 @@ impl Deserialize for ecdsa::Signature {
     }
 }
 
-impl Serialize for KeySource {
-    fn serialize(&self) -> Vec<u8> {
-        let mut rv: Vec<u8> = Vec::with_capacity(key_source_len(self));
-
-        rv.append(&mut self.0.to_bytes().to_vec());
-
-        for cnum in &self.1 {
-            rv.append(&mut consensus::serialize(&u32::from(*cnum)))
-        }
-
-        rv
-    }
-}
-
 impl Deserialize for KeySource {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 4 {
@@ -158,19 +117,11 @@ impl Deserialize for KeySource {
     }
 }
 
-impl Serialize for u32 {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self) }
-}
-
 impl Deserialize for u32 {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         let val: Self = consensus::deserialize(bytes)?;
         Ok(val)
     }
-}
-
-impl Serialize for Sequence {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self) }
 }
 
 impl Deserialize for Sequence {
@@ -180,20 +131,12 @@ impl Deserialize for Sequence {
     }
 }
 
-impl Serialize for absolute::Height {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self.to_consensus_u32()) }
-}
-
 impl Deserialize for absolute::Height {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         let n: u32 = consensus::deserialize(bytes)?;
         let lock = Self::from_consensus(n)?;
         Ok(lock)
     }
-}
-
-impl Serialize for absolute::Time {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self.to_consensus_u32()) }
 }
 
 impl Deserialize for absolute::Time {
@@ -205,16 +148,8 @@ impl Deserialize for absolute::Time {
 }
 
 // partial sigs
-impl Serialize for Vec<u8> {
-    fn serialize(&self) -> Vec<u8> { self.clone() }
-}
-
 impl Deserialize for Vec<u8> {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> { Ok(bytes.to_vec()) }
-}
-
-impl Serialize for PsbtSighashType {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self.to_u32()) }
 }
 
 impl Deserialize for PsbtSighashType {
@@ -225,18 +160,10 @@ impl Deserialize for PsbtSighashType {
 }
 
 // Taproot related ser/deser
-impl Serialize for XOnlyPublicKey {
-    fn serialize(&self) -> Vec<u8> { Self::serialize(self).to_vec() }
-}
-
 impl Deserialize for XOnlyPublicKey {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         Self::from_slice(bytes).map_err(|_| Error::InvalidXOnlyPublicKey)
     }
-}
-
-impl Serialize for taproot::Signature {
-    fn serialize(&self) -> Vec<u8> { self.to_vec() }
 }
 
 impl Deserialize for taproot::Signature {
@@ -251,16 +178,6 @@ impl Deserialize for taproot::Signature {
     }
 }
 
-impl Serialize for (XOnlyPublicKey, TapLeafHash) {
-    fn serialize(&self) -> Vec<u8> {
-        let ser_pk = self.0.serialize();
-        let mut buf = Vec::with_capacity(ser_pk.len() + self.1.as_byte_array().len());
-        buf.extend(&ser_pk);
-        buf.extend(self.1.as_byte_array());
-        buf
-    }
-}
-
 impl Deserialize for (XOnlyPublicKey, TapLeafHash) {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() < 32 {
@@ -272,23 +189,9 @@ impl Deserialize for (XOnlyPublicKey, TapLeafHash) {
     }
 }
 
-impl Serialize for ControlBlock {
-    fn serialize(&self) -> Vec<u8> { Self::serialize(self) }
-}
-
 impl Deserialize for ControlBlock {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         Self::decode(bytes).map_err(|_| Error::InvalidControlBlock)
-    }
-}
-
-// Versioned ScriptBuf
-impl Serialize for (ScriptBuf, LeafVersion) {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(self.0.len() + 1);
-        buf.extend(self.0.as_bytes());
-        buf.push(self.1.to_consensus());
-        buf
     }
 }
 
@@ -305,45 +208,11 @@ impl Deserialize for (ScriptBuf, LeafVersion) {
     }
 }
 
-impl Serialize for (Vec<TapLeafHash>, KeySource) {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(32 * self.0.len() + key_source_len(&self.1));
-        self.0.consensus_encode(&mut buf).expect("Vecs don't error allocation");
-        // TODO: Add support for writing into a writer for key-source
-        buf.extend(self.1.serialize());
-        buf
-    }
-}
-
 impl Deserialize for (Vec<TapLeafHash>, KeySource) {
     fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
         let (leafhash_vec, consumed) = consensus::deserialize_partial::<Vec<TapLeafHash>>(bytes)?;
         let key_source = KeySource::deserialize(&bytes[consumed..])?;
         Ok((leafhash_vec, key_source))
-    }
-}
-
-impl Serialize for TapTree {
-    fn serialize(&self) -> Vec<u8> {
-        let capacity = self
-            .script_leaves()
-            .map(|l| {
-                l.script().len() + VarInt::from(l.script().len()).size() // script version
-            + 1 // merkle branch
-            + 1 // leaf version
-            })
-            .sum::<usize>();
-        let mut buf = Vec::with_capacity(capacity);
-        for leaf_info in self.script_leaves() {
-            // # Cast Safety:
-            //
-            // TaprootMerkleBranch can only have len at most 128(TAPROOT_CONTROL_MAX_NODE_COUNT).
-            // safe to cast from usize to u8
-            buf.push(leaf_info.merkle_branch().len() as u8);
-            buf.push(leaf_info.version().to_consensus());
-            leaf_info.script().consensus_encode(&mut buf).expect("Vecs don't err");
-        }
-        buf
     }
 }
 
@@ -369,7 +238,6 @@ impl Deserialize for TapTree {
 }
 
 // Helper function to compute key source len
-fn key_source_len(key_source: &KeySource) -> usize { 4 + 4 * (key_source.1).as_ref().len() }
 
 // TODO: This error is still too general but splitting it up is
 // non-trivial because it is returned by the Deserialize trait.
@@ -568,7 +436,7 @@ mod tests {
             )
             .unwrap();
         let tree = TapTree::try_from(builder).unwrap();
-        let tree_prime = TapTree::deserialize(&tree.serialize()).unwrap();
+        let tree_prime = TapTree::deserialize(&crate::encoding::encode_to_vec(&tree)).unwrap();
         assert_eq!(tree, tree_prime);
     }
 

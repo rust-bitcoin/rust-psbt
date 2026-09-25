@@ -35,7 +35,7 @@ use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
 use crate::map::Map;
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
-use crate::serialize::{Deserialize, Serialize};
+use crate::serialize::Deserialize;
 use crate::{raw, serialize};
 
 /// A key-value map for an output of the corresponding index in the unsigned
@@ -915,7 +915,7 @@ impl Map for Output {
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_OUT_AMOUNT, key: vec![] },
-            value: self.amount.serialize(),
+            value: crate::encoding::encode_to_vec(&self.amount),
         });
 
         // BIP-375 represents an underived silent payment output by omitting the script, so
@@ -929,7 +929,7 @@ impl Map for Output {
         if !omit_script {
             rv.push(raw::Pair {
                 key: raw::Key { type_value: PSBT_OUT_SCRIPT, key: vec![] },
-                value: self.script_pubkey.serialize(),
+                value: crate::encoding::encode_to_vec(&self.script_pubkey),
             });
         }
 
@@ -1284,7 +1284,7 @@ mod tests {
 
         let mut from_pairs = Vec::new();
         for pair in output.pairs() {
-            from_pairs.extend(pair.serialize());
+            from_pairs.extend(crate::encoding::encode_to_vec(&pair));
         }
         from_pairs.push(crate::consts::PSBT_SEPARATOR);
 

@@ -56,7 +56,6 @@ use crate::error::{write_err, FundingUtxoError};
 use crate::map::Map;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
-use crate::serialize::Serialize;
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 use crate::{raw, serialize, SignError};
 
@@ -2074,12 +2073,12 @@ impl Map for Input {
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_IN_PREVIOUS_TXID, key: vec![] },
-            value: self.previous_txid.serialize(),
+            value: crate::encoding::encode_to_vec(&self.previous_txid),
         });
 
         rv.push(raw::Pair {
             key: raw::Key { type_value: PSBT_IN_OUTPUT_INDEX, key: vec![] },
-            value: self.spent_output_index.serialize(),
+            value: self.spent_output_index.to_le_bytes().to_vec(),
         });
 
         v2_impl_psbt_get_pair! {
@@ -2128,20 +2127,44 @@ impl Map for Input {
             rv.push(self.final_script_witness, PSBT_IN_FINAL_SCRIPTWITNESS)
         }
 
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.ripemd160_preimages, PSBT_IN_RIPEMD160)
+        for (hash, preimage) in &self.ripemd160_preimages {
+            rv.push(raw::Pair {
+                key: raw::Key {
+                    type_value: PSBT_IN_RIPEMD160,
+                    key: crate::encoding::encode_to_vec(hash),
+                },
+                value: preimage.clone(),
+            });
         }
 
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.sha256_preimages, PSBT_IN_SHA256)
+        for (hash, preimage) in &self.sha256_preimages {
+            rv.push(raw::Pair {
+                key: raw::Key {
+                    type_value: PSBT_IN_SHA256,
+                    key: crate::encoding::encode_to_vec(hash),
+                },
+                value: preimage.clone(),
+            });
         }
 
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.hash160_preimages, PSBT_IN_HASH160)
+        for (hash, preimage) in &self.hash160_preimages {
+            rv.push(raw::Pair {
+                key: raw::Key {
+                    type_value: PSBT_IN_HASH160,
+                    key: crate::encoding::encode_to_vec(hash),
+                },
+                value: preimage.clone(),
+            });
         }
 
-        v2_impl_psbt_get_pair! {
-            rv.push_map(self.hash256_preimages, PSBT_IN_HASH256)
+        for (hash, preimage) in &self.hash256_preimages {
+            rv.push(raw::Pair {
+                key: raw::Key {
+                    type_value: PSBT_IN_HASH256,
+                    key: crate::encoding::encode_to_vec(hash),
+                },
+                value: preimage.clone(),
+            });
         }
 
         v2_impl_psbt_get_pair! {
@@ -2684,7 +2707,7 @@ mod test {
 
         let mut from_pairs = Vec::new();
         for pair in input.pairs() {
-            from_pairs.extend(pair.serialize());
+            from_pairs.extend(crate::encoding::encode_to_vec(&pair));
         }
         from_pairs.push(crate::consts::PSBT_SEPARATOR);
 
@@ -2996,7 +3019,7 @@ mod test {
         );
 
         let mut cb_bytes = vec![0x01u8];
-        cb_bytes.extend_from_slice(&xonly.serialize());
+        cb_bytes.extend_from_slice(&crate::encoding::encode_to_vec(&xonly));
         input.tap_scripts.insert(
             ControlBlock::decode(&cb_bytes).unwrap(),
             (ScriptBuf::from_bytes(vec![0x53]), LeafVersion::TapScript),
