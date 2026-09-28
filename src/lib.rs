@@ -25,6 +25,9 @@ pub extern crate bitcoin;
 pub extern crate miniscript;
 
 mod consts;
+#[cfg(feature = "silent-payments")]
+mod dleq;
+mod encoding;
 mod error;
 #[macro_use]
 mod macros;
@@ -32,6 +35,8 @@ mod extractor;
 #[cfg(feature = "miniscript")]
 mod finalizer;
 mod map;
+mod psbt;
+mod raw;
 #[cfg(feature = "serde")]
 mod serde_utils;
 mod sighash_type;
@@ -39,38 +44,55 @@ mod v0;
 mod version;
 
 #[cfg(feature = "silent-payments")]
-pub mod dleq;
-pub mod encoding;
-pub mod psbt;
-pub mod raw;
-
-#[rustfmt::skip] // Keep public re-exports separate from private imports.
+#[doc(inline)]
+pub use crate::dleq::{DleqProof, InvalidLengthError};
+#[cfg(feature = "std")]
+#[doc(inline)]
+pub use crate::encoding::{decode_from_reader, encode_to_writer};
+#[cfg(feature = "miniscript")]
+#[doc(inline)]
+pub use crate::finalizer::{
+    FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
+    InterpreterCheckInputError,
+};
 #[doc(inline)]
 pub use crate::{
-    extractor::{Extractor, ExtractError, ExtractTxError, ExtractTxFeeRateError},
-    error::{
-        DeserializeError, DetermineLockTimeError, IndexOutOfBoundsError, InputsNotModifiableError,
-        NotUnsignedError, OutputsNotModifiableError, PartialSigsSighashTypeError,
-        PsbtNotModifiableError, SignError, InconsistentKeySourcesError, FeeError, FundingUtxoError
+    encoding::{
+        decode_from_slice, decode_from_slice_unbounded, encode_to_hex, encode_to_vec,
+        ExactPrefixedSliceEncoder, ExactSliceEncoder, PrefixedSliceEncoder, PsbtDecode, PsbtEncode,
+        SliceEncoder, VecDecoder,
     },
-    psbt::Psbt,
-    sighash_type::{PsbtSighashType, InvalidSighashTypeError, ParseSighashTypeError},
-    version::{Version, UnsupportedVersionError},
-    v0::{DeserializeV0Error, SerializeV0Error},
+    error::{
+        DeserializeError, DetermineLockTimeError, FeeError, FundingUtxoError,
+        InconsistentKeySourcesError, IndexOutOfBoundsError, InputsNotModifiableError,
+        NotUnsignedError, OutputsNotModifiableError, PartialSigsSighashTypeError,
+        PsbtNotModifiableError, SignError,
+    },
+    extractor::{ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor},
     map::{
         // We do not re-export any of the input/output/global error types, use form `input::DecodeError`.
         global::{self, Global},
         input::{self, Input, InputBuilder},
         output::{self, Output, OutputBuilder},
     },
+    psbt::{
+        combine, CombineError, Constructor, Creator, DecodeError, GetKey, GetKeyError,
+        InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputType, OutputsOnlyModifiable, Psbt,
+        PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
+        Updater,
+    },
+    raw::{
+        InvalidProprietaryKeyError, Key, KeyDecodeError, KeyDecoder, KeyEncoder, Pair,
+        PairDecodeError, PairDecoder, PairEncoder, ProprietaryKey, ProprietaryKeyEncoder,
+        ProprietaryType,
+    },
+    sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
+    v0::{DeserializeV0Error, SerializeV0Error},
+    version::{UnsupportedVersionError, Version},
 };
-
-#[cfg(feature = "silent-payments")]
-pub use dleq::{DleqProof, InvalidLengthError};
-
 #[cfg(feature = "base64")]
 #[doc(inline)]
-pub use crate::v0::ParsePsbtV0Error;
+pub use crate::{psbt::ParsePsbtError, v0::ParsePsbtV0Error};
 
 /// PSBT version 0 - the original PSBT version.
 pub const V0: Version = Version::ZERO;

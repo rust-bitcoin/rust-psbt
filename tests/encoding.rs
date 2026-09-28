@@ -6,12 +6,11 @@ use bitcoin::locktime::absolute;
 use bitcoin::{transaction, Sequence};
 use bitcoin_consensus_encoding::{Decoder, DecoderStatus};
 #[cfg(feature = "std")]
-use psbt_v2::encoding::encode_to_writer;
-use psbt_v2::encoding::{
+use psbt_v2::encode_to_writer;
+use psbt_v2::{
     decode_from_slice, encode_to_hex, encode_to_vec, PrefixedSliceEncoder, PsbtDecode, PsbtEncode,
-    VecDecoder,
+    VecDecoder, Version,
 };
-use psbt_v2::Version;
 
 /// A type with a length-prefixed vector field.
 struct Sequences(Vec<Sequence>);

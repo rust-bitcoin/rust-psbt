@@ -49,11 +49,6 @@ use crate::error::{
     IndexOutOfBoundsError, InputsNotModifiableError, OutputsNotModifiableError,
     PsbtNotModifiableError, SignError,
 };
-#[cfg(feature = "miniscript")]
-pub use crate::finalizer::{
-    FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
-    InterpreterCheckInputError,
-};
 use crate::global::{self, Global};
 use crate::input::{self, Input};
 use crate::output::{self, Output};
@@ -307,7 +302,7 @@ impl Creator {
     /// # Examples
     ///
     /// ```
-    /// use psbt_v2::psbt::{Creator, Constructor, Modifiable};
+    /// use psbt_v2::{Creator, Constructor, Modifiable};
     ///
     /// // Creator role separate from Constructor role.
     /// let psbt = Creator::new()
@@ -334,7 +329,7 @@ impl Creator {
     /// # Examples
     ///
     /// ```
-    /// use psbt_v2::psbt::{Creator, Constructor, InputsOnlyModifiable};
+    /// use psbt_v2::{Creator, Constructor, InputsOnlyModifiable};
     ///
     /// // Creator role separate from Constructor role.
     /// let psbt = Creator::new()
@@ -360,7 +355,7 @@ impl Creator {
     /// # Examples
     ///
     /// ```
-    /// use psbt_v2::psbt::{Creator, Constructor, OutputsOnlyModifiable};
+    /// use psbt_v2::{Creator, Constructor, OutputsOnlyModifiable};
     ///
     /// // Creator role separate from Constructor role.
     /// let psbt = Creator::new()

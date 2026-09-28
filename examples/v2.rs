@@ -17,8 +17,9 @@ use psbt_v2::bitcoin::{
     script, Address, Amount, CompressedPublicKey, Network, OutPoint, PublicKey, ScriptBuf,
     Sequence, TxOut, Txid,
 };
-use psbt_v2::psbt::{self, Constructor, Modifiable, Signer, Updater};
-use psbt_v2::{InputBuilder, Output, OutputBuilder, Psbt};
+use psbt_v2::{
+    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, Signer, Updater,
+};
 
 const DUMMY_UTXO_AMOUNT: Amount = Amount::from_sat(20_000_000);
 const SPEND_AMOUNT: Amount = Amount::from_sat(20_000_000);
@@ -91,7 +92,7 @@ fn main() -> anyhow::Result<()> {
     let updated_by_a = alice.update(psbt.clone())?;
     let updated_by_b = bob.update(psbt)?;
 
-    let updated = psbt::combine(updated_by_a, updated_by_b)?;
+    let updated = combine(updated_by_a, updated_by_b)?;
 
     // The signer role.
 
@@ -99,7 +100,7 @@ fn main() -> anyhow::Result<()> {
     let signed_by_a = alice.sign(updated.clone())?;
     let signed_by_b = bob.sign(updated)?;
 
-    let _signed = psbt::combine(signed_by_a, signed_by_b);
+    let _signed = combine(signed_by_a, signed_by_b);
 
     // At this stage we would usually finalize with miniscript and extract the transaction.
 
