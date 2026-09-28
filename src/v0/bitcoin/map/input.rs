@@ -37,16 +37,6 @@ const PSBT_IN_FINAL_SCRIPTWITNESS: u64 = 0x08;
 const PSBT_IN_RIPEMD160: u64 = 0x0a;
 /// Type: SHA256 preimage PSBT_IN_SHA256 = 0x0b
 const PSBT_IN_SHA256: u64 = 0x0b;
-/// Type: Previous TXID PSBT_IN_PREVIOUS_TXID = 0x0e
-const PSBT_IN_PREVIOUS_TXID: u64 = 0x0e;
-/// Type: Spent Output Index PSBT_IN_OUTPUT_INDEX = 0x0f
-const PSBT_IN_OUTPUT_INDEX: u64 = 0x0f;
-/// Type: Sequence Number PSBT_IN_SEQUENCE = 0x10
-const PSBT_IN_SEQUENCE: u64 = 0x10;
-/// Type: Required Time-based Locktime PSBT_IN_REQUIRED_TIME_LOCKTIME = 0x11
-const PSBT_IN_REQUIRED_TIME_LOCKTIME: u64 = 0x11;
-/// Type: Required Height-based Locktime PSBT_IN_REQUIRED_HEIGHT_LOCKTIME = 0x12
-const PSBT_IN_REQUIRED_HEIGHT_LOCKTIME: u64 = 0x12;
 /// Type: HASH160 preimage PSBT_IN_HASH160 = 0x0c
 const PSBT_IN_HASH160: u64 = 0x0c;
 /// Type: HASH256 preimage PSBT_IN_HASH256 = 0x0d
@@ -63,10 +53,6 @@ const PSBT_IN_TAP_BIP32_DERIVATION: u64 = 0x16;
 const PSBT_IN_TAP_INTERNAL_KEY: u64 = 0x17;
 /// Type: Taproot Merkle Root PSBT_IN_TAP_MERKLE_ROOT = 0x18
 const PSBT_IN_TAP_MERKLE_ROOT: u64 = 0x18;
-/// Type: Silent Payment Elliptic Curve Diffie-Hellman secret share PSBT_IN_SP_ECDH_SHARE = 0x1d
-const PSBT_IN_SP_ECDH_SHARE: u64 = 0x1d;
-/// Type: Silent Payment Discrete Logarithm Equality Proof PSBT_IN_SP_DLEQ = 0x1e
-const PSBT_IN_SP_DLEQ: u64 = 0x1e;
 /// Type: Proprietary Use Type PSBT_IN_PROPRIETARY = 0xFC
 const PSBT_IN_PROPRIETARY: u64 = 0xFC;
 
@@ -246,15 +232,6 @@ impl Input {
                     }
                     btree_map::Entry::Occupied(_) => return Err(Error::DuplicateKey(raw_key)),
                 }
-            }
-            v @ (PSBT_IN_PREVIOUS_TXID
-            | PSBT_IN_OUTPUT_INDEX
-            | PSBT_IN_SEQUENCE
-            | PSBT_IN_REQUIRED_TIME_LOCKTIME
-            | PSBT_IN_REQUIRED_HEIGHT_LOCKTIME
-            | PSBT_IN_SP_ECDH_SHARE
-            | PSBT_IN_SP_DLEQ) => {
-                return Err(Error::ExcludedKey { key_type_value: v });
             }
             _ => match self.unknown.entry(raw_key) {
                 btree_map::Entry::Vacant(empty_key) => {

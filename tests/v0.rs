@@ -10,7 +10,7 @@
 use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, SerializeV0Error, Signer};
+use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, Signer};
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const TEST_XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
@@ -32,7 +32,7 @@ fn make_tx_out(sats: u64) -> TxOut {
 
 /// Serializes `psbt` as a v0 PSBT then deserializes the bytes back into a v2 PSBT.
 fn round_trip_v0(psbt: &Psbt) -> Psbt {
-    let bytes = psbt.serialize_v0_lossy().expect("serialize_v0_lossy");
+    let bytes = psbt.serialize_v0().expect("serialize_v0");
     Psbt::deserialize_v0(&bytes).expect("deserialize_v0")
 }
 
@@ -115,12 +115,11 @@ fn strict_encode_round_trips_v0_decoded_psbt() {
     assert_eq!(encoded, bytes);
 }
 
-/// A PSBT with v2-only fields fails the strict encoder but succeeds with the
-/// lossy one, and the lossy output re-decodes to a strictly-encodable PSBT.
+/// Encoded v0 PSBT implies construction is complete, so tx_modifiable_flags is
+/// intentionally cleared; BIP-375 silent payment fields survive as unknown keys.
 #[test]
-fn strict_fails_on_v2_only_fields_lossy_drops_them() {
-    // The Constructor marks the PSBT as inputs-and-outputs modifiable, a
-    // v2-only global field.
+fn v2_only_fields_in_v0_encoding() {
+    // Encoding to v0 implies construction is complete.
     let psbt = Constructor::<Modifiable>::default()
         .input(Input::new(&OutPoint::null()))
         .output(Output::new(make_tx_out(1)))
@@ -129,12 +128,52 @@ fn strict_fails_on_v2_only_fields_lossy_drops_them() {
         .unwrap();
     assert_eq!(psbt.global.tx_modifiable_flags & 0b11, 0b11);
 
-    assert!(matches!(psbt.serialize_v0(), Err(SerializeV0Error::Lossy)));
+    let v0_bytes = psbt.serialize_v0().expect("serialize_v0");
+    assert!(!v0_bytes.is_empty());
 
-    let v0_bytes = psbt.serialize_v0_lossy().expect("lossy encode");
+    let degraded = psbt.v0_degraded();
+    assert!(degraded.is_empty()); // no SP fields set, and tx_modifiable isn't tracked.
+
+    // Decoded PSBT has tx_modifiable_flags zero, the v0 encoding implied construction complete.
     let decoded = Psbt::deserialize_v0(&v0_bytes).unwrap();
-    // The dropped modifiable flags are gone: the decoded PSBT strictly encodes.
-    assert_eq!(decoded.serialize_v0().unwrap(), v0_bytes);
+    assert_eq!(decoded.global.tx_modifiable_flags, 0);
+
+    // Silent payment fields survive v0 encoding as unknown keys.
+    #[cfg(feature = "silent-payments")]
+    {
+        use psbt_v2::bitcoin::CompressedPublicKey;
+        use psbt_v2::{DleqProof, SpV0Info};
+
+        let pk_bytes = <[u8; 33]>::from_hex(PUBKEY_HEX).unwrap();
+        let pk = CompressedPublicKey::from_slice(&pk_bytes).unwrap();
+
+        let mut sp_psbt = Constructor::<Modifiable>::default()
+            .input(Input::new(&OutPoint::null()))
+            .output(Output::new(make_tx_out(1)))
+            .expect("output must be valid")
+            .psbt()
+            .unwrap();
+
+        sp_psbt.global.sp_ecdh_shares.insert(pk, pk);
+        sp_psbt.global.sp_dleq_proofs.insert(pk, DleqProof([0xAB; 64]));
+        sp_psbt.inputs[0].sp_ecdh_shares.insert(pk, pk);
+        sp_psbt.outputs[0].sp_v0_info = Some(SpV0Info::new(pk, pk));
+
+        let degraded = sp_psbt.v0_degraded();
+        assert_eq!(degraded.sp_ecdh_shares, 1);
+        assert_eq!(degraded.sp_dleq_proofs, 1);
+        assert_eq!(degraded.sp_dropped_inputs, 1);
+        assert_eq!(degraded.sp_dropped_outputs, 1);
+        assert!(!degraded.is_empty());
+
+        // Round-trip: SP fields survive v0 encoding.
+        let v0_bytes = sp_psbt.serialize_v0().expect("serialize_v0 with SP");
+        let decoded = Psbt::deserialize_v0(&v0_bytes).unwrap();
+        assert_eq!(decoded.global.sp_ecdh_shares.len(), 1);
+        assert_eq!(decoded.global.sp_dleq_proofs.len(), 1);
+        assert_eq!(decoded.inputs[0].sp_ecdh_shares.len(), 1);
+        assert!(decoded.outputs[0].sp_v0_info.is_some());
+    }
 }
 
 /// Per-input fields that have no v0 equivalent (min_time/min_height) surface in
@@ -199,11 +238,11 @@ fn sign_then_convert_preserves_signatures() {
 
 #[cfg(feature = "base64")]
 #[test]
-fn base64_encode_lossy_then_decode_round_trips() {
+fn base64_encode_then_decode_round_trips() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let psbt = Psbt::deserialize_v0(&bytes).unwrap();
 
-    let b64 = psbt.serialize_v0_base64_lossy().expect("serialize_v0_base64_lossy");
+    let b64 = psbt.serialize_v0_base64().expect("serialize_v0_base64");
     let decoded = Psbt::deserialize_v0_base64(&b64).expect("deserialize_v0_base64");
     assert_eq!(decoded, psbt);
 }

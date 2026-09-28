@@ -91,11 +91,6 @@ pub enum Error {
     PartialDataConsumption,
     /// I/O error.
     Io(io::Error),
-    /// Key must be excluded from this version of PSBT (see consts.rs for u8 values).
-    ExcludedKey {
-        /// The disallowed valued.
-        key_type_value: u64,
-    },
 }
 
 impl fmt::Display for Error {
@@ -144,11 +139,6 @@ impl fmt::Display for Error {
             Self::PartialDataConsumption =>
                 f.write_str("data not consumed entirely when explicitly deserializing"),
             Self::Io(ref e) => write_err!(f, "I/O error"; e),
-            Self::ExcludedKey { key_type_value } => write!(
-                f,
-                "found a keypair type that is explicitly excluded: {}",
-                crate::consts::psbt_in_key_type_value_to_str(*key_type_value)
-            ),
         }
     }
 }
@@ -183,8 +173,7 @@ impl std::error::Error for Error {
             | Self::TapTree(_)
             | Self::XPubKey(_)
             | Self::Version(_)
-            | Self::PartialDataConsumption
-            | Self::ExcludedKey { .. } => None,
+            | Self::PartialDataConsumption => None,
         }
     }
 }
