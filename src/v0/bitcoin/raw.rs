@@ -14,9 +14,9 @@ use bitcoin::consensus::encode::{
     self, deserialize, serialize, Decodable, Encodable, VarInt, MAX_VEC_SIZE,
 };
 use bitcoin::hex::DisplayHex;
+use bitcoin::io::{self, Write};
 
 use super::serialize::{Deserialize, Serialize};
-use crate::io::{self, Write};
 use crate::v0::bitcoin::Error;
 
 /// A PSBT key in its raw byte form.

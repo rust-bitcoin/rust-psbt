@@ -18,6 +18,7 @@ use core::fmt;
 use bitcoin::consensus::encode as consensus;
 use bitcoin::consensus::encode::{Decodable, Encodable, VarInt};
 use bitcoin::hex::DisplayHex;
+use bitcoin::io::{self, Write};
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, ByteVecDecoderError, BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder,
     CompactSizeU64Decoder, Decoder, Decoder2, Decoder2Error, DecoderStatus, Encoder2, Encoder3,
@@ -26,7 +27,6 @@ use bitcoin_consensus_encoding::{
 
 use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
-use crate::io::{self, Write};
 
 /// A PSBT key-value pair in its raw byte form.
 ///

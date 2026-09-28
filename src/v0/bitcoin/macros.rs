@@ -59,7 +59,7 @@ macro_rules! impl_psbtmap_deserialize {
 macro_rules! impl_psbtmap_decoding {
     ($thing:ty) => {
         impl $thing {
-            pub(crate) fn decode<R: $crate::io::Read + ?Sized>(
+            pub(crate) fn decode<R: bitcoin::io::Read + ?Sized>(
                 r: &mut R,
             ) -> core::result::Result<Self, $crate::v0::bitcoin::Error> {
                 let mut rv: Self = core::default::Default::default();

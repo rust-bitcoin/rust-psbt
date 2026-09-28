@@ -1,8 +1,7 @@
 //! Test utility functions.
 
 use psbt_v2::bitcoin::hex::{self, FromHex};
-use psbt_v2::psbt::Psbt;
-use psbt_v2::{DeserializeError, DeserializeV0Error};
+use psbt_v2::{DeserializeError, DeserializeV0Error, Psbt};
 
 #[track_caller]
 pub fn hex_psbt_v0(s: &str) -> Result<Psbt, DeserializeV0Error> {

@@ -4,10 +4,9 @@ use alloc::boxed::Box;
 use core::fmt;
 
 use bitcoin::consensus::encode;
-use bitcoin::{hashes, secp256k1, OutPoint, Txid};
+use bitcoin::{hashes, io, secp256k1, OutPoint, Txid};
 
 use crate::error::write_err;
-use crate::io;
 use crate::v0::bitcoin::raw;
 
 /// Enum for marking psbt hash error.

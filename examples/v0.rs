@@ -12,7 +12,7 @@ use psbt_v2::bitcoin::bip32::{DerivationPath, Fingerprint};
 use psbt_v2::bitcoin::consensus::encode::deserialize;
 use psbt_v2::bitcoin::hex::FromHex;
 use psbt_v2::bitcoin::{PublicKey, ScriptBuf, Transaction};
-use psbt_v2::psbt::Psbt;
+use psbt_v2::Psbt;
 
 /// BIP-174 workflow A, step 1 (create): an unsigned PSBT with two inputs and two outputs, as
 /// a participant might receive from a coordinator that only supports v0.

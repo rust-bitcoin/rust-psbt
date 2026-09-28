@@ -8,9 +8,9 @@ use core::convert::TryFrom;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
 use bitcoin::consensus::encode::MAX_VEC_SIZE;
 use bitcoin::consensus::{encode, Decodable};
+use bitcoin::io::{Cursor, Read};
 use bitcoin::Transaction;
 
-use crate::io::{Cursor, Read};
 use crate::v0::bitcoin::map::Map;
 use crate::v0::bitcoin::{raw, Error, Psbt};
 

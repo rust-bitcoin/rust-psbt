@@ -4,7 +4,7 @@
 
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use psbt_v2::psbt::Psbt;
+use psbt_v2::Psbt;
 
 fn do_test(data: (&[u8], &[u8])) {
     let (bytes_a, bytes_b) = data;

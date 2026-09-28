@@ -11,8 +11,7 @@ use psbt::bitcoin::bip32::{IntoDerivationPath, Xpriv, Xpub};
 use psbt::bitcoin::opcodes::all::OP_CHECKMULTISIG;
 use psbt::bitcoin::secp256k1::Secp256k1;
 use psbt::bitcoin::{Address, Amount, OutPoint, PublicKey, ScriptBuf, TxOut};
-use psbt::psbt::{Creator, Finalizer, Signer};
-use psbt::{Extractor, InputBuilder, OutputBuilder};
+use psbt::{Creator, Extractor, Finalizer, InputBuilder, OutputBuilder, Signer};
 use psbt_v2 as psbt;
 
 const TEST_XPRIV: &str =
