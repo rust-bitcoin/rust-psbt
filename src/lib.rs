@@ -44,8 +44,6 @@ pub mod encoding;
 pub mod psbt;
 pub mod raw;
 
-use bitcoin::io;
-
 #[rustfmt::skip] // Keep public re-exports separate from private imports.
 #[doc(inline)]
 pub use crate::{

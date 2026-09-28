@@ -11,6 +11,7 @@ use core::convert::{TryFrom, TryInto};
 use bitcoin::bip32::{ChildNumber, Fingerprint, KeySource};
 use bitcoin::consensus::encode::{self, deserialize_partial, serialize, Decodable, Encodable};
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
+use bitcoin::io::{self, Write};
 use bitcoin::key::PublicKey;
 use bitcoin::secp256k1::{self, XOnlyPublicKey};
 use bitcoin::taproot::{
@@ -19,7 +20,6 @@ use bitcoin::taproot::{
 use bitcoin::{ecdsa, taproot, ScriptBuf, Transaction, TxOut, VarInt, Witness};
 
 use super::map::{Input, Map, Output};
-use crate::io::{self, Write};
 use crate::sighash_type::PsbtSighashType;
 use crate::v0::bitcoin::{Error, Psbt};
 
