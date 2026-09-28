@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: CC0-1.0
 
-use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
-use bitcoin::consensus::encode as consensus;
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
-use crate::serialize::{self, Deserialize, Serialize};
 
 /// The PSBT version.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,18 +48,6 @@ impl TryFrom<u32> for Version {
             2 => Ok(Self::TWO),
             n => Err(UnsupportedVersionError(n)),
         }
-    }
-}
-
-impl Serialize for Version {
-    fn serialize(&self) -> Vec<u8> { consensus::serialize(&self.to_u32()) }
-}
-
-impl Deserialize for Version {
-    fn deserialize(bytes: &[u8]) -> Result<Self, serialize::Error> {
-        let n: u32 = consensus::deserialize(bytes)?;
-        let version = Self::try_from(n)?;
-        Ok(version)
     }
 }
 
@@ -185,14 +170,14 @@ mod tests {
 
     #[test]
     fn version_serialize() {
-        assert_eq!(Version::ZERO.serialize(), vec![0x00, 0x00, 0x00, 0x00]);
-        assert_eq!(Version::TWO.serialize(), vec![0x02, 0x00, 0x00, 0x00]);
+        assert_eq!(crate::encoding::encode_to_vec(&Version::ZERO), vec![0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(crate::encoding::encode_to_vec(&Version::TWO), vec![0x02, 0x00, 0x00, 0x00]);
     }
 
     #[test]
     fn version_roundtrip() {
-        let bytes = Version::TWO.serialize();
-        let version = Version::deserialize(&bytes).unwrap();
+        let bytes = crate::encoding::encode_to_vec(&Version::TWO);
+        let version = crate::encoding::decode_from_slice::<Version>(&bytes).unwrap();
         assert_eq!(version, Version::TWO);
     }
 

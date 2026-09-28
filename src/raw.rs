@@ -16,7 +16,7 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::consensus::encode as consensus;
-use bitcoin::consensus::encode::{Decodable, Encodable, VarInt, MAX_VEC_SIZE};
+use bitcoin::consensus::encode::{Decodable, Encodable, VarInt};
 use bitcoin::hex::DisplayHex;
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, ByteVecDecoderError, BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder,
@@ -27,8 +27,6 @@ use bitcoin_consensus_encoding::{
 use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 use crate::io::{self, Write};
-use crate::serialize;
-use crate::serialize::{Deserialize, Serialize};
 
 /// A PSBT key-value pair in its raw byte form.
 ///
@@ -45,32 +43,9 @@ pub struct Pair {
     pub value: Vec<u8>,
 }
 
-impl Pair {
-    pub(crate) fn decode<R: io::Read + ?Sized>(r: &mut R) -> Result<Self, serialize::Error> {
-        Ok(Self { key: Key::decode(r)?, value: Decodable::consensus_decode(r)? })
-    }
-}
-
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "type: {:#x}, key: {:x}", self.type_value, self.key.as_hex())
-    }
-}
-
-impl Serialize for Pair {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend(self.key.serialize());
-        // <value> := <valuelen> <valuedata>
-        self.value.consensus_encode(&mut buf).unwrap();
-        buf
-    }
-}
-
-impl Deserialize for Pair {
-    fn deserialize(bytes: &[u8]) -> Result<Self, serialize::Error> {
-        let mut decoder = bytes;
-        Self::decode(&mut decoder)
     }
 }
 
@@ -88,62 +63,6 @@ pub struct Key {
     /// The `keydata` itself in raw byte form.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
     pub key: Vec<u8>,
-}
-
-impl Key {
-    pub(crate) fn decode<R: io::Read + ?Sized>(r: &mut R) -> Result<Self, serialize::Error> {
-        let VarInt(byte_size): VarInt = Decodable::consensus_decode(r)?;
-
-        if byte_size == 0 {
-            return Err(serialize::Error::NoMorePairs);
-        }
-
-        let type_value: VarInt = Decodable::consensus_decode(r)?;
-
-        let key_byte_size = match byte_size.checked_sub(
-            u64::try_from(type_value.size()).expect("size() returns 1-9, fits inside u64"),
-        ) {
-            Some(val) => val,
-            None => {
-                return Err(consensus::Error::ParseFailed(
-                    "encoded keytype is larger than specified length",
-                ))?;
-            }
-        };
-
-        if key_byte_size > MAX_VEC_SIZE as u64 {
-            return Err(consensus::Error::OversizedVectorAllocation {
-                requested: key_byte_size as usize,
-                max: MAX_VEC_SIZE,
-            }
-            .into());
-        }
-
-        let mut key = Vec::with_capacity(key_byte_size as usize);
-        for _ in 0..key_byte_size {
-            key.push(Decodable::consensus_decode(r)?);
-        }
-
-        Ok(Self { type_value: type_value.0, key })
-    }
-}
-
-impl Serialize for Key {
-    fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let type_value = VarInt::from(self.type_value);
-        VarInt::from(self.key.len() + type_value.size())
-            .consensus_encode(&mut buf)
-            .expect("in-memory writers don't error");
-
-        type_value.consensus_encode(&mut buf).expect("in-memory writers don't error");
-
-        for key in &self.key {
-            key.consensus_encode(&mut buf).expect("in-memory writers don't error");
-        }
-
-        buf
-    }
 }
 
 /// Default implementation for proprietary key subtyping
@@ -178,34 +97,44 @@ where
     }
 }
 
+/// Error when attempting to construct a [`ProprietaryKey`] from a [`Key`]
+/// whose type byte is not `0xFC` or whose key data is malformed.
+#[derive(Debug)]
+pub struct InvalidProprietaryKeyError;
+
+impl fmt::Display for InvalidProprietaryKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid proprietary key")
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for InvalidProprietaryKeyError {}
+
 impl<Subtype> TryFrom<Key> for ProprietaryKey<Subtype>
 where
     Subtype: Copy + From<u64> + Into<u64>,
 {
-    type Error = serialize::Error;
+    type Error = InvalidProprietaryKeyError;
 
     /// Constructs a [`ProprietaryKey`] from a [`Key`].
     ///
     /// # Errors
     ///
-    /// Returns [`serialize::Error::InvalidProprietaryKey`] if `key` does not start with `0xFC`.
+    /// Returns [`InvalidProprietaryKeyError`] if `key` does not start with `0xFC`.
     fn try_from(key: Key) -> Result<Self, Self::Error> {
         if key.type_value != 0xFC {
-            return Err(serialize::Error::InvalidProprietaryKey);
+            return Err(InvalidProprietaryKeyError);
         }
 
         let mut inner = Decoder2::<ByteVecDecoder, CompactSizeU64Decoder>::default();
 
         let mut bytes = key.key.as_slice();
-        if inner
-            .push_bytes(&mut bytes)
-            .map_err(|_| serialize::Error::InvalidProprietaryKey)?
-            .needs_more()
-        {
-            return Err(serialize::Error::InvalidProprietaryKey);
+        if inner.push_bytes(&mut bytes).map_err(|_| InvalidProprietaryKeyError)?.needs_more() {
+            return Err(InvalidProprietaryKeyError);
         }
 
-        let (prefix, subtype) = inner.end().map_err(|_| serialize::Error::InvalidProprietaryKey)?;
+        let (prefix, subtype) = inner.end().map_err(|_| InvalidProprietaryKeyError)?;
 
         Ok(Self { prefix, subtype: subtype.into(), key: bytes.to_vec() })
     }

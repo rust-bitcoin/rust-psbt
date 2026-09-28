@@ -19,7 +19,6 @@ pub mod output;
 use alloc::vec::Vec;
 
 use crate::raw;
-use crate::serialize::Serialize;
 
 /// A trait that describes a PSBT key-value map.
 pub(crate) trait Map {
@@ -40,7 +39,7 @@ pub(crate) trait Map {
     fn serialize_map(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         for pair in Map::get_pairs(self) {
-            buf.extend(&pair.serialize());
+            buf.extend(&crate::encoding::encode_to_vec(&pair));
         }
         buf.push(0x00_u8);
         buf

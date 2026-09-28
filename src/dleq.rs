@@ -9,8 +9,6 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::serialize::{Deserialize, Serialize};
-
 /// A 64-byte DLEQ proof (BIP-374).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DleqProof(pub [u8; 64]);
@@ -106,21 +104,6 @@ impl TryFrom<Vec<u8>> for DleqProof {
     type Error = InvalidLengthError;
 
     fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> { Self::try_from(v.as_slice()) }
-}
-
-impl Serialize for DleqProof {
-    fn serialize(&self) -> Vec<u8> { self.0.to_vec() }
-}
-
-impl Deserialize for DleqProof {
-    fn deserialize(bytes: &[u8]) -> Result<Self, crate::serialize::Error> {
-        Self::try_from(bytes).map_err(|e| {
-            crate::serialize::Error::InvalidDleqProof(InvalidLengthError {
-                got: e.got,
-                expected: e.expected,
-            })
-        })
-    }
 }
 
 /// Error returned when a byte array has an invalid length for a dleq proof.
