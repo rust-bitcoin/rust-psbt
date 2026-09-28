@@ -43,7 +43,6 @@ pub mod dleq;
 pub mod encoding;
 pub mod psbt;
 pub mod raw;
-pub mod serialize;
 
 use bitcoin::io;
 
