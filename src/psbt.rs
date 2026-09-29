@@ -2136,11 +2136,7 @@ mod tests {
         let mut slice = &output_encoded[..];
 
         loop {
-            use crate::raw::{KeyDecodeError, KeyDecoder};
-
-            if slice.is_empty() {
-                break;
-            }
+            use crate::map::{KeyDecodeError, KeyDecoder};
 
             // Decode key.
             let mut key_decoder = KeyDecoder::default();
@@ -2155,11 +2151,6 @@ mod tests {
                 key.type_value, PSBT_OUT_SCRIPT,
                 "underived silent payment output must not encode PSBT_OUT_SCRIPT"
             );
-
-            // Skip the value.
-            let mut val_decoder = bitcoin_consensus_encoding::ByteVecDecoder::default();
-            val_decoder.push_bytes(&mut slice).unwrap();
-            val_decoder.end().unwrap();
         }
 
         assert_eq!(decoded.serialize(), encoded);

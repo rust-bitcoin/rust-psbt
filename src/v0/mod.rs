@@ -24,22 +24,22 @@ use self::bitcoin::{Input, Output, Psbt};
 use crate::{psbt, DetermineLockTimeError};
 
 /// Converts a v0 raw key into the equivalent v2 raw key.
-fn raw_key_v0_to_v2(k: bitcoin::raw::Key) -> crate::raw::Key {
-    crate::raw::Key { type_value: k.type_value, key: k.key }
+fn raw_key_v0_to_v2(k: bitcoin::raw::Key) -> crate::map::Key {
+    crate::map::Key { type_value: k.type_value, key: k.key }
 }
 
 /// Converts a v0 raw proprietary key into the equivalent v2 raw proprietary key.
-fn raw_proprietary_v0_to_v2(k: bitcoin::raw::ProprietaryKey) -> crate::raw::ProprietaryKey {
-    crate::raw::ProprietaryKey { prefix: k.prefix, subtype: k.subtype, key: k.key }
+fn raw_proprietary_v0_to_v2(k: bitcoin::raw::ProprietaryKey) -> crate::map::ProprietaryKey {
+    crate::map::ProprietaryKey { prefix: k.prefix, subtype: k.subtype, key: k.key }
 }
 
 /// Converts a v2 raw key into the equivalent v0 raw key.
-fn raw_key_v2_to_v0(k: &crate::raw::Key) -> bitcoin::raw::Key {
+fn raw_key_v2_to_v0(k: &crate::map::Key) -> bitcoin::raw::Key {
     bitcoin::raw::Key { type_value: k.type_value, key: k.key.clone() }
 }
 
 /// Converts a v2 raw proprietary key into the equivalent v0 raw proprietary key.
-fn raw_proprietary_v2_to_v0(k: &crate::raw::ProprietaryKey) -> bitcoin::raw::ProprietaryKey {
+fn raw_proprietary_v2_to_v0(k: &crate::map::ProprietaryKey) -> bitcoin::raw::ProprietaryKey {
     bitcoin::raw::ProprietaryKey {
         prefix: k.prefix.clone(),
         subtype: k.subtype,

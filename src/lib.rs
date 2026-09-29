@@ -36,7 +36,7 @@ mod extractor;
 mod finalizer;
 mod map;
 mod psbt;
-mod raw;
+
 #[cfg(feature = "serde")]
 mod serde_utils;
 mod sighash_type;
@@ -79,16 +79,20 @@ pub use crate::{
         global::{self, Global},
         input::{self, Input, InputBuilder},
         output::{self, Output, OutputBuilder},
+        InvalidProprietaryKeyError,
+        Key,
+        KeyDecodeError,
+        KeyDecoder,
+        KeyEncoder,
+        ProprietaryKey,
+        ProprietaryKeyEncoder,
+        ProprietaryType,
     },
     psbt::{
         combine, CombineError, Constructor, Creator, DecodeError, GetKey, GetKeyError,
         InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputType, OutputsOnlyModifiable, Psbt,
         PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
         Updater,
-    },
-    raw::{
-        InvalidProprietaryKeyError, Key, KeyDecodeError, KeyDecoder, KeyEncoder, ProprietaryKey,
-        ProprietaryKeyEncoder, ProprietaryType,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},

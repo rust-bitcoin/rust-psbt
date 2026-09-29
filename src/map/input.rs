@@ -27,6 +27,9 @@ use bitcoin_consensus_encoding::{
     ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
+use super::{
+    Key, KeyDecodeError, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBT_IN_HASH160, PSBT_IN_HASH256, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_OUTPUT_INDEX,
@@ -54,9 +57,8 @@ use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::{write_err, FundingUtxoError};
 use crate::psbt::{OutputType, SigningAlgorithm};
-use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
-use crate::{raw, SignError};
+use crate::SignError;
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -153,10 +155,10 @@ pub struct Input {
 
     /// Proprietary key-value pairs for this input.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs for this input.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    pub unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 impl Input {
@@ -526,155 +528,155 @@ pub struct InputDecoder {
     sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
     #[cfg(feature = "silent-payments")]
     sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
-    proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
+    unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
     DecodingSeparator,
-    DecodingKey(raw::KeyDecoder),
+    DecodingKey(KeyDecoder),
     /// Decoding the previous txid.
     DecodingPreviousTxid {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<32>>,
     },
     /// Decoding the spent output index.
     DecodingOutputIndex {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     /// Decoding a sequence value.
     DecodingSequence {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     /// Decoding a minimum time locktime value.
     DecodingMinTime {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     /// Decoding a minimum height locktime value.
     DecodingMinHeight {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     /// Decoding a non-witness UTXO (full transaction).
     DecodingNonWitnessUtxo {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<<Transaction as crate::encoding::PsbtDecode>::Decoder>,
     },
     /// Decoding a witness UTXO (TxOut).
     DecodingWitnessUtxo {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<<TxOut as crate::encoding::PsbtDecode>::Decoder>,
     },
     /// Decoding a sighash type.
     DecodingSighashType {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     /// Decoding a redeem script.
     DecodingRedeemScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a witness script.
     DecodingWitnessScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a final scriptSig.
     DecodingFinalScriptSig {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a final scriptWitness.
     DecodingFinalScriptWitness {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<<Witness as crate::encoding::PsbtDecode>::Decoder>,
     },
     /// Decoding a taproot key spend signature.
     DecodingTapKeySig {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a taproot internal key.
     DecodingTapInternalKey {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<32>>,
     },
     /// Decoding a taproot merkle root.
     DecodingTapMerkleRoot {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<32>>,
     },
     /// Decoding a partial signature.
     DecodingPartialSig {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a BIP32 derivation.
     DecodingBip32Derivation {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a RIPEMD160 preimage.
     DecodingRipemd160 {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a SHA256 preimage.
     DecodingSha256 {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a HASH160 preimage.
     DecodingHash160 {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a HASH256 preimage.
     DecodingHash256 {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a taproot script signature.
     DecodingTapScriptSig {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a taproot leaf script.
     DecodingTapLeafScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a taproot BIP32 derivation.
     DecodingTapBip32Derivation {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding a proprietary value.
     DecodingProprietary {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     /// Decoding an unknown value.
     DecodingUnknown {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     #[cfg(feature = "silent-payments")]
     /// Decoding an ECDH share for silent payments.
     DecodingSpEcdhShare {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<33>>,
     },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
     DecodingSpDleqProof {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<64>>,
     },
     /// The end-of-map separator has been reached.
@@ -685,7 +687,7 @@ enum DecoderStage {
 
 impl DecoderStage {
     /// Select the appropriate value-decoding stage based on the decoded key.
-    fn from_key(key: raw::Key) -> Result<Self, DecodeError> {
+    fn from_key(key: Key) -> Result<Self, DecodeError> {
         match key.type_value {
             PSBT_IN_PREVIOUS_TXID =>
                 Ok(Self::DecodingPreviousTxid { key, decoder: ValueDecoder::default() }),
@@ -853,7 +855,7 @@ impl Decoder for InputDecoder {
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {
-                        self.stage = DecoderStage::DecodingKey(raw::KeyDecoder::default());
+                        self.stage = DecoderStage::DecodingKey(KeyDecoder::default());
                     }
                     None => return Ok(DecoderStatus::NeedsMore),
                 }
@@ -1418,7 +1420,7 @@ impl Decoder for InputDecoder {
                     let value = decoder.end().map_err(|e| {
                         DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = raw::ProprietaryKey::try_from(key.clone())
+                    let pk = ProprietaryKey::try_from(key.clone())
                         .map_err(|_| InsertPairError::InvalidProprietaryKey)?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
@@ -2193,7 +2195,7 @@ pub enum DecodeError {
     /// Error inserting a key-value pair.
     InsertPair(InsertPairError),
     /// Error decoding key.
-    KeyDecode(raw::KeyDecodeError),
+    KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(ValueDecodeError),
     /// Input must contain a previous txid.
@@ -2260,11 +2262,11 @@ impl From<InsertPairError> for DecodeError {
 #[derive(Debug)]
 pub enum InsertPairError {
     /// Keys within key-value map should never be duplicated.
-    DuplicateKey(raw::Key),
+    DuplicateKey(Key),
     /// Key should contain data.
-    InvalidKeyDataEmpty(raw::Key),
+    InvalidKeyDataEmpty(Key),
     /// Key should not contain data.
-    InvalidKeyDataNotEmpty(raw::Key),
+    InvalidKeyDataNotEmpty(Key),
     /// Invalid hash when parsing key or value data.
     InvalidHash(bitcoin::hashes::FromSliceError),
     /// Invalid public key when parsing key data.
@@ -2450,6 +2452,7 @@ mod test {
 
     use super::*;
     use crate::encoding::encode_to_vec;
+    use crate::map::ProprietaryType;
 
     fn out_point() -> OutPoint {
         let txid = Txid::hash(b"some arbitrary bytes");
@@ -2633,10 +2636,10 @@ mod test {
             script_pubkey: ScriptBuf::new(),
         });
         input.proprietaries.insert(
-            raw::ProprietaryKey { prefix: b"test".to_vec(), subtype: 0, key: vec![0x01] },
+            ProprietaryKey { prefix: b"test".to_vec(), subtype: 0, key: vec![0x01] },
             vec![0x02],
         );
-        input.unknowns.insert(raw::Key { type_value: 0x7f, key: vec![0x03] }, vec![0x04]);
+        input.unknowns.insert(Key { type_value: 0x7f, key: vec![0x03] }, vec![0x04]);
 
         let finalized = input
             .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
@@ -2781,7 +2784,7 @@ mod test {
         input.tap_key_origins.insert(xonly, (vec![leaf], ks));
 
         input.proprietaries.insert(
-            raw::ProprietaryKey::<raw::ProprietaryType> {
+            ProprietaryKey::<ProprietaryType> {
                 prefix: vec![0xde, 0xad],
                 subtype: 42,
                 key: vec![0xbe, 0xef],

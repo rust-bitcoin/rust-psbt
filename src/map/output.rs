@@ -17,6 +17,9 @@ use bitcoin_consensus_encoding::{
     ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
+use super::{
+    Key, KeyDecodeError, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_OUT_AMOUNT, PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
     PSBT_OUT_SCRIPT, PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_OUT_TAP_INTERNAL_KEY, PSBT_OUT_TAP_TREE,
@@ -33,7 +36,6 @@ use crate::encoding::native::{
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
-use crate::raw::{self, ProprietaryKeyValueIter, UnknownKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::SpV0Info;
 
@@ -74,10 +76,10 @@ pub struct Output {
 
     /// Proprietary key-value pairs for this output.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs for this output.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    pub unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 impl Output {
@@ -195,63 +197,63 @@ pub struct OutputDecoder {
     sp_v0_info: Option<SpV0Info>,
     #[cfg(feature = "silent-payments")]
     sp_v0_label: Option<u32>,
-    proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
+    unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
     DecodingSeparator,
-    DecodingKey(raw::KeyDecoder),
+    DecodingKey(KeyDecoder),
     DecodingAmount {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<8>>,
     },
     DecodingScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingRedeemScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingWitnessScript {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingBip32Derivation {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingTapInternalKey {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<32>>,
     },
     DecodingTapTree {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingTapBip32Derivation {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Info {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<66>>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Label {
-        key: raw::Key,
+        key: Key,
         decoder: ValueDecoder<ArrayDecoder<4>>,
     },
     DecodingProprietary {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     DecodingUnknown {
-        key: raw::Key,
+        key: Key,
         decoder: ByteVecDecoder,
     },
     Done(Output),
@@ -259,7 +261,7 @@ enum DecoderStage {
 }
 
 impl DecoderStage {
-    fn from_key(key: raw::Key) -> Result<Self, DecodeError> {
+    fn from_key(key: Key) -> Result<Self, DecodeError> {
         match key.type_value {
             PSBT_OUT_AMOUNT => Ok(Self::DecodingAmount { key, decoder: ValueDecoder::default() }),
             PSBT_OUT_SCRIPT => Ok(Self::DecodingScript { key, decoder: ByteVecDecoder::new() }),
@@ -350,7 +352,7 @@ impl Decoder for OutputDecoder {
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {
-                        self.stage = DecoderStage::DecodingKey(raw::KeyDecoder::default());
+                        self.stage = DecoderStage::DecodingKey(KeyDecoder::default());
                     }
                     None => return Ok(DecoderStatus::NeedsMore),
                 }
@@ -637,7 +639,7 @@ impl Decoder for OutputDecoder {
                     let value = decoder.end().map_err(|e| {
                         DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = raw::ProprietaryKey::try_from(key.clone())
+                    let pk = ProprietaryKey::try_from(key.clone())
                         .map_err(|_| InsertPairError::InvalidProprietaryKey)?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
@@ -1072,7 +1074,7 @@ pub enum DecodeError {
     /// Error inserting a key-value pair.
     InsertPair(InsertPairError),
     /// Error decoding a raw PSBT key.
-    KeyDecode(raw::KeyDecodeError),
+    KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(ValueDecodeError),
     /// Called build() before fully decoding the output map.
@@ -1131,11 +1133,11 @@ impl From<ValidationError> for DecodeError {
 #[derive(Debug)]
 pub enum InsertPairError {
     /// Keys within key-value map should never be duplicated.
-    DuplicateKey(raw::Key),
+    DuplicateKey(Key),
     /// Key should contain data.
-    InvalidKeyDataEmpty(raw::Key),
+    InvalidKeyDataEmpty(Key),
     /// Key should not contain data.
-    InvalidKeyDataNotEmpty(raw::Key),
+    InvalidKeyDataNotEmpty(Key),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(bitcoin::key::FromSliceError),
     /// Invalid xonly public key when parsing key data.
@@ -1226,6 +1228,7 @@ mod tests {
 
     use super::*;
     use crate::encode_to_vec;
+    use crate::map::ProprietaryType;
 
     fn tx_out() -> TxOut {
         // Arbitrary script, may not even be a valid scriptPubkey.
@@ -1278,18 +1281,14 @@ mod tests {
         // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so
         // inspect the encoded key-value pairs directly.
         fn has_script_pair(output: &Output) -> bool {
-            use crate::raw::KeyDecodeError;
+            use crate::KeyDecodeError;
 
             let encoded = encode_to_vec(output);
             let mut slice = &encoded[..];
 
             loop {
-                if slice.is_empty() {
-                    return false;
-                }
-
                 // Decode key.
-                let mut key_decoder = crate::raw::KeyDecoder::default();
+                let mut key_decoder = crate::KeyDecoder::default();
                 key_decoder.push_bytes(&mut slice).expect("key push_bytes failed");
                 let key = match key_decoder.end() {
                     Err(KeyDecodeError::Empty) => return false,
@@ -1300,11 +1299,6 @@ mod tests {
                 if key.type_value == PSBT_OUT_SCRIPT {
                     return true;
                 }
-
-                // Skip the value.
-                let mut val_decoder = ByteVecDecoder::default();
-                val_decoder.push_bytes(&mut slice).unwrap();
-                val_decoder.end().unwrap();
             }
         }
 
@@ -1345,7 +1339,7 @@ mod tests {
         output.bip32_derivations.insert(pk, ks.clone());
 
         output.proprietaries.insert(
-            raw::ProprietaryKey::<raw::ProprietaryType> {
+            ProprietaryKey::<ProprietaryType> {
                 prefix: vec![0xde, 0xad],
                 subtype: 42,
                 key: vec![0xbe, 0xef],
