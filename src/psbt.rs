@@ -40,6 +40,7 @@ use bitcoin::secp256k1::{Message, Secp256k1, Signing};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
     ecdsa, transaction, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
+    XOnlyPublicKey,
 };
 use bitcoin_consensus_encoding::{ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, Encoder4};
 
@@ -984,9 +985,9 @@ impl Psbt {
         let mut used = vec![]; // List of pubkeys used to sign the input.
 
         for (pk, key_source) in input.bip32_derivations.iter() {
-            let sk = if let Ok(Some(sk)) = k.get_key(KeyRequest::Bip32(key_source.clone()), secp) {
+            let sk = if let Ok(Some(sk)) = k.get_key(&KeyRequest::Bip32(key_source.clone()), secp) {
                 sk
-            } else if let Ok(Some(sk)) = k.get_key(KeyRequest::Pubkey(*pk), secp) {
+            } else if let Ok(Some(sk)) = k.get_key(&KeyRequest::Pubkey(*pk), secp) {
                 sk
             } else {
                 continue;
@@ -1163,6 +1164,8 @@ pub enum KeyRequest {
     Pubkey(PublicKey),
     /// Request a private key using BIP-32 fingerprint and derivation path.
     Bip32(KeySource),
+    /// Request a private key using the associated x-only public key.
+    XOnlyPubkey(XOnlyPublicKey),
 }
 
 /// Trait to get a private key from a key request, key is then used to sign an input.
@@ -1178,7 +1181,7 @@ pub trait GetKey {
     /// - `Err` if an error was encountered while looking for the key.
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error>;
 }
@@ -1188,14 +1191,20 @@ impl GetKey for Xpriv {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error> {
         match key_request {
-            KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
+            KeyRequest::Pubkey(_) | KeyRequest::XOnlyPubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
-                let key = if self.fingerprint(secp) == fingerprint {
-                    let k = self.derive_priv(secp, &path)?;
+                let key = if self.fingerprint(secp) == *fingerprint {
+                    let k = self.derive_priv(secp, path)?;
+                    Some(k.to_priv())
+                } else if self.parent_fingerprint == *fingerprint
+                    && !path.is_empty()
+                    && path[0] == self.child_number
+                {
+                    let k = self.derive_priv(secp, &path[1..].iter().as_slice())?;
                     Some(k.to_priv())
                 } else {
                     None
@@ -1221,21 +1230,14 @@ impl GetKey for $set<Xpriv> {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
+        key_request: &KeyRequest,
         secp: &Secp256k1<C>
     ) -> Result<Option<PrivateKey>, Self::Error> {
-        match key_request {
-            KeyRequest::Pubkey(_) => Err(GetKeyError::NotSupported),
-            KeyRequest::Bip32((fingerprint, path)) => {
-                for xpriv in self.iter() {
-                    if xpriv.parent_fingerprint == fingerprint {
-                        let k = xpriv.derive_priv(secp, &path)?;
-                        return Ok(Some(k.to_priv()));
-                    }
-                }
-                Ok(None)
-            }
-        }
+        // OK to stop at the first error because Xpriv::get_key() can only fail
+        // if this isn't a KeyRequest::Bip32, which would fail for all Xprivs.
+        self.iter()
+            .find_map(|xpriv| xpriv.get_key(key_request, secp).transpose())
+            .transpose()
     }
 }}}
 
@@ -1245,7 +1247,7 @@ impl_get_key_for_set!(BTreeSet);
 impl_get_key_for_set!(HashSet);
 
 #[rustfmt::skip]
-macro_rules! impl_get_key_for_map {
+macro_rules! impl_get_key_for_pubkey_map {
     ($map:ident) => {
 
 impl GetKey for $map<PublicKey, PrivateKey> {
@@ -1253,18 +1255,74 @@ impl GetKey for $map<PublicKey, PrivateKey> {
 
     fn get_key<C: Signing>(
         &self,
-        key_request: KeyRequest,
-        _: &Secp256k1<C>,
+        key_request: &KeyRequest,
+        _secp: &Secp256k1<C>,
     ) -> Result<Option<PrivateKey>, Self::Error> {
+        use $crate::bitcoin::secp256k1;
+
         match key_request {
             KeyRequest::Pubkey(pk) => Ok(self.get(&pk).cloned()),
+            KeyRequest::XOnlyPubkey(xonly) => {
+                let pubkey_even = xonly.public_key(secp256k1::Parity::Even).into();
+                let key = self.get(&pubkey_even).cloned();
+
+                if key.is_some() {
+                    return Ok(key);
+                }
+
+                let pubkey_odd = xonly.public_key(secp256k1::Parity::Odd).into();
+                if let Some(priv_key) = self.get(&pubkey_odd) {
+                    let negated_priv_key  = priv_key.negate();
+                    return Ok(Some(negated_priv_key));
+                }
+
+                Ok(None)
+            },
             KeyRequest::Bip32(_) => Err(GetKeyError::NotSupported),
         }
     }
 }}}
-impl_get_key_for_map!(BTreeMap);
+impl_get_key_for_pubkey_map!(BTreeMap);
 #[cfg(feature = "std")]
-impl_get_key_for_map!(HashMap);
+impl_get_key_for_pubkey_map!(HashMap);
+
+#[rustfmt::skip]
+macro_rules! impl_get_key_for_xonly_map {
+    ($map:ident) => {
+
+impl GetKey for $map<XOnlyPublicKey, PrivateKey> {
+    type Error = GetKeyError;
+
+    fn get_key<C: Signing>(
+        &self,
+        key_request: &KeyRequest,
+        secp: &Secp256k1<C>,
+    ) -> Result<Option<PrivateKey>, Self::Error> {
+        match key_request {
+            KeyRequest::XOnlyPubkey(xonly) => Ok(self.get(xonly).cloned()),
+            KeyRequest::Pubkey(pk) => {
+                let (xonly, parity) = pk.inner.x_only_public_key();
+
+                if let Some(mut priv_key) = self.get(&xonly).cloned() {
+                    let computed_pk = priv_key.public_key(secp);
+                    let (_, computed_parity) = computed_pk.inner.x_only_public_key();
+
+                    if computed_parity != parity {
+                        priv_key = priv_key.negate();
+                    }
+
+                    return Ok(Some(priv_key));
+                }
+
+                Ok(None)
+            },
+            KeyRequest::Bip32(_) => Err(GetKeyError::NotSupported),
+        }
+    }
+}}}
+impl_get_key_for_xonly_map!(BTreeMap);
+#[cfg(feature = "std")]
+impl_get_key_for_xonly_map!(HashMap);
 
 /// Errors when getting a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2114,5 +2172,129 @@ mod tests {
         assert!(!psbt.global.is_inputs_modifiable());
         assert!(!psbt.global.is_outputs_modifiable());
         assert!(!psbt.global.has_sighash_single());
+    }
+
+    #[cfg(all(feature = "rand", feature = "std"))]
+    mod get_key {
+        #[cfg(any(feature = "miniscript", all(feature = "rand", feature = "std")))]
+        use super::*;
+
+        #[cfg(all(feature = "rand", feature = "std"))]
+        fn gen_keys() -> (PrivateKey, PublicKey, Secp256k1<bitcoin::secp256k1::All>) {
+            use bitcoin::secp256k1::{rand, SecretKey};
+            use bitcoin::Network;
+
+            let secp = Secp256k1::new();
+            let sk = SecretKey::new(&mut rand::thread_rng());
+            let priv_key = PrivateKey::new(sk, Network::Testnet4);
+            let pk = PublicKey::from_private_key(&secp, &priv_key);
+
+            (priv_key, pk, secp)
+        }
+
+        #[test]
+        #[cfg(all(feature = "rand", feature = "std"))]
+        fn pubkey_map_get_key_negates_odd_parity_keys() {
+            let (mut priv_key, mut pk, secp) = gen_keys();
+            let (xonly, parity) = pk.inner.x_only_public_key();
+
+            let mut pubkey_map: HashMap<PublicKey, PrivateKey> = HashMap::new();
+
+            if parity == bitcoin::secp256k1::Parity::Even {
+                priv_key = PrivateKey {
+                    compressed: priv_key.compressed,
+                    network: priv_key.network,
+                    inner: priv_key.inner.negate(),
+                };
+                pk = priv_key.public_key(&secp);
+            }
+
+            pubkey_map.insert(pk, priv_key);
+
+            let req_result = pubkey_map.get_key(&KeyRequest::XOnlyPubkey(xonly), &secp).unwrap();
+
+            let retrieved_key = req_result.unwrap();
+
+            let retrieved_pub_key = retrieved_key.public_key(&secp);
+            let (retrieved_xonly, retrieved_parity) = retrieved_pub_key.inner.x_only_public_key();
+
+            assert_eq!(xonly, retrieved_xonly);
+            assert_eq!(
+                retrieved_parity,
+                bitcoin::secp256k1::Parity::Even,
+                "Key should be normalized to have even parity, even when original had odd parity"
+            );
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_succeeds() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let path: DerivationPath = "m/1/2/3".parse().unwrap();
+            let path_prefix: DerivationPath = "m/1".parse().unwrap();
+
+            let expected_private_key = parent_xpriv.derive_priv(&secp, &path).unwrap().to_priv();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path_prefix).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((parent_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            assert_eq!(derived_key, Some(expected_private_key));
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_wrong_first_segment() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let path: DerivationPath = "m/2/3".parse().unwrap();
+            let path_prefix: DerivationPath = "m/1".parse().unwrap();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path_prefix).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((parent_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            // Fingerprint matches but first path segment (2) != child_number (1).
+            assert_eq!(derived_key, None);
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn xpriv_bip32_request_fp_mismatch() {
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::hex::hex;
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let other_seed = hex!("aabbccddeeff00112233445566778899");
+            let parent_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let other_xpriv: Xpriv = Xpriv::new_master(Network::Bitcoin, &other_seed).unwrap();
+            let path: DerivationPath = "m/1".parse().unwrap();
+
+            let derived_xpriv = parent_xpriv.derive_priv(&secp, &path).unwrap();
+
+            let derived_key = derived_xpriv
+                .get_key(&KeyRequest::Bip32((other_xpriv.fingerprint(&secp), path)), &secp)
+                .unwrap();
+
+            // Fingerprint mismatch but path nonempty and first segment matches child_number.
+            assert_eq!(derived_key, None);
+        }
     }
 }
