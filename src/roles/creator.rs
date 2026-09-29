@@ -8,7 +8,8 @@ use bitcoin::locktime::absolute;
 use bitcoin::transaction;
 
 use crate::global::Global;
-use crate::psbt::{Constructor, InputsOnlyModifiable, Modifiable, OutputsOnlyModifiable, Psbt};
+use crate::psbt::Psbt;
+use crate::roles::{Constructor, InputsOnlyModifiable, Modifiable, OutputsOnlyModifiable};
 
 /// Implements the BIP-370 Creator role.
 ///
