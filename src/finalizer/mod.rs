@@ -232,8 +232,7 @@ mod tests {
     use bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, TxOut};
 
     use super::*;
-    use crate::psbt::Signer;
-    use crate::roles::Creator;
+    use crate::roles::{Creator, Signer};
     use crate::{Input, Output};
 
     const TEST_XPRIV: &str =

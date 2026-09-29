@@ -4,8 +4,10 @@
 
 mod constructor;
 mod creator;
+mod signer;
 mod updater;
 
 pub use constructor::{Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable};
 pub use creator::Creator;
+pub use signer::Signer;
 pub use updater::Updater;

@@ -90,10 +90,11 @@ pub use crate::{
     },
     psbt::{
         combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
-        PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
+        PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
     },
     roles::{
-        Constructor, Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Updater,
+        Constructor, Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer,
+        Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},
