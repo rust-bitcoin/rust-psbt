@@ -87,9 +87,8 @@ pub use crate::{
         Updater,
     },
     raw::{
-        InvalidProprietaryKeyError, Key, KeyDecodeError, KeyDecoder, KeyEncoder, Pair,
-        PairDecodeError, PairDecoder, PairEncoder, ProprietaryKey, ProprietaryKeyEncoder,
-        ProprietaryType,
+        InvalidProprietaryKeyError, Key, KeyDecodeError, KeyDecoder, KeyEncoder, ProprietaryKey,
+        ProprietaryKeyEncoder, ProprietaryType,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},

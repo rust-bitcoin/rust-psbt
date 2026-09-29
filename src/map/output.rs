@@ -1278,23 +1278,33 @@ mod tests {
         // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so
         // inspect the encoded key-value pairs directly.
         fn has_script_pair(output: &Output) -> bool {
+            use crate::raw::KeyDecodeError;
+
             let encoded = encode_to_vec(output);
+            let mut slice = &encoded[..];
 
-            let slice = &mut encoded.as_slice();
             loop {
-                use crate::KeyDecodeError;
-
-                std::println!("{}", slice.len());
                 if slice.is_empty() {
                     return false;
+                }
+
+                // Decode key.
+                let mut key_decoder = crate::raw::KeyDecoder::default();
+                key_decoder.push_bytes(&mut slice).expect("key push_bytes failed");
+                let key = match key_decoder.end() {
+                    Err(KeyDecodeError::Empty) => return false,
+                    Err(e) => panic!("key decode failed: {:?}", e),
+                    Ok(key) => key,
                 };
 
-                match crate::encoding::decode_from_slice_unbounded::<raw::Pair>(slice) {
-                    Ok(pair) if pair.key.type_value == PSBT_OUT_SCRIPT => return true,
-                    Ok(_) => {}
-                    Err(Decoder2Error::First(KeyDecodeError::Empty)) => return false,
-                    Err(e) => panic!("pair decode failed: {:?}", e),
+                if key.type_value == PSBT_OUT_SCRIPT {
+                    return true;
                 }
+
+                // Skip the value.
+                let mut val_decoder = ByteVecDecoder::default();
+                val_decoder.push_bytes(&mut slice).unwrap();
+                val_decoder.end().unwrap();
             }
         }
 

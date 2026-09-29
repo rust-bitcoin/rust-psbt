@@ -21,27 +21,12 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::io::{self, Write};
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, ByteVecDecoderError, BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder,
-    CompactSizeU64Decoder, Decoder, Decoder2, Decoder2Error, DecoderStatus, Encoder2, Encoder3,
-    ExactSizeEncoder, PrefixedBytesEncoder,
+    CompactSizeU64Decoder, Decoder, Decoder2, DecoderStatus, Encoder2, Encoder3, ExactSizeEncoder,
+    PrefixedBytesEncoder,
 };
 
 use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
-
-/// A PSBT key-value pair in its raw byte form.
-///
-/// - `<keypair> := <key> <value>`
-#[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Pair {
-    /// The key of this key-value pair.
-    pub key: Key,
-    /// The value of this key-value pair in raw byte form.
-    ///
-    /// - `<value> := <valuelen> <valuedata>`
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
-    pub value: Vec<u8>,
-}
 
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -318,55 +303,6 @@ impl<'e> Iterator for UnknownKeyValueIter<'e> {
     }
 }
 
-/// Error returned when decoding a raw PSBT [`Pair`] fails.
-pub type PairDecodeError = Decoder2Error<KeyDecodeError, ByteVecDecoderError>;
-
-/// Decoder for raw PSBT pairs.
-#[derive(Debug, Default)]
-pub struct PairDecoder {
-    inner: Decoder2<KeyDecoder, ByteVecDecoder>,
-}
-
-impl Decoder for PairDecoder {
-    type Output = Pair;
-    type Error = PairDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let (key, value) = self.inner.end()?;
-        Ok(Pair { key, value })
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-impl PsbtDecode for Pair {
-    type Decoder = PairDecoder;
-}
-
-impl PsbtEncode for Pair {
-    type Encoder<'e> = PairEncoder<'e>;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { PairEncoder::from_pair(self) }
-}
-
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for raw PSBT pairs.
-    pub struct PairEncoder<'e>(Encoder2<KeyEncoder<'e>, PrefixedBytesEncoder<'e>>);
-}
-
-impl<'e> PairEncoder<'e> {
-    fn from_pair(pair: &'e Pair) -> Self {
-        Self::new(Encoder2::new(
-            KeyEncoder::from_key(&pair.key),
-            PrefixedBytesEncoder::new(&pair.value),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,44 +364,6 @@ mod tests {
         assert_eq!(decoder.read_limit(), 1);
 
         let mut bytes: &[u8] = &[0x01, 0x0a];
-        let status = decoder.push_bytes(&mut bytes).unwrap();
-        assert!(status.is_ready());
-        assert_eq!(decoder.read_limit(), 0);
-    }
-
-    #[test]
-    fn pair_roundtrip() {
-        let pair = Pair { key: Key { type_value: 2, key: vec![1, 2, 3] }, value: vec![9, 9] };
-        let bytes = encode_to_vec(&pair);
-        assert_eq!(decode_from_slice::<Pair>(&bytes).unwrap(), pair);
-    }
-
-    #[test]
-    fn pair_roundtrip_empty_value() {
-        let pair = Pair { key: Key { type_value: 0xFB, key: vec![] }, value: vec![] };
-        let bytes = encode_to_vec(&pair);
-        assert_eq!(decode_from_slice::<Pair>(&bytes).unwrap(), pair);
-    }
-
-    #[test]
-    fn pair_decode_vector() {
-        let bytes = [0x04, 0x02, 0x01, 0x02, 0x03, 0x00];
-        let pair = decode_from_slice::<Pair>(&bytes).unwrap();
-        assert_eq!(pair, Pair { key: Key { type_value: 2, key: vec![1, 2, 3] }, value: vec![] });
-    }
-
-    #[test]
-    fn pair_encode_vector() {
-        let pair = Pair { key: Key { type_value: 2, key: vec![1, 2, 3] }, value: vec![] };
-        assert_eq!(encode_to_vec(&pair), vec![0x04, 0x02, 0x01, 0x02, 0x03, 0x00]);
-    }
-
-    #[test]
-    fn pair_decoder_read_limit() {
-        let mut decoder = PairDecoder::default();
-        assert_eq!(decoder.read_limit(), 2);
-
-        let mut bytes: &[u8] = &[0x01, 0x0a, 0x01, 0x0b];
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);

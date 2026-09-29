@@ -2114,7 +2114,6 @@ mod tests {
         use ::bitcoin::hashes::Hash as _;
 
         use crate::consts::PSBT_OUT_SCRIPT;
-        use crate::raw;
 
         let mut output = output_without_script();
         output.sp_v0_info = Some(sp_v0_info(2));
@@ -2134,21 +2133,33 @@ mod tests {
         // the encoded key-value pairs directly.
 
         let output_encoded = encode_to_vec(&decoded.outputs[0]);
-        let slice = &mut output_encoded.as_slice();
+        let mut slice = &output_encoded[..];
 
         loop {
-            use bitcoin_consensus_encoding::Decoder2Error;
+            use crate::raw::{KeyDecodeError, KeyDecoder};
 
-            use crate::KeyDecodeError;
-
-            match crate::encoding::decode_from_slice_unbounded::<raw::Pair>(slice) {
-                Ok(pair) => assert_ne!(
-                    pair.key.type_value, PSBT_OUT_SCRIPT,
-                    "underived silent payment output must not encode PSBT_OUT_SCRIPT"
-                ),
-                Err(Decoder2Error::First(KeyDecodeError::Empty)) => break,
-                Err(e) => panic!("pair decode failed: {:?}", e),
+            if slice.is_empty() {
+                break;
             }
+
+            // Decode key.
+            let mut key_decoder = KeyDecoder::default();
+            key_decoder.push_bytes(&mut slice).expect("key push_bytes failed");
+            let key = match key_decoder.end() {
+                Err(KeyDecodeError::Empty) => break,
+                Err(e) => panic!("key decode failed: {:?}", e),
+                Ok(key) => key,
+            };
+
+            assert_ne!(
+                key.type_value, PSBT_OUT_SCRIPT,
+                "underived silent payment output must not encode PSBT_OUT_SCRIPT"
+            );
+
+            // Skip the value.
+            let mut val_decoder = bitcoin_consensus_encoding::ByteVecDecoder::default();
+            val_decoder.push_bytes(&mut slice).unwrap();
+            val_decoder.end().unwrap();
         }
 
         assert_eq!(decoded.serialize(), encoded);
