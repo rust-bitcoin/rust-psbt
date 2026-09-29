@@ -38,7 +38,9 @@ use bitcoin::key::{PrivateKey, PublicKey};
 use bitcoin::locktime::absolute;
 use bitcoin::secp256k1::{Message, Secp256k1, Signing};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
-use bitcoin::{ecdsa, transaction, Amount, Sequence, Transaction, TxOut, Txid};
+use bitcoin::{
+    ecdsa, transaction, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
+};
 use bitcoin_consensus_encoding::{ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, Encoder4};
 
 #[cfg(feature = "base64")]
@@ -54,6 +56,7 @@ use crate::input::{self, Input};
 use crate::output::{self, Output};
 #[cfg(feature = "miniscript")]
 use crate::PartialSigsSighashTypeError;
+use crate::PsbtSighashType;
 
 /// The magic bytes that identify a PSBT (`"psbt"` in ASCII).
 const PSBT_MAGIC: &[u8; 4] = b"psbt";
@@ -641,7 +644,7 @@ impl Signer {
     /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
     /// > inputs so that it accurately reflects the state of the PSBT.
     pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.0.clear_tx_modifiable(ty as u8)
+        self.0.clear_tx_modifiable(PsbtSighashType::from(ty))
     }
 
     /// Returns the inner [`Psbt`].
@@ -786,26 +789,111 @@ impl Psbt {
     }
 
     /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing.
-    // TODO: Consider using consts instead of magic numbers.
-    fn clear_tx_modifiable(&mut self, sighash_type: u8) {
-        let ty = sighash_type;
+    fn clear_tx_modifiable(&mut self, sighash_type: PsbtSighashType) {
         // If the Signer added a signature that does not use SIGHASH_ANYONECANPAY,
         // the Input Modifiable flag must be set to False.
-        if !(ty == 0x81 || ty == 0x82 || ty == 0x83) {
+        if !sighash_type.is_anyone_can_pay() {
             self.global.clear_inputs_modifiable_flag();
         }
 
         // If the Signer added a signature that does not use SIGHASH_NONE,
         // the Outputs Modifiable flag must be set to False.
-        if !(ty == 0x02 || ty == 0x82) {
+        if !sighash_type.is_none() {
             self.global.clear_outputs_modifiable_flag();
         }
 
         // If the Signer added a signature that uses SIGHASH_SINGLE,
         // the Has SIGHASH_SINGLE flag must be set to True.
-        if ty == 0x03 || ty == 0x83 {
+        if sighash_type.is_single() {
             self.global.set_sighash_single_flag();
         }
+    }
+
+    /// Performs the BIP-174 signer validity checks for the input at `index`.
+    pub fn signer_checks(&self, index: usize) -> Result<(), SignError> {
+        self.check_input_index(index)?;
+        let input = &self.inputs[index];
+        let prevout_type = input.output_type()?;
+        let prevout = input.funding_utxo()?;
+
+        // If a witness UTXO is provided, no non-witness signature may be created.
+        if input.witness_utxo.is_some() {
+            if let OutputType::Bare = prevout_type {
+                return Err(SignError::NonWitnessSig);
+            }
+        }
+
+        // If a non-witness UTXO is provided, its hash must match the prevout txid.
+        if let Some(ref tx) = input.non_witness_utxo {
+            if tx.compute_txid() != input.previous_txid {
+                return Err(SignError::NonWitnessUtxoTxidMismatch);
+            }
+        }
+
+        // If a redeemScript is provided, the scriptPubKey must be for that redeemScript.
+        if let Some(ref redeem_script) = input.redeem_script {
+            let script_pubkey = ScriptBuf::new_p2sh(&redeem_script.script_hash());
+            if prevout.script_pubkey != script_pubkey {
+                return Err(SignError::RedeemScriptMismatch);
+            }
+        }
+
+        // If a witnessScript is provided the redeemScript must be for that witnessScript, and the
+        // scriptPubKey must be for that witnessScript.
+        if let Some(ref witness_script) = input.witness_script {
+            match prevout_type {
+                OutputType::Wsh
+                    if ScriptBuf::new_p2wsh(&witness_script.wscript_hash())
+                        != *prevout.script_pubkey =>
+                {
+                    return Err(SignError::WitnessScriptMismatchWsh);
+                }
+                OutputType::ShWsh =>
+                    if let Some(ref redeem_script) = input.redeem_script {
+                        if ScriptBuf::new_p2wsh(&witness_script.wscript_hash()) != *redeem_script
+                            || ScriptBuf::new_p2sh(&redeem_script.script_hash())
+                                != *prevout.script_pubkey
+                        {
+                            return Err(SignError::WitnessScriptMismatchShWsh);
+                        }
+                    },
+                _ => (),
+            }
+        }
+
+        // Use provided sighash or DEFAULT for taproot output and ALL for non-taproot outputs.
+        let expected_sighash_type = match (input.sighash_type, prevout_type) {
+            (None, OutputType::Tr) => PsbtSighashType::from(TapSighashType::Default),
+            (None, _) => PsbtSighashType::ALL,
+            (Some(sighash_type), _) => sighash_type,
+        };
+
+        // SIGHASH_SINGLE must have a corresponding output at the same index; otherwise
+        // the signature commits to no outputs (the legacy algorithm even signs the
+        // constant hash 1, segwit v0 commits to a zero hash).
+        if expected_sighash_type.is_single() && index >= self.outputs.len() {
+            return Err(SignError::SighashSingleMissingOutput);
+        }
+
+        let sighash_mismatches = |sighash: PsbtSighashType| sighash != expected_sighash_type;
+
+        let has_mismatch = input
+            .tap_key_sig
+            .is_some_and(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || input
+                .tap_script_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)))
+            || input
+                .partial_sigs
+                .values()
+                .any(|sig| sighash_mismatches(PsbtSighashType::from(sig.sighash_type)));
+
+        if has_mismatch {
+            return Err(SignError::SighashMismatch);
+        }
+
+        Ok(())
     }
 
     /// Attempts to create _all_ the required signatures for this PSBT using `k`.
@@ -841,14 +929,8 @@ impl Psbt {
 
         // Check all inputs before providing any signature (BIP-174).
         for i in 0..self.global.input_count {
-            match self.checked_input(i).map_err(SignError::IndexOutOfBounds) {
-                Err(e) => {
-                    errors.insert(i, e);
-                }
-                Ok(input) =>
-                    if let Err(e) = input.signer_checks() {
-                        errors.insert(i, e);
-                    },
+            if let Err(e) = self.signer_checks(i) {
+                errors.insert(i, e);
             }
         }
 
@@ -928,7 +1010,7 @@ impl Psbt {
         }
 
         let ty = sighash_ty.expect("at this stage we know its ok");
-        self.clear_tx_modifiable(ty as u8);
+        self.clear_tx_modifiable(PsbtSighashType::from(ty));
 
         Ok(used)
     }
@@ -1441,6 +1523,17 @@ mod tests {
         }
     }
 
+    fn two_inputs_one_output_psbt() -> Psbt {
+        Psbt {
+            global: Global { input_count: 2, output_count: 1, ..Global::default() },
+            inputs: vec![Input::new(&OutPoint::null()), Input::new(&OutPoint::null())],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        }
+    }
+
     fn valid_psbt() -> Psbt {
         use crate::bitcoin::hashes::Hash as _;
 
@@ -1537,7 +1630,7 @@ mod tests {
         psbt.inputs[0].redeem_script = Some(redeem_script);
         psbt.inputs[0].witness_script = Some(witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Ok(()));
+        assert_eq!(psbt.signer_checks(0), Ok(()));
     }
 
     #[test]
@@ -1553,7 +1646,7 @@ mod tests {
         psbt.inputs[0].redeem_script = Some(redeem_script);
         psbt.inputs[0].witness_script = Some(wrong_witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::WitnessScriptMismatchShWsh));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::WitnessScriptMismatchShWsh));
     }
 
     #[test]
@@ -1566,7 +1659,7 @@ mod tests {
         psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
         psbt.inputs[0].witness_script = Some(witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Ok(()));
+        assert_eq!(psbt.signer_checks(0), Ok(()));
     }
 
     #[test]
@@ -1580,7 +1673,7 @@ mod tests {
         psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
         psbt.inputs[0].witness_script = Some(wrong_witness_script);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::WitnessScriptMismatchWsh));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::WitnessScriptMismatchWsh));
     }
 
     #[test]
@@ -1597,7 +1690,7 @@ mod tests {
         };
         psbt.inputs[0].partial_sigs.insert(pubkey, sig);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::SighashMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::SighashMismatch));
     }
 
     #[test]
@@ -1616,7 +1709,7 @@ mod tests {
         psbt.inputs[0].spent_output_index = 0;
         psbt.inputs[0].non_witness_utxo = Some(funding_tx);
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::NonWitnessUtxoTxidMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::NonWitnessUtxoTxidMismatch));
     }
 
     #[test]
@@ -1632,8 +1725,116 @@ mod tests {
             sighash_type: TapSighashType::None,
         });
 
-        assert_eq!(psbt.inputs[0].signer_checks(), Err(SignError::SighashMismatch));
+        assert_eq!(psbt.signer_checks(0), Err(SignError::SighashMismatch));
     }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_wpkh() {
+        // P2WPKH input using SIGHASH_SINGLE with no output at the same index.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_legacy_p2pkh() {
+        // Legacy (P2PKH) input using SIGHASH_SINGLE with no output at the same index:
+        // signing this would produce a signature over the constant hash 1 (replayable).
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let funding_tx = Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2pkh(&pubkey.pubkey_hash()),
+            }],
+        };
+        let txid = funding_tx.compute_txid();
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].previous_txid = txid;
+        psbt.inputs[1].spent_output_index = 0;
+        psbt.inputs[1].non_witness_utxo = Some(funding_tx);
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_out_of_range_rejected_taproot() {
+        // P2TR input using SIGHASH_SINGLE with no output at the same index: rejected
+        // uniformly here, not relying on the downstream taproot sighash check.
+        let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2tr(&Secp256k1::verification_only(), xonly, None);
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(TapSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_anyone_can_pay_out_of_range_rejected() {
+        // SIGHASH_SINGLE with ANYONECANPAY is guarded as well.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type =
+            Some(PsbtSighashType::from(EcdsaSighashType::SinglePlusAnyoneCanPay));
+
+        assert_eq!(psbt.signer_checks(1), Err(SignError::SighashSingleMissingOutput));
+    }
+
+    #[test]
+    fn signer_checks_sighash_single_in_range_accepted() {
+        // Input 0 paired with output 0 is a valid use of SIGHASH_SINGLE.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::Single));
+
+        assert_eq!(psbt.signer_checks(0), Ok(()));
+    }
+
+    #[test]
+    fn signer_checks_non_single_sighash_out_of_range_accepted() {
+        // Non-single sighash types suffer no commitment-to-nothing issue.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::All));
+
+        assert_eq!(psbt.signer_checks(1), Ok(()));
+    }
+
+    #[test]
+    fn signer_checks_nonstandard_sighash_out_of_range_not_misclassified() {
+        // A non-standard value like 0x07 shares the two low bits of SINGLE but its
+        // base type (x & 0x1f) is not SINGLE; classification must use the ECDSA/taproot
+        // conversions, not a bit mask.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+
+        let mut psbt = two_inputs_one_output_psbt();
+        psbt.inputs[1].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[1].sighash_type = Some(PsbtSighashType::from_u32(0x07));
+
+        assert_eq!(psbt.signer_checks(1), Ok(()));
+    }
+
     #[test]
     fn iter_funding_utxos_yields_correct_utxo() {
         let mut psbt = single_input_psbt();
@@ -1817,5 +2018,83 @@ mod tests {
             "underived silent payment output must not encode PSBT_OUT_SCRIPT"
         );
         assert_eq!(decoded.serialize(), encoded);
+    }
+
+    #[test]
+    fn clear_tx_modifiable_all_clears_modifiable_flags() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_ALL: not ANYONECANPAY, not NONE, not SINGLE.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::All));
+
+        assert!(!psbt.global.is_inputs_modifiable());
+        assert!(!psbt.global.is_outputs_modifiable());
+        assert!(!psbt.global.has_sighash_single());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_anyone_can_pay_preserves_inputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+
+        // SIGHASH_ALL | SIGHASH_ANYONECANPAY.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay));
+
+        assert!(psbt.global.is_inputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_none_preserves_outputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_NONE.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::None));
+
+        assert!(psbt.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_none_plus_acp_preserves_outputs_modifiable() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_outputs_modifiable_flag();
+
+        // SIGHASH_NONE | SIGHASH_ANYONECANPAY: like plain NONE, outputs stay modifiable.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::NonePlusAnyoneCanPay));
+
+        assert!(psbt.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn clear_tx_modifiable_single_plus_acp_sets_has_single_flag() {
+        let mut psbt = single_input_psbt();
+
+        // Plain SIGHASH_SINGLE must set the Has SIGHASH_SINGLE flag as well.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::Single));
+        assert!(psbt.global.has_sighash_single());
+
+        let mut psbt = single_input_psbt();
+
+        // SIGHASH_SINGLE | SIGHASH_ANYONECANPAY must set the Has SIGHASH_SINGLE flag.
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::SinglePlusAnyoneCanPay));
+
+        assert!(psbt.global.has_sighash_single());
+    }
+
+    #[test]
+    fn ecdsa_clear_tx_modifiable_updates_flags() {
+        let mut psbt = single_input_psbt();
+        psbt.global.set_inputs_modifiable_flag();
+        psbt.global.set_outputs_modifiable_flag();
+
+        let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+        signer.ecdsa_clear_tx_modifiable(EcdsaSighashType::All);
+
+        let psbt = signer.psbt();
+        assert!(!psbt.global.is_inputs_modifiable());
+        assert!(!psbt.global.is_outputs_modifiable());
+        assert!(!psbt.global.has_sighash_single());
     }
 }
