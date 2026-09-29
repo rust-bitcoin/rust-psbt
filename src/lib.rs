@@ -36,7 +36,7 @@ mod extractor;
 mod finalizer;
 mod map;
 mod psbt;
-
+mod roles;
 #[cfg(feature = "serde")]
 mod serde_utils;
 mod sighash_type;
@@ -89,11 +89,11 @@ pub use crate::{
         ProprietaryType,
     },
     psbt::{
-        combine, CombineError, Constructor, Creator, DecodeError, GetKey, GetKeyError,
-        InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputType, OutputsOnlyModifiable, Psbt,
-        PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
-        Updater,
+        combine, CombineError, Constructor, DecodeError, GetKey, GetKeyError, InputsOnlyModifiable,
+        KeyRequest, Mod, Modifiable, OutputType, OutputsOnlyModifiable, Psbt, PsbtV2Decoder,
+        PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys, Updater,
     },
+    roles::Creator,
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},
     version::{UnsupportedVersionError, Version},
