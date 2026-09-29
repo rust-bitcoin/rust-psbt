@@ -10,8 +10,8 @@ use crate::error::{
 };
 use crate::input::Input;
 use crate::output::{self, Output};
-use crate::psbt::{Psbt, Updater};
-use crate::roles::Creator;
+use crate::psbt::Psbt;
+use crate::roles::{Creator, Updater};
 
 /// Marker for a `Constructor` with both inputs and outputs modifiable.
 pub enum Modifiable {}

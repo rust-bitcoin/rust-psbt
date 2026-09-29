@@ -4,6 +4,8 @@
 
 mod constructor;
 mod creator;
+mod updater;
 
 pub use constructor::{Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable};
 pub use creator::Creator;
+pub use updater::Updater;

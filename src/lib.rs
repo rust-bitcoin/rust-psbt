@@ -91,9 +91,10 @@ pub use crate::{
     psbt::{
         combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
         PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
-        Updater,
     },
-    roles::{Constructor, Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable},
+    roles::{
+        Constructor, Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Updater,
+    },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},
     version::{UnsupportedVersionError, Version},
