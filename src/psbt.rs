@@ -672,6 +672,7 @@ impl Psbt {
         let mut tx = self.unsigned_tx()?;
         // Updaters may change the sequence so to calculate ID we set it to zero.
         tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
+        tx.output = self.outputs.iter().map(|output| output.id_tx_out()).collect();
 
         Ok(tx.compute_txid())
     }
@@ -1981,6 +1982,16 @@ mod tests {
         Output::new(TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() })
     }
 
+    /// A silent payment info whose keys are 0x02 followed by `x` repeated, valid for 1 and 2.
+    #[cfg(feature = "silent-payments")]
+    fn sp_v0_info(x: u8) -> crate::SpV0Info {
+        let mut bytes = [x; 33];
+        bytes[0] = 0x02;
+        let key =
+            bitcoin::CompressedPublicKey::from_slice(&bytes).expect("valid compressed public key");
+        crate::SpV0Info::new(key, key)
+    }
+
     #[test]
     fn constructor_accepts_output_with_script() {
         let constructor = Constructor::<Modifiable>::default()
@@ -2024,12 +2035,59 @@ mod tests {
         }
     }
 
+    fn id_for_output(output: Output) -> Txid {
+        let mut psbt = single_input_psbt();
+        psbt.outputs[0] = output;
+        psbt.id().expect("lock time must be determinable")
+    }
+
+    #[test]
+    fn unique_id_commits_to_non_silent_payment_script_pubkey() {
+        let mut output = output_with_script();
+        let original_id = id_for_output(output.clone());
+
+        output.script_pubkey = ScriptBuf::from_hex("00140000000000000000000000000000000000000000")
+            .expect("failed to parse script from hex");
+
+        assert_ne!(id_for_output(output), original_id);
+    }
+
+    #[cfg(feature = "silent-payments")]
+    fn sp_output(sp_info: crate::SpV0Info) -> Output {
+        let mut output = output_without_script();
+        output.sp_v0_info = Some(sp_info);
+        output
+    }
+
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn unique_id_ignores_derived_silent_payment_script_pubkey() {
+        let output_without_script = sp_output(sp_v0_info(1));
+
+        let mut output_with_script = output_without_script.clone();
+        output_with_script.script_pubkey = ScriptBuf::from_hex(
+            "51201111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .expect("failed to parse script from hex");
+
+        assert_eq!(id_for_output(output_without_script), id_for_output(output_with_script));
+    }
+
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn unique_id_commits_to_silent_payment_info() {
+        assert_ne!(
+            id_for_output(sp_output(sp_v0_info(1))),
+            id_for_output(sp_output(sp_v0_info(2)))
+        );
+    }
+
     #[cfg(feature = "silent-payments")]
     #[test]
     fn constructor_accepts_underived_silent_payment_output() {
         // BIP-375: the silent payment info stands in for the script until it is derived.
         let mut output = output_without_script();
-        output.sp_v0_info = Some(vec![0; 66]);
+        output.sp_v0_info = Some(sp_v0_info(2));
 
         assert!(Constructor::<Modifiable>::default().output(output.clone()).is_ok());
         assert!(Constructor::<OutputsOnlyModifiable>::default().output(output).is_ok());
@@ -2059,7 +2117,7 @@ mod tests {
         use crate::raw;
 
         let mut output = output_without_script();
-        output.sp_v0_info = Some(vec![0; 66]);
+        output.sp_v0_info = Some(sp_v0_info(2));
 
         let mut psbt = single_input_psbt();
         // An all-zeros txid and a zero output index are the "not set yet" sentinels, so a
