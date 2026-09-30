@@ -15,7 +15,7 @@
 //! - The **Updater** role: Use the [`Updater`] type and then update additional fields of the [`Psbt`] directly.
 //! - The **Signer** role: Use the [`Signer`] type.
 //! - The **Finalizer** role: Use the [`Finalizer`] type (requires "miniscript" feature).
-//! - The **Extractor** role: Use the [`Extractor`](crate::extractor::Extractor) type.
+//! - The **Extractor** role: Use the [`Extractor`](crate::Extractor) type.
 //!
 //! To combine PSBTs use either `psbt.combine_with(other)` or `v2::combine(this, that)`.
 //!

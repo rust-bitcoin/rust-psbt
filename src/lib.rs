@@ -31,7 +31,6 @@ mod encoding;
 mod error;
 #[macro_use]
 mod macros;
-mod extractor;
 mod map;
 mod psbt;
 mod roles;
@@ -71,7 +70,6 @@ pub use crate::{
         NotUnsignedError, OutputsNotModifiableError, PartialSigsSighashTypeError,
         PsbtNotModifiableError, SignError,
     },
-    extractor::{ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor},
     map::{
         // We do not re-export any of the input/output/global error types, use form `input::DecodeError`.
         global::{self, Global},
@@ -91,8 +89,8 @@ pub use crate::{
         PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
     },
     roles::{
-        Constructor, Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer,
-        Updater,
+        Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
+        InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},
