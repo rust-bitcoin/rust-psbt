@@ -16,6 +16,9 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, IterEncoder, UnexpectedEofError,
 };
 
+use super::{
+    Key, KeyDecodeError, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_TX_MODIFIABLE, PSBT_GLOBAL_TX_VERSION,
@@ -34,9 +37,8 @@ use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
-use crate::raw::{ProprietaryKeyValueIter, UnknownKeyValueIter};
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
-use crate::{consts, raw, InconsistentKeySourcesError, V2};
+use crate::{consts, InconsistentKeySourcesError, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
 const INPUTS_MODIFIABLE: u8 = 0x01 << 0;
@@ -84,11 +86,11 @@ pub struct Global {
 
     /// Global proprietary key-value pairs.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
 
     /// Unknown global key-value pairs.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
-    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    pub unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 impl Global {
@@ -231,31 +233,31 @@ enum DecoderStage {
     DecodingSeparator,
     /// Reading the next key from the stream. The caller has already confirmed the
     /// stream does not start with a separator, so this decoder only sees real key data.
-    DecodingKey(raw::KeyDecoder),
+    DecodingKey(KeyDecoder),
     /// Decoding a version value.
-    DecodingVersion { key: raw::Key, decoder: VersionValueDecoder },
+    DecodingVersion { key: Key, decoder: VersionValueDecoder },
     /// Decoding a transaction version value.
-    DecodingTxVersion { key: raw::Key, decoder: TxVersionValueDecoder },
+    DecodingTxVersion { key: Key, decoder: TxVersionValueDecoder },
     /// Decoding a lock time value.
-    DecodingLockTime { key: raw::Key, decoder: FallbackLockTimeValueDecoder },
+    DecodingLockTime { key: Key, decoder: FallbackLockTimeValueDecoder },
     /// Decoding an input count value.
-    DecodingInputCount { key: raw::Key, decoder: CountValueDecoder },
+    DecodingInputCount { key: Key, decoder: CountValueDecoder },
     /// Decoding an output count value.
-    DecodingOutputCount { key: raw::Key, decoder: CountValueDecoder },
+    DecodingOutputCount { key: Key, decoder: CountValueDecoder },
     /// Decoding a single-byte modifiable-flags value.
-    DecodingTxModifiable { key: raw::Key, decoder: FlagsValueDecoder },
+    DecodingTxModifiable { key: Key, decoder: FlagsValueDecoder },
     /// Decoding an xpub value (fingerprint + path).
-    DecodingXpub { key: raw::Key, decoder: ByteVecDecoder },
+    DecodingXpub { key: Key, decoder: ByteVecDecoder },
     /// Decoding a proprietary value.
-    DecodingProprietary { key: raw::Key, decoder: ByteVecDecoder },
+    DecodingProprietary { key: Key, decoder: ByteVecDecoder },
     /// Decoding an unknown value.
-    DecodingUnknown { key: raw::Key, decoder: ByteVecDecoder },
+    DecodingUnknown { key: Key, decoder: ByteVecDecoder },
     #[cfg(feature = "silent-payments")]
     /// Decoding an ECDH share for silent payments.
-    DecodingSpEcdhShare { key: raw::Key, decoder: ValueDecoder<ArrayDecoder<33>> },
+    DecodingSpEcdhShare { key: Key, decoder: ValueDecoder<ArrayDecoder<33>> },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
-    DecodingSpDleqProof { key: raw::Key, decoder: ValueDecoder<ArrayDecoder<64>> },
+    DecodingSpDleqProof { key: Key, decoder: ValueDecoder<ArrayDecoder<64>> },
     /// The end-of-map separator has been reached.
     Done(Global),
     /// The decoder has entered a non-recoverable error state.
@@ -264,7 +266,7 @@ enum DecoderStage {
 
 impl DecoderStage {
     /// Select the appropriate value-decoding stage based on the decoded key.
-    fn from_key(key: raw::Key) -> Result<Self, DecodeError> {
+    fn from_key(key: Key) -> Result<Self, DecodeError> {
         match key.type_value {
             PSBT_GLOBAL_VERSION =>
                 Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
@@ -315,8 +317,8 @@ pub struct GlobalDecoder {
     sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
     #[cfg(feature = "silent-payments")]
     sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
-    proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
+    unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
 impl Default for GlobalDecoder {
@@ -397,7 +399,7 @@ impl Decoder for GlobalDecoder {
                     }
                     Some((_, _)) => {
                         // Not a separator, fall through to push these bytes into a fresh decoder.
-                        self.stage = DecoderStage::DecodingKey(raw::KeyDecoder::default());
+                        self.stage = DecoderStage::DecodingKey(KeyDecoder::default());
                     }
                     None => return Ok(DecoderStatus::NeedsMore),
                 }
@@ -623,7 +625,7 @@ impl Decoder for GlobalDecoder {
                     let value = decoder.end().map_err(|e| {
                         DecodeError::ValueDecode(ValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = raw::ProprietaryKey::try_from(key.clone()).map_err(|_| {
+                    let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
                         DecodeError::InsertPair(InsertPairError::InvalidProprietaryKey)
                     })?;
                     match self.proprietaries.entry(pk) {
@@ -1035,7 +1037,7 @@ pub enum DecodeError {
     /// Error inserting a key-value pair.
     InsertPair(InsertPairError),
     /// Error decoding a key from the stream.
-    KeyDecode(raw::KeyDecodeError),
+    KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(ValueDecodeError),
     /// Called `end()` before the end-of-map separator was reached.
@@ -1109,11 +1111,11 @@ impl From<InsertPairError> for DecodeError {
 #[derive(Debug)]
 pub enum InsertPairError {
     /// Keys within key-value map should never be duplicated.
-    DuplicateKey(raw::Key),
+    DuplicateKey(Key),
     /// Key should contain data.
-    InvalidKeyDataEmpty(raw::Key),
+    InvalidKeyDataEmpty(Key),
     /// Key should not contain data.
-    InvalidKeyDataNotEmpty(raw::Key),
+    InvalidKeyDataNotEmpty(Key),
     /// Value was not the correct length (got, want).
     // TODO: Use struct instead of tuple.
     ValueWrongLength(usize, usize),
@@ -1347,12 +1349,10 @@ mod tests {
     fn encode_proprietaries_and_unknowns() {
         let mut global = Global::default();
         global.proprietaries.insert(
-            raw::ProprietaryKey { prefix: b"test".to_vec(), subtype: 0x42, key: vec![1, 2, 3] },
+            ProprietaryKey { prefix: b"test".to_vec(), subtype: 0x42, key: vec![1, 2, 3] },
             vec![0xde, 0xad],
         );
-        global
-            .unknowns
-            .insert(raw::Key { type_value: 0x51, key: vec![0xaa, 0xbb] }, vec![0xcc, 0xdd]);
+        global.unknowns.insert(Key { type_value: 0x51, key: vec![0xaa, 0xbb] }, vec![0xcc, 0xdd]);
 
         check_global(&global);
     }
@@ -1387,7 +1387,7 @@ mod tests {
     #[test]
     fn excluded_key_type_is_rejected() {
         // PSBT_GLOBAL_UNSIGNED_TX (0x00) should not be accepted as a valid global key.
-        let key = raw::Key { type_value: 0x00, key: vec![] };
+        let key = Key { type_value: 0x00, key: vec![] };
         let err = DecoderStage::from_key(key).unwrap_err();
         match err {
             DecodeError::InsertPair(InsertPairError::ExcludedKey { key_type_value: v }) =>
