@@ -25,14 +25,6 @@ const PSBT_OUT_TAP_INTERNAL_KEY: u64 = 0x05;
 const PSBT_OUT_TAP_TREE: u64 = 0x06;
 /// Type: Taproot Key BIP 32 Derivation Path PSBT_OUT_TAP_BIP32_DERIVATION = 0x07
 const PSBT_OUT_TAP_BIP32_DERIVATION: u64 = 0x07;
-/// Type: Output Amount PSBT_OUT_AMOUNT = 0x03
-const PSBT_OUT_AMOUNT: u64 = 0x03;
-/// Type: Output Script PSBT_OUT_SCRIPT = 0x04
-const PSBT_OUT_SCRIPT: u64 = 0x04;
-/// Type: Silent Payment recipient data PSBT_OUT_SP_V0_INFO = 0x09
-const PSBT_OUT_SP_V0_INFO: u64 = 0x09;
-/// Type: Silent Payment Label used PSBT_OUT_SP_V0_LABEL = 0x0a
-const PSBT_OUT_SP_V0_LABEL: u64 = 0x0a;
 /// Type: Proprietary Use Type PSBT_IN_PROPRIETARY = 0xFC
 const PSBT_OUT_PROPRIETARY: u64 = 0xFC;
 
@@ -107,10 +99,6 @@ impl Output {
                 impl_psbt_insert_pair! {
                     self.tap_key_origins <= <raw_key: XOnlyPublicKey>|< raw_value: (Vec<TapLeafHash>, KeySource)>
                 }
-            }
-            v
-            @ (PSBT_OUT_AMOUNT | PSBT_OUT_SCRIPT | PSBT_OUT_SP_V0_INFO | PSBT_OUT_SP_V0_LABEL) => {
-                return Err(Error::ExcludedKey { key_type_value: v });
             }
             _ => match self.unknown.entry(raw_key) {
                 btree_map::Entry::Vacant(empty_key) => {

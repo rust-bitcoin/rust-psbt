@@ -2,16 +2,13 @@
 
 //! Partially Signed Bitcoin Transactions Version 0 codec.
 //!
-//! The codec below is code copied from [`rust-bitcoin`] (`v0.32.8`), stripped
-//! down to serialization/deserialization only. This module is private to the
-//! crate: v0 PSBTs are handled through the explicit decode/encode entry points
-//! on [`psbt::Psbt`] implemented at the bottom of this file.
+//! This module is private to the crate: v0 PSBTs are handled through the explicit decode/encode
+//! entry points on [`psbt::Psbt`] implemented at the bottom of this file.
 //!
 //! [`rust-bitcoin`]: <https://github.com/rust-bitcoin/rust-bitcoin>
 
 mod bitcoin;
 
-#[cfg(feature = "silent-payments")]
 use alloc::collections::BTreeMap;
 #[cfg(feature = "base64")]
 use alloc::string::{String, ToString};
@@ -19,8 +16,21 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ::bitcoin::locktime::absolute;
+#[cfg(feature = "silent-payments")]
+use ::bitcoin::CompressedPublicKey;
 
 use self::bitcoin::{Input, Output, Psbt};
+#[cfg(feature = "silent-payments")]
+use crate::consts::{
+    PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE,
+    PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL,
+};
+#[cfg(feature = "silent-payments")]
+use crate::dleq::DleqProof;
+#[cfg(feature = "silent-payments")]
+use crate::encoding::encode_to_vec;
+#[cfg(feature = "silent-payments")]
+use crate::SpV0Info;
 use crate::{psbt, DetermineLockTimeError};
 
 /// Converts a v0 raw key into the equivalent v2 raw key.
@@ -60,6 +70,44 @@ fn psbt_v0_to_v2(psbt: Psbt) -> psbt::Psbt {
         Some(unsigned_tx.lock_time)
     };
 
+    // Extract v2-only fields that were preserved as unknown keys.
+    #[cfg(feature = "silent-payments")]
+    let mut sp_ecdh_shares = BTreeMap::new();
+    #[cfg(feature = "silent-payments")]
+    let mut sp_dleq_proofs = BTreeMap::new();
+
+    // Filter out known silent-payment keys into the structured fields.
+    #[cfg(feature = "silent-payments")]
+    let unknown = unknown
+        .into_iter()
+        .filter_map(|(k, v)| match k.type_value {
+            PSBT_GLOBAL_SP_ECDH_SHARE if k.key.len() == 33 && v.len() == 33 =>
+                match (CompressedPublicKey::from_slice(&k.key), CompressedPublicKey::from_slice(&v))
+                {
+                    (Ok(scan), Ok(share)) => {
+                        sp_ecdh_shares.insert(scan, share);
+                        None
+                    }
+                    _ => Some((k, v)),
+                },
+            PSBT_GLOBAL_SP_DLEQ if k.key.len() == 33 && v.len() == 64 => match (
+                CompressedPublicKey::from_slice(&k.key),
+                <[u8; 64]>::try_from(v.as_slice()).map(DleqProof::from),
+            ) {
+                (Ok(scan), Ok(proof)) => {
+                    sp_dleq_proofs.insert(scan, proof);
+                    None
+                }
+                _ => Some((k, v)),
+            },
+            _ => Some((k, v)),
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    // Convert remaining keys from v0 to v2 format.
+    let unknowns: BTreeMap<_, _> =
+        unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect();
+
     let global = crate::Global {
         version: crate::V2,
         tx_version: unsigned_tx.version,
@@ -69,55 +117,99 @@ fn psbt_v0_to_v2(psbt: Psbt) -> psbt::Psbt {
         output_count: unsigned_tx.output.len(),
         xpubs: xpub,
         #[cfg(feature = "silent-payments")]
-        sp_ecdh_shares: BTreeMap::new(),
+        sp_ecdh_shares,
         #[cfg(feature = "silent-payments")]
-        sp_dleq_proofs: BTreeMap::new(),
+        sp_dleq_proofs,
         proprietaries: proprietary
             .into_iter()
             .map(|(k, v)| (raw_proprietary_v0_to_v2(k), v))
             .collect(),
-        unknowns: unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect(),
+        unknowns,
     };
 
     let inputs = unsigned_tx
         .input
         .iter()
         .zip(inputs)
-        .map(|(txin, input)| crate::Input {
-            previous_txid: txin.previous_output.txid,
-            spent_output_index: txin.previous_output.vout,
-            sequence: Some(txin.sequence),
-            min_time: None,
-            min_height: None,
-            non_witness_utxo: input.non_witness_utxo,
-            witness_utxo: input.witness_utxo,
-            partial_sigs: input.partial_sigs,
-            sighash_type: input.sighash_type,
-            redeem_script: input.redeem_script,
-            witness_script: input.witness_script,
-            bip32_derivations: input.bip32_derivation,
-            final_script_sig: input.final_script_sig,
-            final_script_witness: input.final_script_witness,
-            ripemd160_preimages: input.ripemd160_preimages,
-            sha256_preimages: input.sha256_preimages,
-            hash160_preimages: input.hash160_preimages,
-            hash256_preimages: input.hash256_preimages,
-            tap_key_sig: input.tap_key_sig,
-            tap_script_sigs: input.tap_script_sigs,
-            tap_scripts: input.tap_scripts,
-            tap_key_origins: input.tap_key_origins,
-            tap_internal_key: input.tap_internal_key,
-            tap_merkle_root: input.tap_merkle_root,
+        .map(|(txin, input)| {
             #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::new(),
+            let mut sp_ecdh = BTreeMap::new();
             #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::new(),
-            proprietaries: input
-                .proprietary
+            let mut sp_dleq = BTreeMap::new();
+
+            // Filter out known silent-payment input keys.
+            #[cfg(feature = "silent-payments")]
+            let unknown = input
+                .unknown
                 .into_iter()
-                .map(|(k, v)| (raw_proprietary_v0_to_v2(k), v))
-                .collect(),
-            unknowns: input.unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect(),
+                .filter_map(|(k, v)| {
+                    match k.type_value {
+                        PSBT_IN_SP_ECDH_SHARE if k.key.len() == 33 && v.len() == 33 => {
+                            if let (Ok(scan), Ok(share)) = (
+                                CompressedPublicKey::from_slice(&k.key),
+                                CompressedPublicKey::from_slice(&v),
+                            ) {
+                                sp_ecdh.insert(scan, share);
+                                return None;
+                            }
+                        }
+                        PSBT_IN_SP_DLEQ if k.key.len() == 33 && v.len() == 64 => {
+                            if let (Ok(scan), Ok(proof)) = (
+                                CompressedPublicKey::from_slice(&k.key),
+                                <[u8; 64]>::try_from(v.as_slice()).map(DleqProof::from),
+                            ) {
+                                sp_dleq.insert(scan, proof);
+                                return None;
+                            }
+                        }
+                        _ => {}
+                    }
+                    Some((k, v))
+                })
+                .collect::<BTreeMap<_, _>>();
+            #[cfg(not(feature = "silent-payments"))]
+            let unknown = input.unknown;
+
+            // Convert remaining keys from v0 to v2 format.
+            let unknowns: BTreeMap<_, _> =
+                unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect();
+
+            crate::Input {
+                previous_txid: txin.previous_output.txid,
+                spent_output_index: txin.previous_output.vout,
+                sequence: Some(txin.sequence),
+                min_time: None,
+                min_height: None,
+                non_witness_utxo: input.non_witness_utxo,
+                witness_utxo: input.witness_utxo,
+                partial_sigs: input.partial_sigs,
+                sighash_type: input.sighash_type,
+                redeem_script: input.redeem_script,
+                witness_script: input.witness_script,
+                bip32_derivations: input.bip32_derivation,
+                final_script_sig: input.final_script_sig,
+                final_script_witness: input.final_script_witness,
+                ripemd160_preimages: input.ripemd160_preimages,
+                sha256_preimages: input.sha256_preimages,
+                hash160_preimages: input.hash160_preimages,
+                hash256_preimages: input.hash256_preimages,
+                tap_key_sig: input.tap_key_sig,
+                tap_script_sigs: input.tap_script_sigs,
+                tap_scripts: input.tap_scripts,
+                tap_key_origins: input.tap_key_origins,
+                tap_internal_key: input.tap_internal_key,
+                tap_merkle_root: input.tap_merkle_root,
+                #[cfg(feature = "silent-payments")]
+                sp_ecdh_shares: sp_ecdh,
+                #[cfg(feature = "silent-payments")]
+                sp_dleq_proofs: sp_dleq,
+                proprietaries: input
+                    .proprietary
+                    .into_iter()
+                    .map(|(k, v)| (raw_proprietary_v0_to_v2(k), v))
+                    .collect(),
+                unknowns,
+            }
         })
         .collect();
 
@@ -125,25 +217,68 @@ fn psbt_v0_to_v2(psbt: Psbt) -> psbt::Psbt {
         .output
         .into_iter()
         .zip(outputs)
-        .map(|(txout, output)| crate::Output {
-            amount: txout.value,
-            script_pubkey: txout.script_pubkey,
-            redeem_script: output.redeem_script,
-            witness_script: output.witness_script,
-            bip32_derivations: output.bip32_derivation,
-            tap_internal_key: output.tap_internal_key,
-            tap_tree: output.tap_tree,
-            tap_key_origins: output.tap_key_origins,
+        .map(|(txout, output)| {
             #[cfg(feature = "silent-payments")]
-            sp_v0_info: None,
+            let mut sp_info = None;
             #[cfg(feature = "silent-payments")]
-            sp_v0_label: None,
-            proprietaries: output
-                .proprietary
+            let mut sp_label = None;
+
+            // Filter out known silent-payment output keys.
+            #[cfg(feature = "silent-payments")]
+            let unknown = output
+                .unknown
                 .into_iter()
-                .map(|(k, v)| (raw_proprietary_v0_to_v2(k), v))
-                .collect(),
-            unknowns: output.unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect(),
+                .filter_map(|(k, v)| {
+                    match k.type_value {
+                        PSBT_OUT_SP_V0_INFO if k.key.is_empty() =>
+                            if v.len() == 66 {
+                                let mut arr = [0u8; 66];
+                                arr.copy_from_slice(&v);
+                                if let Ok(info) = SpV0Info::from_byte_array(&arr) {
+                                    sp_info = Some(info);
+                                    return None;
+                                }
+                            },
+                        PSBT_OUT_SP_V0_LABEL if k.key.is_empty() => {
+                            if v.len() == 4 {
+                                let mut bytes = [0u8; 4];
+                                bytes.copy_from_slice(&v);
+                                sp_label = Some(u32::from_le_bytes(bytes));
+                            }
+                            return None;
+                        }
+                        _ => {}
+                    }
+                    Some((k, v))
+                })
+                .collect::<BTreeMap<_, _>>();
+            #[cfg(not(feature = "silent-payments"))]
+            let unknown = output.unknown;
+
+            // Convert remaining keys from v0 to v2 format.
+            let unknowns: BTreeMap<_, _> =
+                unknown.into_iter().map(|(k, v)| (raw_key_v0_to_v2(k), v)).collect();
+
+            crate::Output {
+                amount: txout.value,
+                script_pubkey: txout.script_pubkey,
+                redeem_script: output.redeem_script,
+                witness_script: output.witness_script,
+                bip32_derivations: output.bip32_derivation,
+                tap_internal_key: output.tap_internal_key,
+                tap_tree: output.tap_tree,
+                tap_key_origins: output.tap_key_origins,
+                #[cfg(feature = "silent-payments")]
+                sp_v0_info: sp_info,
+                #[cfg(feature = "silent-payments")]
+                sp_v0_label: sp_label,
+                proprietaries: output
+                    .proprietary
+                    .into_iter()
+                    .map(|(k, v)| (raw_proprietary_v0_to_v2(k), v))
+                    .collect(),
+                unknowns,
+            }
         })
         .collect();
 
@@ -152,6 +287,34 @@ fn psbt_v0_to_v2(psbt: Psbt) -> psbt::Psbt {
 
 /// Converts a v2 [`psbt::Input`] into a v0 [`Input`], dropping v2-only fields.
 fn input_v2_to_v0(input: &crate::Input) -> Input {
+    let base = input.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone()));
+
+    #[cfg(feature = "silent-payments")]
+    let unknown: BTreeMap<_, Vec<u8>> = {
+        let mut map: BTreeMap<_, _> = base.collect();
+        for (scan_key, share) in &input.sp_ecdh_shares {
+            map.insert(
+                bitcoin::raw::Key {
+                    type_value: PSBT_IN_SP_ECDH_SHARE,
+                    key: scan_key.to_bytes().to_vec(),
+                },
+                share.to_bytes().to_vec(),
+            );
+        }
+        for (scan_key, proof) in &input.sp_dleq_proofs {
+            map.insert(
+                bitcoin::raw::Key {
+                    type_value: PSBT_IN_SP_DLEQ,
+                    key: scan_key.to_bytes().to_vec(),
+                },
+                proof.as_bytes().to_vec(),
+            );
+        }
+        map
+    };
+    #[cfg(not(feature = "silent-payments"))]
+    let unknown: BTreeMap<_, Vec<u8>> = base.collect();
+
     Input {
         non_witness_utxo: input.non_witness_utxo.clone(),
         witness_utxo: input.witness_utxo.clone(),
@@ -177,12 +340,34 @@ fn input_v2_to_v0(input: &crate::Input) -> Input {
             .iter()
             .map(|(k, v)| (raw_proprietary_v2_to_v0(k), v.clone()))
             .collect(),
-        unknown: input.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone())).collect(),
+        unknown,
     }
 }
 
-/// Converts a v2 [`psbt::Output`] into a v0 [`Output`], dropping v2-only fields.
+/// Converts a v2 [`psbt::Output`] into a v0 [`Output`].
 fn output_v2_to_v0(output: &crate::Output) -> Output {
+    let base = output.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone()));
+
+    #[cfg(feature = "silent-payments")]
+    let unknown: BTreeMap<_, Vec<u8>> = {
+        let mut map: BTreeMap<_, _> = base.collect();
+        if let Some(ref info) = output.sp_v0_info {
+            map.insert(
+                bitcoin::raw::Key { type_value: PSBT_OUT_SP_V0_INFO, key: Vec::new() },
+                encode_to_vec(info),
+            );
+        }
+        if let Some(label) = output.sp_v0_label {
+            map.insert(
+                bitcoin::raw::Key { type_value: PSBT_OUT_SP_V0_LABEL, key: Vec::new() },
+                label.to_le_bytes().to_vec(),
+            );
+        }
+        map
+    };
+    #[cfg(not(feature = "silent-payments"))]
+    let unknown: BTreeMap<_, Vec<u8>> = base.collect();
+
     Output {
         redeem_script: output.redeem_script.clone(),
         witness_script: output.witness_script.clone(),
@@ -195,12 +380,53 @@ fn output_v2_to_v0(output: &crate::Output) -> Output {
             .iter()
             .map(|(k, v)| (raw_proprietary_v2_to_v0(k), v.clone()))
             .collect(),
-        unknown: output.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone())).collect(),
+        unknown,
+    }
+}
+
+/// Describes which v2-only fields were demoted to unknown key-value pairs when encoding a v2 PSBT
+/// as v0.
+///
+/// The silent payments extension ([BIP-375]) defines key types with no v0 semantic
+/// equivalent. Rather than dropping these fields, the v0 encoder preserves them as
+/// unknown key-value pairs so they survive a round-trip back to v2.
+///
+/// Fields that are merged into the `unsigned_tx` rather than moved to unknowns, such as
+/// `previous_txid`/`amount`/`sequence`, are *not* tracked here.
+///
+/// The v0 encoding implies construction is complete, inputs and outputs have been set in the
+/// unsigned transaction. So `tx_modifiable_flags` is intentionally not preserved since it is
+/// construction-phase metadata, not PSBT content.
+///
+/// [BIP-375]: https://github.com/bitcoin/bips/blob/master/bip-0375.mediawiki
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct Degraded {
+    /// Number of silent payment ECDH shares encoded as unknown global keys (`0x07`).
+    pub sp_ecdh_shares: usize,
+    /// Number of silent payment DLEQ proofs encoded as unknown global keys from the global map
+    /// (`0x08`).
+    pub sp_dleq_proofs: usize,
+    /// Number of inputs whose silent payment fields were encoded as unknown
+    /// per-input keys (`0x1d` / `0x1e`).
+    pub sp_dropped_inputs: usize,
+    /// Number of outputs whose silent payment fields were encoded as unknown per-output keys
+    /// (`0x09` and/or `0x0a` was `Some`).
+    pub sp_dropped_outputs: usize,
+}
+
+impl Degraded {
+    /// Returns `true` if no fields were demoted to unknowns.
+    pub fn is_empty(&self) -> bool {
+        self.sp_ecdh_shares == 0
+            && self.sp_dleq_proofs == 0
+            && self.sp_dropped_inputs == 0
+            && self.sp_dropped_outputs == 0
     }
 }
 
 /// Converts a [`psbt::Psbt`] into a v0 [`Psbt`], reconstructing the unsigned transaction from
-/// the v2 fields and dropping v2-only fields (see [`psbt::Psbt::serialize_v0_lossy`]).
+/// the v2 fields. v2-only fields without v0 equivalents are preserved as unknown key-value
+/// pairs rather than being dropped.
 fn psbt_v2_to_v0(psbt: &psbt::Psbt) -> Psbt {
     let unsigned_tx = psbt.unsigned_tx().expect("caller ensures lock time can be determined");
     let inputs = psbt.inputs.iter().map(input_v2_to_v0).collect();
@@ -212,7 +438,33 @@ fn psbt_v2_to_v0(psbt: &psbt::Psbt) -> Psbt {
         .iter()
         .map(|(k, v)| (raw_proprietary_v2_to_v0(k), v.clone()))
         .collect();
-    let unknown = global.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone())).collect();
+    let base = global.unknowns.iter().map(|(k, v)| (raw_key_v2_to_v0(k), v.clone()));
+
+    #[cfg(feature = "silent-payments")]
+    let unknown: BTreeMap<_, Vec<u8>> = {
+        let mut map: BTreeMap<_, _> = base.collect();
+        for (scan_key, share) in &global.sp_ecdh_shares {
+            map.insert(
+                bitcoin::raw::Key {
+                    type_value: PSBT_GLOBAL_SP_ECDH_SHARE,
+                    key: scan_key.to_bytes().to_vec(),
+                },
+                share.to_bytes().to_vec(),
+            );
+        }
+        for (scan_key, proof) in &global.sp_dleq_proofs {
+            map.insert(
+                bitcoin::raw::Key {
+                    type_value: PSBT_GLOBAL_SP_DLEQ,
+                    key: scan_key.to_bytes().to_vec(),
+                },
+                proof.as_bytes().to_vec(),
+            );
+        }
+        map
+    };
+    #[cfg(not(feature = "silent-payments"))]
+    let unknown: BTreeMap<_, Vec<u8>> = base.collect();
 
     Psbt {
         unsigned_tx,
@@ -226,6 +478,31 @@ fn psbt_v2_to_v0(psbt: &psbt::Psbt) -> Psbt {
 }
 
 impl psbt::Psbt {
+    /// Computes which v2 fields will be degraded to unknown keys by a v0 encoding.
+    pub fn v0_degraded(&self) -> Degraded {
+        #[cfg(feature = "silent-payments")]
+        {
+            Degraded {
+                sp_ecdh_shares: self.global.sp_ecdh_shares.len(),
+                sp_dleq_proofs: self.global.sp_dleq_proofs.len(),
+                sp_dropped_inputs: self
+                    .inputs
+                    .iter()
+                    .filter(|i| !i.sp_ecdh_shares.is_empty() || !i.sp_dleq_proofs.is_empty())
+                    .count(),
+                sp_dropped_outputs: self
+                    .outputs
+                    .iter()
+                    .filter(|o| o.sp_v0_info.is_some() || o.sp_v0_label.is_some())
+                    .count(),
+            }
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            Degraded::default()
+        }
+    }
+
     /// Deserializes a PSBT v0 (BIP-174) from raw data.
     ///
     /// This only accepts v0 PSBTs, use [`Self::deserialize`] for v2 PSBTs (BIP-370).
@@ -241,44 +518,14 @@ impl psbt::Psbt {
 
     /// Serializes this PSBT as BIP-174 (PSBT v0) raw binary data.
     ///
-    /// Fails rather than lose data. v2-only fields without v0 equivalents (transaction modifiable
-    /// flags, fallback lock time, per-input lock times, silent payments fields) must not be set.
-    /// Use [`Self::serialize_v0_lossy`] to drop them instead.
-    ///
-    /// Note this produces a v0 PSBT, use [`Self::serialize`] for v2 PSBTs (BIP-370).
+    /// v2-only fields without v0 equivalents are preserved as unknown key-value pairs rather
+    /// than being dropped. Use [`Self::v0_degraded`] to inspect what was demoted to unknowns.
     ///
     /// # Errors
     ///
-    /// Returns an error if the transaction lock time cannot be determined from the PSBT's lock
-    /// time fields, or if the PSBT contains fields with no v0 equivalent.
-    pub fn serialize_v0(&self) -> Result<Vec<u8>, SerializeV0Error> {
-        let bytes = self.serialize_v0_lossy()?;
-        // Anything that does not round-trip identically was by definition lost. The version
-        // field is exempt, it is a format marker, changing it is the point of this method.
-        let mut round_tripped =
-            Self::deserialize_v0(&bytes).expect("serialize_v0_lossy output must deserialize");
-        round_tripped.global.version = self.global.version;
-        if round_tripped != *self {
-            return Err(SerializeV0Error::Lossy);
-        }
-        Ok(bytes)
-    }
-
-    /// Serializes this PSBT as BIP-174 (PSBT v0) raw binary data, dropping v2-only fields.
-    ///
-    /// This conversion is lossy. v2-only fields without v0 equivalents are dropped. The global
-    /// transaction modifiable flags, input count, output count, and fallback lock time;
-    /// per-input lock times; and any silent payments fields. The v0 `unsigned_tx` is
-    /// reconstructed from the v2 fields (previous txid, spent output index, sequence, amount, and
-    /// script pubkey), deriving its lock time from the per-input lock times or the global fallback.
-    ///
-    /// Note this produces a v0 PSBT, use [`Self::serialize`] for v2 PSBTs (BIP-370).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the transaction lock time cannot be determined
-    /// from the PSBT's lock time fields.
-    pub fn serialize_v0_lossy(&self) -> Result<Vec<u8>, DetermineLockTimeError> {
+    /// Returns an error if the transaction lock time cannot be determined from the PSBT's
+    /// lock time fields.
+    pub fn serialize_v0(&self) -> Result<Vec<u8>, DetermineLockTimeError> {
         let _ = self.determine_lock_time()?;
         Ok(psbt_v2_to_v0(self).serialize())
     }
@@ -293,58 +540,14 @@ impl psbt::Psbt {
     }
     /// Serializes this PSBT as a PSBT v0 (BIP-174) base64 encoded string.
     ///
-    /// Fails rather than lose data, see [`Self::serialize_v0`]. Use
-    /// [`Self::serialize_v0_base64_lossy`] to drop v2-only fields instead.
+    /// See [`Self::serialize_v0`].
     #[cfg(feature = "base64")]
-    pub fn serialize_v0_base64(&self) -> Result<String, SerializeV0Error> {
+    pub fn serialize_v0_base64(&self) -> Result<String, DetermineLockTimeError> {
         use ::bitcoin::base64::display::Base64Display;
         use ::bitcoin::base64::prelude::BASE64_STANDARD;
 
         Ok(Base64Display::new(&self.serialize_v0()?, &BASE64_STANDARD).to_string())
     }
-
-    /// Serializes as a PSBT v0 (BIP-174) base64 encoded string, dropping v2-only fields.
-    ///
-    /// This conversion is lossy, see [`Self::serialize_v0_lossy`].
-    #[cfg(feature = "base64")]
-    pub fn serialize_v0_base64_lossy(&self) -> Result<String, DetermineLockTimeError> {
-        use ::bitcoin::base64::display::Base64Display;
-        use ::bitcoin::base64::prelude::BASE64_STANDARD;
-
-        Ok(Base64Display::new(&self.serialize_v0_lossy()?, &BASE64_STANDARD).to_string())
-    }
-}
-
-/// Error serializing a PSBT as PSBT v0 (BIP-174) without losing data.
-#[derive(Debug)]
-pub enum SerializeV0Error {
-    /// The transaction lock time could not be determined from the PSBT's lock time fields.
-    DetermineLockTime(DetermineLockTimeError),
-    /// The PSBT contains v2-only fields with no v0 equivalent.
-    Lossy,
-}
-
-impl fmt::Display for SerializeV0Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::DetermineLockTime(ref e) => write!(f, "lock time cannot be determined: {}", e),
-            Self::Lossy => write!(f, "PSBT contains v2-only fields with no v0 equivalent"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for SerializeV0Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DetermineLockTime(ref e) => Some(e),
-            Self::Lossy => None,
-        }
-    }
-}
-
-impl From<DetermineLockTimeError> for SerializeV0Error {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
 }
 
 /// Error deserializing a BIP-174 (PSBT v0) PSBT.

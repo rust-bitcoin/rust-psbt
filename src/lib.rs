@@ -93,7 +93,7 @@ pub use crate::{
         InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
-    v0::{DeserializeV0Error, SerializeV0Error},
+    v0::{Degraded, DeserializeV0Error},
     version::{UnsupportedVersionError, Version},
 };
 #[cfg(feature = "base64")]

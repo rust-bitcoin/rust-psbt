@@ -18,20 +18,6 @@ use crate::v0::bitcoin::{raw, Error, Psbt};
 const PSBT_GLOBAL_UNSIGNED_TX: u64 = 0x00;
 /// Type: Extended Public Key PSBT_GLOBAL_XPUB = 0x01
 const PSBT_GLOBAL_XPUB: u64 = 0x01;
-/// Type: Transaction Version PSBT_GLOBAL_TX_VERSION = 0x02
-const PSBT_GLOBAL_TX_VERSION: u64 = 0x02;
-/// Type: Fallback Locktime PSBT_GLOBAL_FALLBACK_LOCKTIME = 0x03
-const PSBT_GLOBAL_FALLBACK_LOCKTIME: u64 = 0x03;
-/// Type: Input Count PSBT_GLOBAL_INPUT_COUNT = 0x04
-const PSBT_GLOBAL_INPUT_COUNT: u64 = 0x04;
-/// Type: Output Count PSBT_GLOBAL_OUTPUT_COUNT = 0x05
-const PSBT_GLOBAL_OUTPUT_COUNT: u64 = 0x05;
-/// Type: Transaction Modifiable Flags PSBT_GLOBAL_TX_MODIFIABLE = 0x06
-const PSBT_GLOBAL_TX_MODIFIABLE: u64 = 0x06;
-/// Type: Version Number PSBT_GLOBAL_SP_ECDH_SHARE = 0x07
-const PSBT_GLOBAL_SP_ECDH_SHARE: u64 = 0x07;
-/// Type: Version Number PSBT_GLOBAL_SP_DLEQ = 0x08
-const PSBT_GLOBAL_SP_DLEQ: u64 = 0x08;
 /// Type: Version Number PSBT_GLOBAL_VERSION = 0xFB
 const PSBT_GLOBAL_VERSION: u64 = 0xFB;
 /// Type: Proprietary Use Type PSBT_GLOBAL_PROPRIETARY = 0xFC
@@ -201,15 +187,6 @@ impl Psbt {
                             btree_map::Entry::Occupied(_) =>
                                 return Err(Error::DuplicateKey(pair.key)),
                         },
-                        v @ (PSBT_GLOBAL_TX_VERSION
-                        | PSBT_GLOBAL_TX_MODIFIABLE
-                        | PSBT_GLOBAL_FALLBACK_LOCKTIME
-                        | PSBT_GLOBAL_INPUT_COUNT
-                        | PSBT_GLOBAL_OUTPUT_COUNT
-                        | PSBT_GLOBAL_SP_ECDH_SHARE
-                        | PSBT_GLOBAL_SP_DLEQ) => {
-                            return Err(Error::ExcludedKey { key_type_value: v });
-                        }
                         _ => match unknowns.entry(pair.key) {
                             btree_map::Entry::Vacant(empty_key) => {
                                 empty_key.insert(pair.value);
