@@ -15,7 +15,7 @@
 //! - The **Updater** role: Use the [`Updater`] type and then update additional fields of the [`Psbt`] directly.
 //! - The **Signer** role: Use the [`Signer`] type.
 //! - The **Finalizer** role: Use the [`Finalizer`] type (requires "miniscript" feature).
-//! - The **Extractor** role: Use the [`Extractor`](crate::extractor::Extractor) type.
+//! - The **Extractor** role: Use the [`Extractor`](crate::Extractor) type.
 //!
 //! To combine PSBTs use either `psbt.combine_with(other)` or `v2::combine(this, that)`.
 //!
@@ -28,7 +28,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
@@ -39,8 +38,7 @@ use bitcoin::locktime::absolute;
 use bitcoin::secp256k1::{Message, Secp256k1, Signing};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
-    ecdsa, transaction, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid,
-    XOnlyPublicKey,
+    ecdsa, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid, XOnlyPublicKey,
 };
 use bitcoin_consensus_encoding::{ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, Encoder4};
 
@@ -49,8 +47,7 @@ pub use self::display_from_str::ParsePsbtError;
 use crate::encoding::{encode_to_vec, PsbtDecode, PsbtEncode};
 use crate::error::{
     write_err, DeserializeError, DetermineLockTimeError, FeeError, FundingUtxoError,
-    IndexOutOfBoundsError, InputsNotModifiableError, OutputsNotModifiableError,
-    PsbtNotModifiableError, SignError,
+    IndexOutOfBoundsError, SignError,
 };
 use crate::global::{self, Global};
 use crate::input::{self, Input};
@@ -241,417 +238,6 @@ impl PsbtDecode for Psbt {
 pub fn combine(this: Psbt, that: Psbt) -> Result<Psbt, CombineError> { this.combine_with(that) }
 // TODO: Consider adding an iterator API that combines a list of PSBTs.
 
-/// Implements the BIP-370 Creator role.
-///
-/// The `Creator` type is only directly needed if one of the following holds:
-///
-/// - The creator and constructor are separate entities.
-/// - You need to set the fallback lock time.
-/// - You need to set the sighash single flag.
-///
-/// If not use the [`Constructor`]  to carry out both roles e.g., `Constructor::<Modifiable>::default()`.
-///
-/// See `examples/v2-separate-creator-constructor.rs`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Creator(Psbt);
-
-impl Creator {
-    /// Creates a new PSBT Creator.
-    pub fn new() -> Self {
-        let psbt = Psbt {
-            global: Global::default(),
-            inputs: Default::default(),
-            outputs: Default::default(),
-        };
-        Self(psbt)
-    }
-
-    /// Sets the fallback lock time.
-    pub fn fallback_lock_time(mut self, fallback: absolute::LockTime) -> Self {
-        self.0.global.fallback_lock_time = Some(fallback);
-        self
-    }
-
-    /// Sets the "has sighash single" flag in then transaction modifiable flags.
-    pub fn sighash_single(mut self) -> Self {
-        self.0.global.set_sighash_single_flag();
-        self
-    }
-
-    /// Sets the inputs modifiable bit in the transaction modifiable flags.
-    pub fn inputs_modifiable(mut self) -> Self {
-        self.0.global.set_inputs_modifiable_flag();
-        self
-    }
-
-    /// Sets the outputs modifiable bit in the transaction modifiable flags.
-    pub fn outputs_modifiable(mut self) -> Self {
-        self.0.global.set_outputs_modifiable_flag();
-        self
-    }
-
-    /// Sets the transaction version.
-    ///
-    /// You likely do not need this, it is provided for completeness.
-    ///
-    /// The default is [`transaction::Version::TWO`].
-    pub fn transaction_version(mut self, version: transaction::Version) -> Self {
-        self.0.global.tx_version = version;
-        self
-    }
-
-    /// Builds a [`Constructor`] that can add inputs and outputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use psbt_v2::{Creator, Constructor, Modifiable};
-    ///
-    /// // Creator role separate from Constructor role.
-    /// let psbt = Creator::new()
-    ///     .inputs_modifiable()
-    ///     .outputs_modifiable()
-    ///     .psbt();
-    /// let _constructor = Constructor::<Modifiable>::new(psbt);
-    ///
-    /// // However, since a single entity is likely to be both a Creator and Constructor.
-    /// let _constructor = Creator::new().constructor_modifiable();
-    ///
-    /// // Or the more terse:
-    /// let _constructor = Constructor::<Modifiable>::default();
-    /// ```
-    pub fn constructor_modifiable(self) -> Constructor<Modifiable> {
-        let mut psbt = self.0;
-        psbt.global.set_inputs_modifiable_flag();
-        psbt.global.set_outputs_modifiable_flag();
-        Constructor(psbt, PhantomData)
-    }
-
-    /// Builds a [`Constructor`] that can only add inputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use psbt_v2::{Creator, Constructor, InputsOnlyModifiable};
-    ///
-    /// // Creator role separate from Constructor role.
-    /// let psbt = Creator::new()
-    ///     .inputs_modifiable()
-    ///     .psbt();
-    /// let _constructor = Constructor::<InputsOnlyModifiable>::new(psbt);
-    ///
-    /// // However, since a single entity is likely to be both a Creator and Constructor.
-    /// let _constructor = Creator::new().constructor_inputs_only_modifiable();
-    ///
-    /// // Or the more terse:
-    /// let _constructor = Constructor::<InputsOnlyModifiable>::default();
-    /// ```
-    pub fn constructor_inputs_only_modifiable(self) -> Constructor<InputsOnlyModifiable> {
-        let mut psbt = self.0;
-        psbt.global.set_inputs_modifiable_flag();
-        psbt.global.clear_outputs_modifiable_flag();
-        Constructor(psbt, PhantomData)
-    }
-
-    /// Builds a [`Constructor`] that can only add outputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use psbt_v2::{Creator, Constructor, OutputsOnlyModifiable};
-    ///
-    /// // Creator role separate from Constructor role.
-    /// let psbt = Creator::new()
-    ///     .inputs_modifiable()
-    ///     .psbt();
-    /// let _constructor = Constructor::<OutputsOnlyModifiable>::new(psbt);
-    ///
-    /// // However, since a single entity is likely to be both a Creator and Constructor.
-    /// let _constructor = Creator::new().constructor_outputs_only_modifiable();
-    ///
-    /// // Or the more terse:
-    /// let _constructor = Constructor::<OutputsOnlyModifiable>::default();
-    /// ```
-    pub fn constructor_outputs_only_modifiable(self) -> Constructor<OutputsOnlyModifiable> {
-        let mut psbt = self.0;
-        psbt.global.clear_inputs_modifiable_flag();
-        psbt.global.set_outputs_modifiable_flag();
-        Constructor(psbt, PhantomData)
-    }
-
-    /// Returns the created [`Psbt`].
-    ///
-    /// This is only required if the Creator and Constructor are separate entities. If the Creator
-    /// is also acting as the Constructor use one of the `Self::constructor_foo` functions.
-    pub fn psbt(self) -> Psbt { self.0 }
-}
-
-impl Default for Creator {
-    fn default() -> Self { Self::new() }
-}
-
-/// Marker for a `Constructor` with both inputs and outputs modifiable.
-pub enum Modifiable {}
-/// Marker for a `Constructor` with inputs modifiable.
-pub enum InputsOnlyModifiable {}
-/// Marker for a `Constructor` with outputs modifiable.
-pub enum OutputsOnlyModifiable {}
-
-mod sealed {
-    pub trait Mod {}
-    impl Mod for super::Modifiable {}
-    impl Mod for super::InputsOnlyModifiable {}
-    impl Mod for super::OutputsOnlyModifiable {}
-}
-
-/// Marker for if either inputs or outputs are modifiable, or both.
-pub trait Mod: sealed::Mod + Sync + Send + Sized + Unpin {}
-
-impl Mod for Modifiable {}
-impl Mod for InputsOnlyModifiable {}
-impl Mod for OutputsOnlyModifiable {}
-
-/// Implements the BIP-370 Constructor role.
-///
-/// Uses the builder pattern, and generics to make adding inputs and outputs infallible.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Constructor<T>(Psbt, PhantomData<T>);
-
-impl<T: Mod> Constructor<T> {
-    /// Marks that the `Psbt` can not have any more inputs added to it.
-    pub fn no_more_inputs(mut self) -> Self {
-        self.0.global.clear_inputs_modifiable_flag();
-        self
-    }
-
-    /// Marks that the `Psbt` can not have any more outputs added to it.
-    pub fn no_more_outputs(mut self) -> Self {
-        self.0.global.clear_outputs_modifiable_flag();
-        self
-    }
-
-    /// Returns a PSBT [`Updater`] once construction is completed.
-    pub fn updater(self) -> Result<Updater, DetermineLockTimeError> {
-        self.no_more_inputs().no_more_outputs().psbt().map(Updater)
-    }
-
-    /// Returns the [`Psbt`] in its current state.
-    ///
-    /// This function can be used either to get the [`Psbt`] to pass to another constructor or to
-    /// get the [`Psbt`] ready for update if `no_more_inputs` and `no_more_outputs` have already
-    /// explicitly been called.
-    pub fn psbt(self) -> Result<Psbt, DetermineLockTimeError> {
-        let _ = self.0.determine_lock_time()?;
-        Ok(self.0)
-    }
-}
-
-impl Constructor<Modifiable> {
-    /// Creates a new Constructor.
-    ///
-    /// This function should only be needed if the PSBT Creator and Constructor roles are being
-    /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
-    /// e.g., `constructor_modifiable()`.
-    pub fn new(psbt: Psbt) -> Result<Self, PsbtNotModifiableError> {
-        if !psbt.global.is_inputs_modifiable() {
-            Err(InputsNotModifiableError.into())
-        } else if !psbt.global.is_outputs_modifiable() {
-            Err(OutputsNotModifiableError.into())
-        } else {
-            Ok(Self(psbt, PhantomData))
-        }
-    }
-
-    /// Adds an input to the PSBT.
-    pub fn input(mut self, input: Input) -> Self {
-        self.0.inputs.push(input);
-        self.0.global.input_count += 1;
-        self
-    }
-
-    /// Adds an output to the PSBT.
-    ///
-    /// # Errors
-    ///
-    /// If `output` breaks the BIP-370 and BIP-375 output rules, see [`Output::validate`].
-    pub fn output(mut self, output: Output) -> Result<Self, output::ValidationError> {
-        output.validate()?;
-        self.0.outputs.push(output);
-        self.0.global.output_count += 1;
-        Ok(self)
-    }
-}
-// Useful if the Creator and Constructor are a single entity.
-impl Default for Constructor<Modifiable> {
-    fn default() -> Self { Creator::new().constructor_modifiable() }
-}
-
-impl Constructor<InputsOnlyModifiable> {
-    /// Creates a new Constructor.
-    ///
-    /// This function should only be needed if the PSBT Creator and Constructor roles are being
-    /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
-    /// e.g., `constructor_modifiable()`.
-    pub fn new(psbt: Psbt) -> Result<Self, InputsNotModifiableError> {
-        if psbt.global.is_inputs_modifiable() {
-            Ok(Self(psbt, PhantomData))
-        } else {
-            Err(InputsNotModifiableError)
-        }
-    }
-
-    /// Adds an input to the PSBT.
-    pub fn input(mut self, input: Input) -> Self {
-        self.0.inputs.push(input);
-        self.0.global.input_count += 1;
-        self
-    }
-}
-
-// Useful if the Creator and Constructor are a single entity.
-impl Default for Constructor<InputsOnlyModifiable> {
-    fn default() -> Self { Creator::new().constructor_inputs_only_modifiable() }
-}
-
-impl Constructor<OutputsOnlyModifiable> {
-    /// Creates a new Constructor.
-    ///
-    /// This function should only be needed if the PSBT Creator and Constructor roles are being
-    /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
-    /// e.g., `constructor_modifiable()`.
-    pub fn new(psbt: Psbt) -> Result<Self, OutputsNotModifiableError> {
-        if psbt.global.is_outputs_modifiable() {
-            Ok(Self(psbt, PhantomData))
-        } else {
-            Err(OutputsNotModifiableError)
-        }
-    }
-
-    /// Adds an output to the PSBT.
-    ///
-    /// # Errors
-    ///
-    /// If `output` breaks the BIP-370 and BIP-375 output rules, see [`Output::validate`].
-    pub fn output(mut self, output: Output) -> Result<Self, output::ValidationError> {
-        output.validate()?;
-        self.0.outputs.push(output);
-        self.0.global.output_count += 1;
-        Ok(self)
-    }
-}
-
-// Useful if the Creator and Constructor are a single entity.
-impl Default for Constructor<OutputsOnlyModifiable> {
-    fn default() -> Self { Creator::new().constructor_outputs_only_modifiable() }
-}
-
-/// Implements the BIP-370 Updater role.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Updater(Psbt);
-
-impl Updater {
-    /// Creates an `Updater`.
-    ///
-    /// An updater can only update a PSBT that has a valid combination of lock times.
-    pub fn new(psbt: Psbt) -> Result<Self, DetermineLockTimeError> {
-        let _ = psbt.determine_lock_time()?;
-        Ok(Self(psbt))
-    }
-
-    /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Txid {
-        self.0.id().expect("Updater guarantees lock time can be determined")
-    }
-
-    /// Updater role, update the sequence number for input at `index`.
-    pub fn set_sequence(
-        mut self,
-        n: Sequence,
-        input_index: usize,
-    ) -> Result<Self, IndexOutOfBoundsError> {
-        let input = self.0.checked_input_mut(input_index)?;
-        input.sequence = Some(n);
-        Ok(self)
-    }
-
-    /// Returns the inner [`Psbt`].
-    pub fn psbt(self) -> Psbt { self.0 }
-}
-
-impl TryFrom<Psbt> for Updater {
-    type Error = DetermineLockTimeError;
-
-    fn try_from(psbt: Psbt) -> Result<Self, Self::Error> { Self::new(psbt) }
-}
-
-/// Implements the BIP-370 Signer role.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Signer(Psbt);
-
-impl Signer {
-    /// Creates a `Signer`.
-    ///
-    /// An updater can only update a PSBT that has a valid combination of lock times.
-    pub fn new(psbt: Psbt) -> Result<Self, DetermineLockTimeError> {
-        let _ = psbt.determine_lock_time()?;
-        Ok(Self(psbt))
-    }
-
-    /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Result<Txid, DetermineLockTimeError> { self.0.id() }
-
-    /// Creates an unsigned transaction from the inner [`Psbt`].
-    pub fn unsigned_tx(&self) -> Transaction {
-        self.0.unsigned_tx().expect("Signer guarantees lock time can be determined")
-    }
-
-    /// Attempts to create _all_ the required signatures for this PSBT using `k`.
-    ///
-    /// **NOTE**: Taproot inputs are, as yet, not supported by this function. We currently only
-    /// attempt to sign ECDSA inputs.
-    ///
-    /// If you just want to sign an input with one specific key consider using `sighash_ecdsa`. This
-    /// function does not support scripts that contain `OP_CODESEPARATOR`.
-    ///
-    /// # Returns
-    ///
-    /// Either Ok(SigningKeys) or Err((SigningKeys, SigningErrors)), where
-    /// - SigningKeys: A map of input index -> pubkey associated with secret key used to sign.
-    /// - SigningKeys: A map of input index -> the error encountered while attempting to sign.
-    ///
-    /// If an error is returned some signatures may already have been added to the PSBT. Since
-    /// `partial_sigs` is a [`BTreeMap`] it is safe to retry, previous sigs will be overwritten.
-    pub fn sign<C, K>(
-        self,
-        k: &K,
-        secp: &Secp256k1<C>,
-    ) -> Result<(Psbt, SigningKeys), (SigningKeys, SigningErrors)>
-    where
-        C: Signing,
-        K: GetKey,
-    {
-        let tx = self.unsigned_tx();
-        let mut psbt = self.psbt();
-
-        psbt.sign(tx, k, secp).map(|signing_keys| (psbt, signing_keys))
-    }
-
-    /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing an ECDSA input.
-    ///
-    /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
-    /// > inputs so that it accurately reflects the state of the PSBT.
-    pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.0.clear_tx_modifiable(PsbtSighashType::from(ty))
-    }
-
-    /// Returns the inner [`Psbt`].
-    pub fn psbt(self) -> Psbt { self.0 }
-}
-
 /// A Partially Signed Transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -791,7 +377,7 @@ impl Psbt {
     }
 
     /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing.
-    fn clear_tx_modifiable(&mut self, sighash_type: PsbtSighashType) {
+    pub(crate) fn clear_tx_modifiable(&mut self, sighash_type: PsbtSighashType) {
         // If the Signer added a signature that does not use SIGHASH_ANYONECANPAY,
         // the Input Modifiable flag must be set to False.
         if !sighash_type.is_anyone_can_pay() {
@@ -914,7 +500,7 @@ impl Psbt {
     ///
     /// If an error is returned some signatures may already have been added to the PSBT. Since
     /// `partial_sigs` is a [`BTreeMap`] it is safe to retry, previous sigs will be overwritten.
-    fn sign<C, K>(
+    pub(crate) fn sign<C, K>(
         &mut self,
         tx: Transaction,
         k: &K,
@@ -1085,7 +671,10 @@ impl Psbt {
     }
 
     /// Gets a mutable reference to the input at `input_index` after checking that it is a valid index.
-    fn checked_input_mut(&mut self, index: usize) -> Result<&mut Input, IndexOutOfBoundsError> {
+    pub(crate) fn checked_input_mut(
+        &mut self,
+        index: usize,
+    ) -> Result<&mut Input, IndexOutOfBoundsError> {
         self.check_input_index(index)?;
         Ok(&mut self.inputs[index])
     }
@@ -1565,9 +1154,10 @@ impl From<output::CombineError> for CombineError {
 mod tests {
     use ::bitcoin::script::Builder;
     use ::bitcoin::{opcodes, taproot, OutPoint};
-    use bitcoin::{ScriptBuf, TapSighashType, XOnlyPublicKey};
+    use bitcoin::{transaction, ScriptBuf, TapSighashType, XOnlyPublicKey};
 
     use super::*;
+    use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable, Signer};
     use crate::PsbtSighashType;
 
     fn single_input_psbt() -> Psbt {

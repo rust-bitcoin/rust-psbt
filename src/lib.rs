@@ -31,12 +31,9 @@ mod encoding;
 mod error;
 #[macro_use]
 mod macros;
-mod extractor;
-#[cfg(feature = "miniscript")]
-mod finalizer;
 mod map;
 mod psbt;
-
+mod roles;
 #[cfg(feature = "serde")]
 mod serde_utils;
 mod sighash_type;
@@ -53,7 +50,7 @@ pub use crate::dleq::{DleqProof, InvalidLengthError};
 pub use crate::encoding::{decode_from_reader, encode_to_writer};
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
-pub use crate::finalizer::{
+pub use crate::roles::{
     FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
     InterpreterCheckInputError,
 };
@@ -73,7 +70,6 @@ pub use crate::{
         NotUnsignedError, OutputsNotModifiableError, PartialSigsSighashTypeError,
         PsbtNotModifiableError, SignError,
     },
-    extractor::{ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor},
     map::{
         // We do not re-export any of the input/output/global error types, use form `input::DecodeError`.
         global::{self, Global},
@@ -89,10 +85,12 @@ pub use crate::{
         ProprietaryType,
     },
     psbt::{
-        combine, CombineError, Constructor, Creator, DecodeError, GetKey, GetKeyError,
-        InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputType, OutputsOnlyModifiable, Psbt,
-        PsbtV2Decoder, PsbtV2Encoder, Signer, SigningAlgorithm, SigningErrors, SigningKeys,
-        Updater,
+        combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
+        PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
+    },
+    roles::{
+        Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
+        InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{DeserializeV0Error, SerializeV0Error},
