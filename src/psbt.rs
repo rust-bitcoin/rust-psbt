@@ -40,7 +40,7 @@ use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
     ecdsa, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid, XOnlyPublicKey,
 };
-use bitcoin_consensus_encoding::{ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, Encoder4};
+use bitcoin_consensus_encoding::{ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder4};
 
 #[cfg(feature = "base64")]
 pub use self::display_from_str::ParsePsbtError;
@@ -61,11 +61,20 @@ const PSBT_MAGIC: &[u8; 4] = b"psbt";
 /// The byte that separates the magic bytes from the global map (`0xff`).
 const PSBT_SEPARATOR: u8 = 0xff;
 
+/// The PSBT magic header, `b"psbt\xff"`, 4-byte ASCII identifier `"psbt"`
+/// followed by the `0xff` separator that marks the start of the global map.
+const PSBT_MAGIC_BYTES: [u8; 5] = [b'p', b's', b'b', b't', 0xff];
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for the [`PSBT_MAGIC_BYTES`].
+    pub(crate) struct MagicEncoder<'e>(ArrayEncoder<5>);
+}
+
 bitcoin_consensus_encoding::encoder_newtype! {
     /// Encoder for a complete PSBT v2.
     pub struct PsbtV2Encoder<'e>(
         Encoder4<
-            BytesEncoder<'static>,
+            MagicEncoder<'e>,
             global::GlobalMapEncoder<'e>,
             crate::encoding::SliceEncoder<'e, Input>,
             crate::encoding::SliceEncoder<'e, Output>,
@@ -78,10 +87,8 @@ impl PsbtEncode for Psbt {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         // `<psbt> := <magic> <global-map> <input-map>* <output-map>*`
-        static HEADER: [u8; 5] =
-            [PSBT_MAGIC[0], PSBT_MAGIC[1], PSBT_MAGIC[2], PSBT_MAGIC[3], PSBT_SEPARATOR];
         PsbtV2Encoder::new(Encoder4::new(
-            BytesEncoder::without_length_prefix(&HEADER),
+            MagicEncoder::new(ArrayEncoder::without_length_prefix(PSBT_MAGIC_BYTES)),
             self.global.psbt_encoder(),
             crate::encoding::SliceEncoder::without_length_prefix(&self.inputs),
             crate::encoding::SliceEncoder::without_length_prefix(&self.outputs),
