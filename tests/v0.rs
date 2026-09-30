@@ -157,6 +157,7 @@ fn v2_only_fields_in_v0_encoding() {
         sp_psbt.global.sp_ecdh_shares.insert(pk, pk);
         sp_psbt.global.sp_dleq_proofs.insert(pk, DleqProof([0xAB; 64]));
         sp_psbt.inputs[0].sp_ecdh_shares.insert(pk, pk);
+        sp_psbt.inputs[0].sp_dleq_proofs.insert(pk, DleqProof([0x42; 64]));
         sp_psbt.outputs[0].sp_v0_info = Some(SpV0Info::new(pk, pk));
 
         let degraded = sp_psbt.v0_degraded();
@@ -172,6 +173,7 @@ fn v2_only_fields_in_v0_encoding() {
         assert_eq!(decoded.global.sp_ecdh_shares.len(), 1);
         assert_eq!(decoded.global.sp_dleq_proofs.len(), 1);
         assert_eq!(decoded.inputs[0].sp_ecdh_shares.len(), 1);
+        assert_eq!(decoded.inputs[0].sp_dleq_proofs.len(), 1);
         assert!(decoded.outputs[0].sp_v0_info.is_some());
     }
 }

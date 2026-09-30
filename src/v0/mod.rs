@@ -2,6 +2,7 @@
 
 //! Partially Signed Bitcoin Transactions Version 0 codec.
 //!
+#![allow(dead_code)]
 //! This module is private to the crate: v0 PSBTs are handled through the explicit decode/encode
 //! entry points on [`psbt::Psbt`] implemented at the bottom of this file.
 //!
@@ -526,8 +527,7 @@ impl psbt::Psbt {
     /// Returns an error if the transaction lock time cannot be determined from the PSBT's
     /// lock time fields.
     pub fn serialize_v0(&self) -> Result<Vec<u8>, DetermineLockTimeError> {
-        let _ = self.determine_lock_time()?;
-        Ok(psbt_v2_to_v0(self).serialize())
+        Ok(crate::encoding::encode_to_vec(&crate::psbt::PsbtV0::new(self)?))
     }
 
     /// Deserializes a PSBT v0 (BIP-174) from a base64 encoded string.

@@ -86,7 +86,8 @@ pub use crate::{
     },
     psbt::{
         combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
-        PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
+        PsbtV0, PsbtV0Encoder, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors,
+        SigningKeys,
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,

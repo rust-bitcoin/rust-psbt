@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // SPDX-License-Identifier: CC0-1.0
 
 //! Raw PSBT key-value pairs.

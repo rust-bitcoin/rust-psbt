@@ -40,7 +40,9 @@ use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
     ecdsa, Amount, ScriptBuf, Sequence, TapSighashType, Transaction, TxOut, Txid, XOnlyPublicKey,
 };
-use bitcoin_consensus_encoding::{ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder4};
+use bitcoin_consensus_encoding::{
+    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder4, IterEncoder,
+};
 
 #[cfg(feature = "base64")]
 pub use self::display_from_str::ParsePsbtError;
@@ -94,6 +96,50 @@ impl PsbtEncode for Psbt {
             crate::encoding::SliceEncoder::without_length_prefix(&self.outputs),
         ))
     }
+}
+
+/// Locks a [`Psbt`] as PSBT v0.
+///
+/// Lock time is resolved at construction and the immutable borrow on the psbt guarantees it will
+/// remain valid.
+pub struct PsbtV0<'a> {
+    pub(crate) psbt: &'a Psbt,
+    pub(crate) lock_time: bitcoin::locktime::absolute::LockTime,
+}
+
+impl<'a> PsbtV0<'a> {
+    /// Lock a [`Psbt`] as PSBT v0.
+    pub fn new(psbt: &'a Psbt) -> Result<Self, crate::error::DetermineLockTimeError> {
+        Ok(Self { psbt, lock_time: psbt.determine_lock_time()? })
+    }
+}
+
+impl PsbtEncode for PsbtV0<'_> {
+    type Encoder<'e>
+        = PsbtV0Encoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        PsbtV0Encoder::new(Encoder4::new(
+            MagicEncoder::new(ArrayEncoder::without_length_prefix(PSBT_MAGIC_BYTES)),
+            crate::map::v0::global::GlobalMapEncoder::new(self),
+            IterEncoder::new(crate::map::v0::input::Inputs::from(self.psbt.inputs.iter())),
+            IterEncoder::new(crate::map::v0::output::Outputs::from(self.psbt.outputs.iter())),
+        ))
+    }
+}
+
+bitcoin_consensus_encoding::encoder_newtype! {
+    /// Encoder for a complete PSBT v0 (BIP-174).
+    pub struct PsbtV0Encoder<'e>(
+        Encoder4<
+            MagicEncoder<'e>,
+            crate::map::v0::global::GlobalMapEncoder<'e>,
+            IterEncoder<crate::map::v0::input::Inputs<'e>>,
+            IterEncoder<crate::map::v0::output::Outputs<'e>>,
+        >
+    );
 }
 
 /// Decoder for PSBT v2.

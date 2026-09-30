@@ -25,6 +25,8 @@ pub mod global;
 pub mod input;
 /// The `output-map`.
 pub mod output;
+/// PSBT v0 (BIP-174) map encoders.
+pub mod v0;
 
 use alloc::collections::btree_map;
 use alloc::vec::Vec;
