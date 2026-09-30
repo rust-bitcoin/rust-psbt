@@ -2,7 +2,7 @@
 
 //! Implementation of the Finalizer role as defined in [BIP-174].
 //!
-//! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.media wiki>
+//! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -18,9 +18,9 @@ use miniscript::{
     ToPublicKey,
 };
 
+use super::satisfy::InputSatisfier;
+use super::InterpreterCheckError;
 use crate::error::{write_err, FundingUtxoError};
-use crate::finalizer::satisfy::InputSatisfier;
-use crate::finalizer::InterpreterCheckError;
 use crate::map::input::{self, Input};
 use crate::psbt::Psbt;
 use crate::{DetermineLockTimeError, PartialSigsSighashTypeError};

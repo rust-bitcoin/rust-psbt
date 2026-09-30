@@ -32,8 +32,6 @@ mod error;
 #[macro_use]
 mod macros;
 mod extractor;
-#[cfg(feature = "miniscript")]
-mod finalizer;
 mod map;
 mod psbt;
 mod roles;
@@ -53,7 +51,7 @@ pub use crate::dleq::{DleqProof, InvalidLengthError};
 pub use crate::encoding::{decode_from_reader, encode_to_writer};
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
-pub use crate::finalizer::{
+pub use crate::roles::{
     FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
     InterpreterCheckInputError,
 };
