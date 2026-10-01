@@ -32,6 +32,12 @@ pub enum DeserializeError {
     DecodeInputs(VecDecoderError<input::DecodeError>),
     /// Error decoding the output maps sequence.
     DecodeOutputs(VecDecoderError<output::DecodeError>),
+    /// Error decoding a v0 global map.
+    DecodeV0Global(crate::map::v0::global::DecodeError),
+    /// Error decoding the v0 input maps sequence.
+    DecodeV0Inputs(VecDecoderError<crate::map::v0::input::InputDecodeError>),
+    /// Error decoding the v0 output maps sequence.
+    DecodeV0Outputs(VecDecoderError<crate::map::v0::output::OutputDecodeError>),
     /// Called `end()` before decoding finished (truncated or incomplete input).
     EarlyEnd(&'static str),
 }
@@ -50,6 +56,9 @@ impl fmt::Display for DeserializeError {
             Self::DecodeOutput(e) => write!(f, "error decoding output map: {}", e),
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
+            Self::DecodeV0Global(e) => write!(f, "error decoding v0 global map: {}", e),
+            Self::DecodeV0Inputs(e) => write!(f, "error decoding v0 input maps: {}", e),
+            Self::DecodeV0Outputs(e) => write!(f, "error decoding v0 output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
         }
     }
@@ -64,6 +73,9 @@ impl std::error::Error for DeserializeError {
             Self::DecodeOutput(e) => Some(e),
             Self::DecodeInputs(e) => Some(e),
             Self::DecodeOutputs(e) => Some(e),
+            Self::DecodeV0Global(e) => Some(e),
+            Self::DecodeV0Inputs(e) => Some(e),
+            Self::DecodeV0Outputs(e) => Some(e),
             Self::InvalidMagic(_)
             | Self::InvalidSeparator(_)
             | Self::NoMorePairs

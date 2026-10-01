@@ -10,15 +10,23 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+use alloc::vec::Vec;
+
+use bitcoin::absolute::{LockTimeDecoder, LockTimeDecoderError};
+use bitcoin::blockdata::transaction::{
+    TxInDecoder, TxInDecoderError, TxOutDecoder, TxOutDecoderError,
+};
 use bitcoin::hashes::Hash;
 use bitcoin::locktime::absolute;
-use bitcoin::Sequence;
+use bitcoin::transaction::{self, Sequence};
+use bitcoin::{Amount, ScriptBuf, Txid};
 use bitcoin_consensus_encoding::{
-    ArrayEncoder, BytesEncoder, CompactSizeEncoder, Encoder2, Encoder4, IterEncoder,
-    PrefixedBytesEncoder,
+    ArrayEncoder, BytesEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder2, Encoder4,
+    IterEncoder, PrefixedBytesEncoder, VecDecoderError, VecDecoderWith,
 };
 
 use crate::encoding::PsbtEncode;
+use crate::version::{VersionDecoder, VersionDecoderError};
 
 /// Default sequence for unsigned tx inputs. Matches the convention in
 /// [`Input::unsigned_tx_in()`](crate::input::Input::unsigned_tx_in): a
@@ -114,5 +122,145 @@ impl<'e> UnsignedTxEncoder<'e> {
             ),
             v0.lock_time.psbt_encoder(),
         ))
+    }
+}
+
+#[derive(Debug)]
+pub enum UnsignedTxDecodeError {
+    EarlyEnd,
+    InvalidScriptSig(u8),
+    DecodeVersion(VersionDecoderError),
+    DecodeLockTime(LockTimeDecoderError),
+    Inputs(VecDecoderError<TxInDecoderError>),
+    Outputs(VecDecoderError<TxOutDecoderError>),
+}
+
+impl core::fmt::Display for UnsignedTxDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EarlyEnd => write!(f, "end called before decoding finished"),
+            Self::InvalidScriptSig(b) =>
+                write!(f, "non-empty scriptSig (0x{b:02x}) in unsigned tx"),
+            Self::DecodeVersion(e) => write!(f, "version: {e}"),
+            Self::DecodeLockTime(e) => write!(f, "lock time: {e}"),
+            Self::Inputs(e) => write!(f, "inputs: {e}"),
+            Self::Outputs(e) => write!(f, "outputs: {e}"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UnsignedTxDecoder {
+    state: State,
+}
+
+impl Default for UnsignedTxDecoder {
+    fn default() -> Self { Self { state: State::Version(VersionDecoder::new()) } }
+}
+
+#[derive(Debug)]
+enum State {
+    Version(VersionDecoder),
+    Inputs(transaction::Version, VecDecoderWith<TxInDecoder>),
+    Outputs(transaction::Version, Vec<(Txid, u32, Sequence)>, VecDecoderWith<TxOutDecoder>),
+    LockTime(
+        transaction::Version,
+        Vec<(Txid, u32, Sequence)>,
+        Vec<(Amount, ScriptBuf)>,
+        LockTimeDecoder,
+    ),
+    Done(
+        transaction::Version,
+        Vec<(Txid, u32, Sequence)>,
+        Vec<(Amount, ScriptBuf)>,
+        absolute::LockTime,
+    ),
+}
+
+impl Decoder for UnsignedTxDecoder {
+    type Output = (
+        transaction::Version,
+        Vec<(Txid, u32, Sequence)>,
+        Vec<(Amount, ScriptBuf)>,
+        absolute::LockTime,
+    );
+    type Error = UnsignedTxDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        loop {
+            let needs_more = match &mut self.state {
+                State::Version(d) => d.push_bytes(bytes).is_ok_and(|s| s.needs_more()),
+                State::Inputs(_, d) =>
+                    d.push_bytes(bytes).map_err(UnsignedTxDecodeError::Inputs)?.needs_more(),
+                State::Outputs(_, _, d) =>
+                    d.push_bytes(bytes).map_err(UnsignedTxDecodeError::Outputs)?.needs_more(),
+                State::LockTime(_, _, _, d) => d.push_bytes(bytes).is_ok_and(|s| s.needs_more()),
+                State::Done(..) => return Ok(DecoderStatus::Ready),
+            };
+            if needs_more {
+                return Ok(DecoderStatus::NeedsMore);
+            }
+            self.state =
+                match core::mem::replace(&mut self.state, State::Version(VersionDecoder::new())) {
+                    State::Version(d) => {
+                        let version = transaction::Version(
+                            d.end().map_err(UnsignedTxDecodeError::DecodeVersion)?.to_u32() as i32,
+                        );
+                        State::Inputs(version, VecDecoderWith::new())
+                    }
+                    State::Inputs(version, d) => {
+                        let raw = d.end().map_err(UnsignedTxDecodeError::Inputs)?;
+                        for tx_in in &raw {
+                            if !tx_in.script_sig.is_empty() {
+                                return Err(UnsignedTxDecodeError::InvalidScriptSig(
+                                    tx_in.script_sig.as_bytes()[0],
+                                ));
+                            }
+                        }
+                        let inputs: Vec<_> = raw
+                            .into_iter()
+                            .map(|tx_in| {
+                                let out = tx_in.previous_output;
+                                (out.txid, out.vout, tx_in.sequence)
+                            })
+                            .collect();
+                        State::Outputs(version, inputs, VecDecoderWith::new())
+                    }
+                    State::Outputs(version, inputs, d) => {
+                        let outputs: Vec<_> = d
+                            .end()
+                            .map_err(UnsignedTxDecodeError::Outputs)?
+                            .into_iter()
+                            .map(|tx_out: bitcoin::blockdata::transaction::TxOut| {
+                                (tx_out.value, tx_out.script_pubkey)
+                            })
+                            .collect();
+                        State::LockTime(version, inputs, outputs, LockTimeDecoder::new())
+                    }
+                    State::LockTime(version, inputs, outputs, d) => {
+                        let lock_time = d.end().map_err(UnsignedTxDecodeError::DecodeLockTime)?;
+                        State::Done(version, inputs, outputs, lock_time)
+                    }
+                    _ => unreachable!(),
+                };
+        }
+    }
+
+    fn read_limit(&self) -> usize {
+        match &self.state {
+            State::Version(d) => d.read_limit(),
+            State::Inputs(_, d) => d.read_limit(),
+            State::Outputs(_, _, d) => d.read_limit(),
+            State::LockTime(_, _, _, d) => d.read_limit(),
+            State::Done(..) => 0,
+        }
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        match self.state {
+            State::Done(version, inputs, outputs, lock_time) =>
+                Ok((version, inputs, outputs, lock_time)),
+            _ => Err(UnsignedTxDecodeError::EarlyEnd),
+        }
     }
 }

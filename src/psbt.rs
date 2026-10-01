@@ -303,8 +303,184 @@ impl PsbtDecode for Psbt {
     type Decoder = PsbtV2Decoder;
 }
 
-/// Combines these two PSBTs as described by BIP-174 (i.e. combine is the same for BIP-370).
-///
+/// Decoder for PSBT v0 (BIP-174).
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+enum V0DecoderStage {
+    /// Decoding the magic bytes (`"psbt"`).
+    Magic(ArrayDecoder<4>),
+    /// Decoding the separator (`0xff`).
+    Separator,
+    /// Decoding the v0 global map.
+    Global(crate::map::v0::GlobalMapDecoder),
+    /// Decoding the v0 input maps.
+    Inputs(
+        Global,
+        Vec<(Txid, u32, Sequence)>,
+        Vec<(Amount, ScriptBuf)>,
+        crate::map::v0::InputsDecoder,
+    ),
+    /// Decoding the v0 output maps.
+    Outputs(Global, Vec<Input>, Vec<(Amount, ScriptBuf)>, crate::map::v0::OutputsDecoder),
+    /// Done decoding.
+    Done(Psbt),
+    /// Sentinel used during state transitions.
+    Errored,
+}
+
+/// Decoder for a complete PSBT v0 (BIP-174).
+#[derive(Debug)]
+pub struct PsbtV0Decoder {
+    stage: V0DecoderStage,
+}
+
+impl Decoder for PsbtV0Decoder {
+    type Output = Psbt;
+    type Error = DeserializeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        loop {
+            match &mut self.stage {
+                V0DecoderStage::Magic(decoder) => match decoder.push_bytes(bytes) {
+                    Ok(status) if status.needs_more() => return Ok(DecoderStatus::NeedsMore),
+                    Ok(_) => {}
+                    Err(_) => unreachable!("ArrayDecoder never errors in push_bytes"),
+                },
+                V0DecoderStage::Separator =>
+                    if bytes.is_empty() {
+                        return Ok(DecoderStatus::NeedsMore);
+                    },
+                V0DecoderStage::Global(decoder) =>
+                    if decoder
+                        .push_bytes(bytes)
+                        .map_err(DeserializeError::DecodeV0Global)?
+                        .needs_more()
+                    {
+                        return Ok(DecoderStatus::NeedsMore);
+                    },
+                V0DecoderStage::Inputs(_, _, _, d) =>
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Inputs)?.needs_more() {
+                        return Ok(DecoderStatus::NeedsMore);
+                    },
+                V0DecoderStage::Outputs(_, _, _, d) =>
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Outputs)?.needs_more()
+                    {
+                        return Ok(DecoderStatus::NeedsMore);
+                    },
+                V0DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
+                V0DecoderStage::Errored => panic!("push_bytes after error"),
+            }
+
+            // Transition states.
+            match core::mem::replace(&mut self.stage, V0DecoderStage::Errored) {
+                V0DecoderStage::Magic(decoder) => {
+                    let magic = decoder.end().expect("magic ready");
+                    if magic != *PSBT_MAGIC {
+                        return Err(DeserializeError::InvalidMagic(magic));
+                    }
+                    self.stage = V0DecoderStage::Separator;
+                }
+                V0DecoderStage::Separator => {
+                    let sep = bytes[0];
+                    *bytes = &bytes[1..];
+                    if sep != PSBT_SEPARATOR {
+                        return Err(DeserializeError::InvalidSeparator(Some(sep)));
+                    }
+                    self.stage =
+                        V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());
+                }
+                V0DecoderStage::Global(decoder) => {
+                    let v0 = decoder.end().map_err(DeserializeError::DecodeV0Global)?;
+                    let in_count = v0.tx_inputs.len();
+                    let out_count = v0.tx_outputs.len();
+                    if in_count == 0 {
+                        if out_count == 0 {
+                            self.stage = V0DecoderStage::Done(Psbt {
+                                global: v0.global,
+                                inputs: Vec::new(),
+                                outputs: Vec::new(),
+                            });
+                        } else {
+                            self.stage = V0DecoderStage::Outputs(
+                                v0.global,
+                                Vec::new(),
+                                v0.tx_outputs,
+                                crate::map::v0::OutputsDecoder::new(out_count),
+                            );
+                        }
+                    } else {
+                        self.stage = V0DecoderStage::Inputs(
+                            v0.global,
+                            v0.tx_inputs,
+                            v0.tx_outputs,
+                            crate::map::v0::InputsDecoder::new(in_count),
+                        );
+                    }
+                    continue;
+                }
+                V0DecoderStage::Inputs(global, tx_inputs, tx_outputs, decoder) => {
+                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeV0Inputs)?;
+                    for (input, (txid, vout, seq)) in inputs.iter_mut().zip(&tx_inputs) {
+                        input.previous_txid = *txid;
+                        input.spent_output_index = *vout;
+                        input.sequence = Some(*seq);
+                    }
+                    let out_count = tx_outputs.len();
+                    if out_count == 0 {
+                        self.stage =
+                            V0DecoderStage::Done(Psbt { global, inputs, outputs: Vec::new() });
+                    } else {
+                        self.stage = V0DecoderStage::Outputs(
+                            global,
+                            inputs,
+                            tx_outputs,
+                            crate::map::v0::OutputsDecoder::new(out_count),
+                        );
+                    }
+                    continue;
+                }
+                V0DecoderStage::Outputs(global, inputs, tx_outputs, decoder) => {
+                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeV0Outputs)?;
+                    for (output, (amount, script)) in outputs.iter_mut().zip(&tx_outputs) {
+                        output.amount = *amount;
+                        output.script_pubkey = script.clone();
+                    }
+                    self.stage = V0DecoderStage::Done(Psbt { global, inputs, outputs });
+                }
+                V0DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
+                V0DecoderStage::Errored => unreachable!(),
+            }
+        }
+    }
+
+    fn end(self) -> Result<Psbt, Self::Error> {
+        match self.stage {
+            V0DecoderStage::Done(psbt) => Ok(psbt),
+            V0DecoderStage::Magic(_) => Err(DeserializeError::EarlyEnd("magic")),
+            V0DecoderStage::Separator => Err(DeserializeError::EarlyEnd("separator")),
+            V0DecoderStage::Global(_) => Err(DeserializeError::EarlyEnd("global")),
+            V0DecoderStage::Inputs(..) => Err(DeserializeError::EarlyEnd("inputs")),
+            V0DecoderStage::Outputs(..) => Err(DeserializeError::EarlyEnd("outputs")),
+            V0DecoderStage::Errored => panic!("PsbtV0Decoder ended in Errored state"),
+        }
+    }
+
+    fn read_limit(&self) -> usize {
+        match &self.stage {
+            V0DecoderStage::Magic(magic) => magic.read_limit(),
+            V0DecoderStage::Separator => 1,
+            V0DecoderStage::Global(dec) => dec.read_limit(),
+            V0DecoderStage::Inputs(_, _, _, dec) => dec.read_limit(),
+            V0DecoderStage::Outputs(_, _, _, dec) => dec.read_limit(),
+            V0DecoderStage::Done(_) | V0DecoderStage::Errored => 0,
+        }
+    }
+}
+
+impl Default for PsbtV0Decoder {
+    fn default() -> Self { Self { stage: V0DecoderStage::Magic(ArrayDecoder::default()) } }
+}
+
 /// This function is commutative `combine(this, that) = combine(that, this)`.
 pub fn combine(this: Psbt, that: Psbt) -> Result<Psbt, CombineError> { this.combine_with(that) }
 // TODO: Consider adding an iterator API that combines a list of PSBTs.
