@@ -407,8 +407,7 @@ impl Psbt {
 
     /// Performs the BIP-174 signer validity checks for the input at `index`.
     pub fn signer_checks(&self, index: usize) -> Result<(), SignError> {
-        self.check_input_index(index)?;
-        let input = &self.inputs[index];
+        let input = &self.checked_input(index)?;
         let prevout_type = input.output_type()?;
         let prevout = input.funding_utxo()?;
 
@@ -672,29 +671,23 @@ impl Psbt {
         }
     }
 
-    /// Gets a reference to the input at `input_index` after checking that it is a valid index.
-    fn checked_input(&self, index: usize) -> Result<&Input, IndexOutOfBoundsError> {
-        self.check_input_index(index)?;
-        Ok(&self.inputs[index])
-    }
-
     /// Gets a mutable reference to the input at `input_index` after checking that it is a valid index.
     pub(crate) fn checked_input_mut(
         &mut self,
         index: usize,
     ) -> Result<&mut Input, IndexOutOfBoundsError> {
-        self.check_input_index(index)?;
+        self.checked_input(index)?;
         Ok(&mut self.inputs[index])
     }
-    /// Checks that `index` is valid for this PSBT.
-    fn check_input_index(&self, index: usize) -> Result<(), IndexOutOfBoundsError> {
+    /// Gets a reference to the input at `index` after checking that it is a valid index.
+    pub(crate) fn checked_input(&self, index: usize) -> Result<&Input, IndexOutOfBoundsError> {
         if index >= self.inputs.len() {
             return Err(IndexOutOfBoundsError::Inputs { index, length: self.inputs.len() });
         }
         if index >= self.global.input_count {
             return Err(IndexOutOfBoundsError::Count { index, count: self.global.input_count });
         }
-        Ok(())
+        Ok(&self.inputs[index])
     }
 
     /// Calculates transaction fee.
