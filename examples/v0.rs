@@ -97,7 +97,7 @@ fn main() -> anyhow::Result<()> {
         &[("027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b50051096", "m/0'/0'/5'")],
     )?;
 
-    let updated_bytes = psbt.serialize_v0()?;
+    let updated_bytes = psbt.into_psbt_v0()?.serialize();
     let expected_bytes = Vec::from_hex(EXPECTED_UPDATED_V0_HEX)?;
     assert_eq!(updated_bytes, expected_bytes, "v2 update must match the BIP-174 step 2 output");
     println!("updated with the v2 roles and re-encoded as v0: matches BIP-174 step 2 vector");

@@ -32,7 +32,7 @@ fn make_tx_out(sats: u64) -> TxOut {
 
 /// Serializes `psbt` as a v0 PSBT then deserializes the bytes back into a v2 PSBT.
 fn round_trip_v0(psbt: &Psbt) -> Psbt {
-    let bytes = psbt.serialize_v0().expect("serialize_v0");
+    let bytes = psbt.clone().into_psbt_v0().expect("into_psbt_v0").serialize();
     Psbt::deserialize_v0(&bytes).expect("deserialize_v0")
 }
 
@@ -111,7 +111,7 @@ fn strict_encode_round_trips_v0_decoded_psbt() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let psbt = Psbt::deserialize_v0(&bytes).unwrap();
 
-    let encoded = psbt.serialize_v0().expect("v0-decoded PSBT must strictly encode");
+    let encoded = psbt.into_psbt_v0().expect("v0-decoded PSBT must strictly encode").serialize();
     assert_eq!(encoded, bytes);
 }
 
@@ -128,7 +128,9 @@ fn v2_only_fields_in_v0_encoding() {
         .unwrap();
     assert_eq!(psbt.global.tx_modifiable_flags & 0b11, 0b11);
 
-    let v0_bytes = psbt.serialize_v0().expect("serialize_v0");
+    let v0 = psbt.into_psbt_v0().expect("into_psbt_v0");
+    let v0_bytes = v0.serialize();
+    let psbt = v0.into_psbt();
     assert!(!v0_bytes.is_empty());
 
     let degraded = psbt.v0_degraded();
@@ -168,7 +170,7 @@ fn v2_only_fields_in_v0_encoding() {
         assert!(!degraded.is_empty());
 
         // Round-trip: SP fields survive v0 encoding.
-        let v0_bytes = sp_psbt.serialize_v0().expect("serialize_v0 with SP");
+        let v0_bytes = sp_psbt.into_psbt_v0().expect("into_psbt_v0 with SP").serialize();
         let decoded = Psbt::deserialize_v0(&v0_bytes).unwrap();
         assert_eq!(decoded.global.sp_ecdh_shares.len(), 1);
         assert_eq!(decoded.global.sp_dleq_proofs.len(), 1);
@@ -244,7 +246,9 @@ fn base64_encode_then_decode_round_trips() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let psbt = Psbt::deserialize_v0(&bytes).unwrap();
 
-    let b64 = psbt.serialize_v0_base64().expect("serialize_v0_base64");
+    let v0 = psbt.into_psbt_v0().expect("into_psbt_v0");
+    let b64 = v0.serialize_base64();
+    let psbt = v0.into_psbt();
     let decoded = Psbt::deserialize_v0_base64(&b64).expect("deserialize_v0_base64");
     assert_eq!(decoded, psbt);
 }

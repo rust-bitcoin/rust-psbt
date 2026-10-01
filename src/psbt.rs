@@ -25,6 +25,8 @@
 use alloc::borrow::Borrow;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
+#[cfg(feature = "base64")]
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
@@ -98,23 +100,39 @@ impl PsbtEncode for Psbt {
     }
 }
 
-/// Locks a [`Psbt`] as PSBT v0.
+/// A PSBT locked to version 0 (BIP-174).
 ///
-/// Lock time is resolved at construction and the immutable borrow on the psbt guarantees it will
-/// remain valid.
-pub struct PsbtV0<'a> {
-    pub(crate) psbt: &'a Psbt,
+/// Takes ownership of a [`Psbt`] and exposes a limited encode/decode interface.
+pub struct PsbtV0 {
+    pub(crate) psbt: Psbt,
+    // Lock time is resolved at construction.
     pub(crate) lock_time: bitcoin::locktime::absolute::LockTime,
 }
 
-impl<'a> PsbtV0<'a> {
-    /// Lock a [`Psbt`] as PSBT v0.
-    pub fn new(psbt: &'a Psbt) -> Result<Self, crate::error::DetermineLockTimeError> {
-        Ok(Self { psbt, lock_time: psbt.determine_lock_time()? })
+impl PsbtV0 {
+    /// Wrap an existing [`Psbt`] by taking ownership and resolving lock time.
+    pub fn from_psbt(psbt: Psbt) -> Result<Self, crate::error::DetermineLockTimeError> {
+        let lock_time = psbt.determine_lock_time()?;
+        Ok(Self { psbt, lock_time })
     }
+
+    /// Encode this PSBT as v0 (BIP-174) binary.
+    pub fn serialize(&self) -> Vec<u8> { encode_to_vec(self) }
+
+    /// Encode this PSBT as a v0 (BIP-174) base64 string.
+    #[cfg(feature = "base64")]
+    pub fn serialize_base64(&self) -> String {
+        use bitcoin::base64::display::Base64Display;
+        use bitcoin::base64::prelude::BASE64_STANDARD;
+
+        Base64Display::new(&self.serialize(), &BASE64_STANDARD).to_string()
+    }
+
+    /// Extract the inner [`Psbt`].
+    pub fn into_psbt(self) -> Psbt { self.psbt }
 }
 
-impl PsbtEncode for PsbtV0<'_> {
+impl PsbtEncode for PsbtV0 {
     type Encoder<'e>
         = PsbtV0Encoder<'e>
     where

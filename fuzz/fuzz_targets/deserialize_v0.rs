@@ -17,9 +17,12 @@ fn do_test(data: (&[u8], &[u8])) {
     // Test round-trip. PSBTs decoded from v0 carry no v2-only fields and always have a
     // determinable lock time, so the strict encoder (which fails rather than lose data) must
     // always succeed on them.
-    let ser = psbt_a.serialize_v0().expect("v0-decoded PSBT must strictly encode");
+    let v0_a = psbt_a.into_psbt_v0().expect("v0-decoded PSBT must strictly encode");
+    let ser = v0_a.serialize();
+    let psbt_a = v0_a.into_psbt();
     let deser = Psbt::deserialize_v0(&ser).expect("serialize_v0 output must deserialize");
-    assert_eq!(ser, deser.serialize_v0().expect("already serialized once"));
+    let v0_deser = deser.into_psbt_v0().expect("already serialized once");
+    assert_eq!(ser, v0_deser.serialize());
 
     // Test combining two PSBTs.
     let Ok(psbt_b) = Psbt::deserialize_v0(bytes_b) else {

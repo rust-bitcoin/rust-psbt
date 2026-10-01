@@ -238,7 +238,7 @@ impl TestCase {
 
                 let expected_bytes =
                     Vec::from_hex(expected_hex).expect("expected PSBT must be valid hex");
-                assert_eq!(psbt.serialize_v0().expect("v0 encoding"), expected_bytes);
+                assert_eq!(psbt.into_psbt_v0().expect("v0 encoding").serialize(), expected_bytes);
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
             Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } => {

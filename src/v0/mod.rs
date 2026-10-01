@@ -11,8 +11,6 @@
 mod bitcoin;
 
 use alloc::collections::BTreeMap;
-#[cfg(feature = "base64")]
-use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -517,17 +515,17 @@ impl psbt::Psbt {
         Ok(psbt_v0_to_v2(psbt))
     }
 
-    /// Serializes this PSBT as BIP-174 (PSBT v0) raw binary data.
+    /// Consumes this PSBT and locks it as PSBT v0 (BIP-174).
     ///
-    /// v2-only fields without v0 equivalents are preserved as unknown key-value pairs rather
-    /// than being dropped. Use [`Self::v0_degraded`] to inspect what was demoted to unknowns.
+    /// v2-only fields without v0 equivalents are preserved as unknown key-value pairs when
+    /// encoding. Use [`Self::v0_degraded`] to inspect what was demoted to unknowns.
     ///
     /// # Errors
     ///
     /// Returns an error if the transaction lock time cannot be determined from the PSBT's
     /// lock time fields.
-    pub fn serialize_v0(&self) -> Result<Vec<u8>, DetermineLockTimeError> {
-        Ok(crate::encoding::encode_to_vec(&crate::psbt::PsbtV0::new(self)?))
+    pub fn into_psbt_v0(self) -> Result<crate::psbt::PsbtV0, DetermineLockTimeError> {
+        crate::psbt::PsbtV0::from_psbt(self)
     }
 
     /// Deserializes a PSBT v0 (BIP-174) from a base64 encoded string.
@@ -537,16 +535,6 @@ impl psbt::Psbt {
 
         let data = BASE64_STANDARD.decode(s).map_err(ParsePsbtV0Error::Base64Encoding)?;
         Self::deserialize_v0(&data).map_err(ParsePsbtV0Error::PsbtEncoding)
-    }
-    /// Serializes this PSBT as a PSBT v0 (BIP-174) base64 encoded string.
-    ///
-    /// See [`Self::serialize_v0`].
-    #[cfg(feature = "base64")]
-    pub fn serialize_v0_base64(&self) -> Result<String, DetermineLockTimeError> {
-        use ::bitcoin::base64::display::Base64Display;
-        use ::bitcoin::base64::prelude::BASE64_STANDARD;
-
-        Ok(Base64Display::new(&self.serialize_v0()?, &BASE64_STANDARD).to_string())
     }
 }
 
