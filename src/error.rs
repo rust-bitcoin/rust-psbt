@@ -7,7 +7,7 @@ use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError};
 use bitcoin::{transaction, PublicKey};
 use bitcoin_consensus_encoding::VecDecoderError;
 
-use crate::map::{global, input, output};
+use crate::map::{input, output};
 
 /// Error while deserializing a PSBT.
 ///
@@ -22,8 +22,8 @@ pub enum DeserializeError {
     InvalidSeparator(Option<u8>),
     /// Signals that there are no more key-value pairs in a key-value map.
     NoMorePairs,
-    /// Error decoding the global map.
-    DecodeGlobal(global::DecodeError),
+    /// Error decoding the global map (v0 or v2).
+    DecodeGlobal(crate::map::error::GlobalDecodeError),
     /// Error decoding an input map.
     DecodeInput(input::DecodeError),
     /// Error decoding an output map.
@@ -32,8 +32,6 @@ pub enum DeserializeError {
     DecodeInputs(VecDecoderError<input::DecodeError>),
     /// Error decoding the output maps sequence.
     DecodeOutputs(VecDecoderError<output::DecodeError>),
-    /// Error decoding a v0 global map.
-    DecodeV0Global(crate::map::v0::global::DecodeError),
     /// Error decoding the v0 input maps sequence.
     DecodeV0Inputs(VecDecoderError<crate::map::v0::input::InputDecodeError>),
     /// Error decoding the v0 output maps sequence.
@@ -56,7 +54,6 @@ impl fmt::Display for DeserializeError {
             Self::DecodeOutput(e) => write!(f, "error decoding output map: {}", e),
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
-            Self::DecodeV0Global(e) => write!(f, "error decoding v0 global map: {}", e),
             Self::DecodeV0Inputs(e) => write!(f, "error decoding v0 input maps: {}", e),
             Self::DecodeV0Outputs(e) => write!(f, "error decoding v0 output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
@@ -73,7 +70,6 @@ impl std::error::Error for DeserializeError {
             Self::DecodeOutput(e) => Some(e),
             Self::DecodeInputs(e) => Some(e),
             Self::DecodeOutputs(e) => Some(e),
-            Self::DecodeV0Global(e) => Some(e),
             Self::DecodeV0Inputs(e) => Some(e),
             Self::DecodeV0Outputs(e) => Some(e),
             Self::InvalidMagic(_)
@@ -84,8 +80,8 @@ impl std::error::Error for DeserializeError {
     }
 }
 
-impl From<global::DecodeError> for DeserializeError {
-    fn from(e: global::DecodeError) -> Self { Self::DecodeGlobal(e) }
+impl From<crate::map::error::GlobalDecodeError> for DeserializeError {
+    fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::DecodeGlobal(e) }
 }
 
 impl From<input::DecodeError> for DeserializeError {

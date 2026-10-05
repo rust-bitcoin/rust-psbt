@@ -25,6 +25,8 @@ pub mod global;
 pub mod input;
 /// The `output-map`.
 pub mod output;
+/// Error types shared by map decoders.
+pub mod error;
 /// PSBT v0 (BIP-174) map encoders.
 pub mod v0;
 
