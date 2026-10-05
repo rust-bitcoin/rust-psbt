@@ -39,7 +39,7 @@ mod serde_utils;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
-mod v0;
+
 mod version;
 
 #[cfg(feature = "silent-payments")]
@@ -48,6 +48,9 @@ pub use crate::dleq::{DleqProof, InvalidLengthError};
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use crate::encoding::{decode_from_reader, encode_to_writer};
+#[cfg(feature = "base64")]
+#[doc(inline)]
+pub use crate::psbt::ParsePsbtError;
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
 pub use crate::roles::{
@@ -84,21 +87,19 @@ pub use crate::{
         ProprietaryKeyEncoder,
         ProprietaryType,
     },
+    psbt::Degraded,
     psbt::{
         combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
-        PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
+        PsbtV0, PsbtV0Encoder, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors,
+        SigningKeys,
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
         InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
-    v0::{Degraded, DeserializeV0Error},
     version::{UnsupportedVersionError, Version},
 };
-#[cfg(feature = "base64")]
-#[doc(inline)]
-pub use crate::{psbt::ParsePsbtError, v0::ParsePsbtV0Error};
 
 /// PSBT version 0 - the original PSBT version.
 pub const V0: Version = Version::ZERO;
