@@ -192,11 +192,20 @@ impl Input {
         }
     }
 
-    /// Returns the [`OutputType`] of the spend utxo for this PSBT's input at `input_index`.
-    pub fn output_type(&self) -> Result<OutputType, SignError> {
-        let utxo = self.funding_utxo()?;
-        let spk = utxo.script_pubkey.clone();
+    /// Returns the [`OutputType`] of the spend utxo for this PSBT's input.
+    pub fn output_type_untrusted(&self) -> Result<OutputType, SignError> {
+        let utxo = self.funding_utxo_untrusted()?;
+        self.output_type_from_spk(&utxo.script_pubkey)
+    }
 
+    /// Like [`output_type`](Self::output_type) but sources the spent output from
+    /// [`funding_utxo`](Self::funding_utxo) (trusted).
+    pub(crate) fn output_type(&self) -> Result<OutputType, SignError> {
+        let utxo = self.funding_utxo()?;
+        self.output_type_from_spk(&utxo.script_pubkey)
+    }
+
+    fn output_type_from_spk(&self, spk: &ScriptBuf) -> Result<OutputType, SignError> {
         // Anything that is not segwit and is not p2sh is `Bare`.
         if !(spk.is_witness_program() || spk.is_p2sh()) {
             return Ok(OutputType::Bare);
