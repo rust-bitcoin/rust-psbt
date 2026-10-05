@@ -10,7 +10,7 @@
 use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, Signer};
+use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer};
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const TEST_XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
@@ -32,8 +32,8 @@ fn make_tx_out(sats: u64) -> TxOut {
 
 /// Serializes `psbt` as a v0 PSBT then deserializes the bytes back into a v2 PSBT.
 fn round_trip_v0(psbt: &Psbt) -> Psbt {
-    let bytes = psbt.clone().into_psbt_v0().expect("into_psbt_v0").serialize();
-    Psbt::deserialize_v0(&bytes).expect("deserialize_v0")
+    let bytes = PsbtV0::from_psbt(psbt.clone()).expect("into_psbt_v0").serialize();
+    PsbtV0::deserialize(&bytes).expect("deserialize_v0").into_psbt()
 }
 
 /// A BIP-174 PSBT decodes into the v2 representation with the unsigned
@@ -41,7 +41,7 @@ fn round_trip_v0(psbt: &Psbt) -> Psbt {
 #[test]
 fn deserialize_v0_redistributes_unsigned_tx_fields() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
-    let psbt = Psbt::deserialize_v0(&bytes).expect("valid v0 PSBT");
+    let psbt = PsbtV0::deserialize(&bytes).expect("v0").into_psbt();
 
     assert_eq!(psbt.global.version, psbt_v2::V2);
     assert_eq!(psbt.global.tx_version, psbt_v2::bitcoin::transaction::Version::TWO);
@@ -58,7 +58,7 @@ fn deserialize_v0_redistributes_unsigned_tx_fields() {
 #[test]
 fn deserialize_v0_rejects_v2_psbt() {
     let v2_psbt = Psbt { global: psbt_v2::Global::default(), inputs: vec![], outputs: vec![] };
-    assert!(Psbt::deserialize_v0(&v2_psbt.serialize()).is_err());
+    assert!(PsbtV0::deserialize(&v2_psbt.serialize()).is_err());
 }
 
 /// A nonzero v0 unsigned-transaction lock time becomes the v2 global fallback
@@ -67,7 +67,7 @@ fn deserialize_v0_rejects_v2_psbt() {
 #[test]
 fn deserialize_v0_preserves_nonzero_lock_time() {
     let bytes = Vec::from_hex(LOCKTIME_VECTOR_HEX).unwrap();
-    let psbt = Psbt::deserialize_v0(&bytes).expect("valid v0 PSBT");
+    let psbt = PsbtV0::deserialize(&bytes).expect("v0").into_psbt();
 
     assert_eq!(
         psbt.global.fallback_lock_time,
@@ -79,7 +79,7 @@ fn deserialize_v0_preserves_nonzero_lock_time() {
 #[test]
 fn deserialize_v0_preserves_unknown_fields() {
     let bytes = Vec::from_hex(UNKNOWN_VECTOR_HEX).unwrap();
-    let psbt = Psbt::deserialize_v0(&bytes).expect("valid v0 PSBT");
+    let psbt = PsbtV0::deserialize(&bytes).expect("v0").into_psbt();
 
     // The vector's input carries a single unknown key-value pair.
     assert_eq!(psbt.inputs.len(), 1);
@@ -98,8 +98,8 @@ fn deserialize_v0_base64_decodes() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let b64 = BASE64_STANDARD.encode(&bytes);
 
-    let from_hex = Psbt::deserialize_v0(&bytes).unwrap();
-    let from_base64 = Psbt::deserialize_v0_base64(&b64).expect("valid base64 v0 PSBT");
+    let from_hex = PsbtV0::deserialize(&bytes).unwrap().into_psbt();
+    let from_base64 = PsbtV0::deserialize_base64(&b64).expect("v0").into_psbt();
 
     assert_eq!(from_base64, from_hex);
 }
@@ -109,9 +109,10 @@ fn deserialize_v0_base64_decodes() {
 #[test]
 fn strict_encode_round_trips_v0_decoded_psbt() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
-    let psbt = Psbt::deserialize_v0(&bytes).unwrap();
+    let psbt = PsbtV0::deserialize(&bytes).unwrap().into_psbt();
 
-    let encoded = psbt.into_psbt_v0().expect("v0-decoded PSBT must strictly encode").serialize();
+    let encoded =
+        PsbtV0::from_psbt(psbt).expect("v0-decoded PSBT must strictly encode").serialize();
     assert_eq!(encoded, bytes);
 }
 
@@ -128,16 +129,14 @@ fn v2_only_fields_in_v0_encoding() {
         .unwrap();
     assert_eq!(psbt.global.tx_modifiable_flags & 0b11, 0b11);
 
-    let v0 = psbt.into_psbt_v0().expect("into_psbt_v0");
+    let v0 = PsbtV0::from_psbt(psbt).expect("into_psbt_v0");
     let v0_bytes = v0.serialize();
-    let psbt = v0.into_psbt();
+    let degraded = v0.degraded();
+    assert!(degraded.is_empty()); // no SP fields set, and tx_modifiable isn't tracked.
     assert!(!v0_bytes.is_empty());
 
-    let degraded = psbt.v0_degraded();
-    assert!(degraded.is_empty()); // no SP fields set, and tx_modifiable isn't tracked.
-
     // Decoded PSBT has tx_modifiable_flags zero, the v0 encoding implied construction complete.
-    let decoded = Psbt::deserialize_v0(&v0_bytes).unwrap();
+    let decoded = PsbtV0::deserialize(&v0_bytes).unwrap().into_psbt();
     assert_eq!(decoded.global.tx_modifiable_flags, 0);
 
     // Silent payment fields survive v0 encoding as unknown keys.
@@ -162,7 +161,7 @@ fn v2_only_fields_in_v0_encoding() {
         sp_psbt.inputs[0].sp_dleq_proofs.insert(pk, DleqProof([0x42; 64]));
         sp_psbt.outputs[0].sp_v0_info = Some(SpV0Info::new(pk, pk));
 
-        let degraded = sp_psbt.v0_degraded();
+        let degraded = PsbtV0::from_psbt(sp_psbt.clone()).expect("lock_time").degraded();
         assert_eq!(degraded.sp_ecdh_shares, 1);
         assert_eq!(degraded.sp_dleq_proofs, 1);
         assert_eq!(degraded.sp_dropped_inputs, 1);
@@ -170,8 +169,8 @@ fn v2_only_fields_in_v0_encoding() {
         assert!(!degraded.is_empty());
 
         // Round-trip: SP fields survive v0 encoding.
-        let v0_bytes = sp_psbt.into_psbt_v0().expect("into_psbt_v0 with SP").serialize();
-        let decoded = Psbt::deserialize_v0(&v0_bytes).unwrap();
+        let v0_bytes = PsbtV0::from_psbt(sp_psbt).expect("into_psbt_v0 with SP").serialize();
+        let decoded = PsbtV0::deserialize(&v0_bytes).unwrap().into_psbt();
         assert_eq!(decoded.global.sp_ecdh_shares.len(), 1);
         assert_eq!(decoded.global.sp_dleq_proofs.len(), 1);
         assert_eq!(decoded.inputs[0].sp_ecdh_shares.len(), 1);
@@ -244,11 +243,11 @@ fn sign_then_convert_preserves_signatures() {
 #[test]
 fn base64_encode_then_decode_round_trips() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
-    let psbt = Psbt::deserialize_v0(&bytes).unwrap();
+    let psbt = PsbtV0::deserialize(&bytes).unwrap().into_psbt();
 
-    let v0 = psbt.into_psbt_v0().expect("into_psbt_v0");
+    let v0 = PsbtV0::from_psbt(psbt).expect("into_psbt_v0");
     let b64 = v0.serialize_base64();
     let psbt = v0.into_psbt();
-    let decoded = Psbt::deserialize_v0_base64(&b64).expect("deserialize_v0_base64");
+    let decoded = PsbtV0::deserialize_base64(&b64).expect("v0").into_psbt();
     assert_eq!(decoded, psbt);
 }

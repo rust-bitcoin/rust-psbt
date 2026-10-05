@@ -12,7 +12,7 @@ use psbt_v2::bitcoin::bip32::{DerivationPath, Fingerprint};
 use psbt_v2::bitcoin::consensus::encode::deserialize;
 use psbt_v2::bitcoin::hex::FromHex;
 use psbt_v2::bitcoin::{PublicKey, ScriptBuf, Transaction};
-use psbt_v2::Psbt;
+use psbt_v2::PsbtV0;
 
 /// BIP-174 workflow A, step 1 (create): an unsigned PSBT with two inputs and two outputs, as
 /// a participant might receive from a coordinator that only supports v0.
@@ -46,7 +46,7 @@ fn main() -> anyhow::Result<()> {
     println!("received v0 PSBT ({} bytes)\n", received_bytes.len());
 
     // Decode it into the v2 interface. From here on, everything uses the v2 API.
-    let mut psbt = Psbt::deserialize_v0(&received_bytes)?;
+    let mut psbt = PsbtV0::deserialize(&received_bytes)?.into_psbt();
     println!(
         "decoded into the v2 interface: {} inputs, {} outputs\n",
         psbt.inputs.len(),
@@ -97,7 +97,7 @@ fn main() -> anyhow::Result<()> {
         &[("027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b50051096", "m/0'/0'/5'")],
     )?;
 
-    let updated_bytes = psbt.into_psbt_v0()?.serialize();
+    let updated_bytes = PsbtV0::from_psbt(psbt)?.serialize();
     let expected_bytes = Vec::from_hex(EXPECTED_UPDATED_V0_HEX)?;
     assert_eq!(updated_bytes, expected_bytes, "v2 update must match the BIP-174 step 2 output");
     println!("updated with the v2 roles and re-encoded as v0: matches BIP-174 step 2 vector");

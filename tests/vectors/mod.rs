@@ -14,7 +14,7 @@ use psbt_v2::bitcoin::hex::FromHex;
 use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{OutPoint, PrivateKey, PublicKey, ScriptBuf, TxOut};
 use psbt_v2::{
-    Constructor, Extractor, Finalizer, Input, Modifiable, Output, Psbt, PsbtSighashType, Signer,
+    Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0, Signer,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -189,8 +189,9 @@ impl TestCase {
                     let hex = hex.as_deref().expect("fail vector must have hex");
                     let base64 = base64.as_deref().expect("fail vector must have base64");
                     let hex_psbt = hex_psbt_v0(hex).expect("should parse");
-                    let base64_psbt = Psbt::deserialize_v0_base64(base64)
-                        .expect("base64 must decode when hex decoded");
+                    let base64_psbt = PsbtV0::deserialize_base64(base64)
+                        .expect("base64 must decode when hex decoded")
+                        .into_psbt();
                     assert_eq!(hex_psbt, base64_psbt);
 
                     // The BIP-174 signer validity checks run upfront in `sign` (before any
@@ -238,7 +239,10 @@ impl TestCase {
 
                 let expected_bytes =
                     Vec::from_hex(expected_hex).expect("expected PSBT must be valid hex");
-                assert_eq!(psbt.into_psbt_v0().expect("v0 encoding").serialize(), expected_bytes);
+                assert_eq!(
+                    PsbtV0::from_psbt(psbt).expect("v0 encoding").serialize(),
+                    expected_bytes
+                );
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
             Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } => {

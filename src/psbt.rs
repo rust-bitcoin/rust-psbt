@@ -103,6 +103,7 @@ impl PsbtEncode for Psbt {
 /// A PSBT locked to version 0 (BIP-174).
 ///
 /// Takes ownership of a [`Psbt`] and exposes a limited encode/decode interface.
+#[derive(Debug)]
 pub struct PsbtV0 {
     pub(crate) psbt: Psbt,
     // Lock time is resolved at construction.
@@ -130,6 +131,81 @@ impl PsbtV0 {
 
     /// Extract the inner [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.psbt }
+
+    /// Reports which v2 fields will be demoted to unknown key-value pairs
+    /// when this PSBT is encoded as v0 (BIP-174).
+    pub fn degraded(&self) -> Degraded {
+        #[cfg(feature = "silent-payments")]
+        {
+            Degraded {
+                sp_ecdh_shares: self.psbt.global.sp_ecdh_shares.len(),
+                sp_dleq_proofs: self.psbt.global.sp_dleq_proofs.len(),
+                sp_dropped_inputs: self
+                    .psbt
+                    .inputs
+                    .iter()
+                    .filter(|i| !i.sp_ecdh_shares.is_empty() || !i.sp_dleq_proofs.is_empty())
+                    .count(),
+                sp_dropped_outputs: self
+                    .psbt
+                    .outputs
+                    .iter()
+                    .filter(|o| o.sp_v0_info.is_some() || o.sp_v0_label.is_some())
+                    .count(),
+            }
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            Degraded::default()
+        }
+    }
+
+    /// Deserializes a PSBT v0 (BIP-174) from raw bytes.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, crate::error::DeserializeError> {
+        let psbt =
+            bitcoin_consensus_encoding::decode_from_slice_with_decoder::<PsbtV0Decoder>(bytes)
+                .map_err(|e| match e {
+                    bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
+                    _ => DeserializeError::EarlyEnd("v0 framing"),
+                })?;
+        Ok(Self::from_psbt(psbt).expect("lock time determinable after successful decode"))
+    }
+
+    /// Deserializes a PSBT v0 (BIP-174) from a base64-encoded string.
+    #[cfg(feature = "base64")]
+    pub fn deserialize_base64(s: &str) -> Result<Self, ParsePsbtError> {
+        use bitcoin::base64::prelude::{Engine, BASE64_STANDARD};
+
+        let data = BASE64_STANDARD.decode(s).map_err(ParsePsbtError::Base64Encoding)?;
+        Self::deserialize(&data).map_err(ParsePsbtError::PsbtEncoding)
+    }
+}
+
+/// Reports which v2-only fields will be demoted to unknown key-value pairs by a v0
+/// (BIP-174) encoding.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct Degraded {
+    /// Number of silent payment ECDH shares encoded as unknown global keys (`0x07`).
+    pub sp_ecdh_shares: usize,
+    /// Number of silent payment DLEQ proofs encoded as unknown global keys from the global map
+    /// (`0x08`).
+    pub sp_dleq_proofs: usize,
+    /// Number of inputs whose silent payment fields were encoded as unknown
+    /// per-input keys (`0x1d` / `0x1e`).
+    pub sp_dropped_inputs: usize,
+    /// Number of outputs whose silent payment fields were encoded as unknown per-output keys
+    /// (`0x09` and/or `0x0a` was `Some`).
+    pub sp_dropped_outputs: usize,
+}
+
+impl Degraded {
+    /// Returns `true` if no fields were demoted to unknowns.
+    pub fn is_empty(&self) -> bool {
+        self.sp_ecdh_shares == 0
+            && self.sp_dleq_proofs == 0
+            && self.sp_dropped_inputs == 0
+            && self.sp_dropped_outputs == 0
+    }
 }
 
 impl PsbtEncode for PsbtV0 {
