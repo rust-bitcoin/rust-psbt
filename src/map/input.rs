@@ -374,14 +374,70 @@ impl Input {
     pub(crate) fn has_funding_utxo(&self) -> bool { self.funding_utxo().is_ok() }
 
     /// Returns a reference to the funding utxo for this input.
-    pub fn funding_utxo(&self) -> Result<&TxOut, FundingUtxoError> {
-        if let Some(ref utxo) = self.witness_utxo {
-            Ok(utxo)
-        } else if let Some(ref tx) = self.non_witness_utxo {
-            let vout = self.spent_output_index as usize;
-            tx.output.get(vout).ok_or(FundingUtxoError::OutOfBounds { vout, len: tx.output.len() })
-        } else {
-            Err(FundingUtxoError::MissingUtxo)
+    ///
+    /// Before returning, the funding data is verified against what the signer commits to,
+    /// so that a PSBT creator cannot mislead the signer:
+    ///
+    /// - [`FundingUtxoError::MissingUtxo`]: neither utxo form is provided.
+    /// - [`FundingUtxoError::MismatchingTxid`]: the non-witness utxo does not match the
+    ///   spent outpoint.
+    /// - [`FundingUtxoError::MismatchingUtxos`]: both forms are provided but they describe
+    ///   different outputs.
+    /// - [`FundingUtxoError::UnverifiableUtxo`]: only a witness utxo is provided for a
+    ///   non-P2TR spend; its claimed value and script cannot be trusted without the full
+    ///   funding transaction.
+    /// - [`FundingUtxoError::OutOfBounds`]: the spent output index is out of range for the
+    ///   non-witness transaction.
+    ///
+    /// NOTE: for witness-only P2TR inputs the utxo data cannot be verified against a full
+    /// transaction (the sighash commits to it, but a creator can still lie at update time,
+    /// e.g. to inflate the fee). Signers should compare such funding utxos against their
+    /// own UTXO set before signing.
+    pub fn funding_utxo_untrusted(&self) -> Result<&TxOut, FundingUtxoError> {
+        // A witness-only UTXO cannot be verified for non-P2TR inputs; the
+        // non-witness UTXO is required. All other cases delegate to the trusted
+        // accessor, which shares the same verification logic.
+        match (&self.witness_utxo, &self.non_witness_utxo) {
+            (Some(ref utxo), None) if !utxo.script_pubkey.is_p2tr() =>
+                Err(FundingUtxoError::UnverifiableUtxo),
+            _ => self.funding_utxo(),
+        }
+    }
+
+    /// Like [`funding_utxo_untrusted`](Self::funding_utxo_untrusted) but accepts a witness-only UTXO for non-P2TR
+    /// inputs, trusting the caller to have verified the amount and script out-of-band.
+    ///
+    /// All structural errors (`MissingUtxo`, `OutOfBounds`, `MismatchingTxid`, `MismatchingUtxos`)
+    /// are still rejected; only [`FundingUtxoError::UnverifiableUtxo`] is waived.
+    ///
+    /// Use this only for the trusted signing path where the caller attests the UTXO data was
+    /// checked against their own source.
+    pub(crate) fn funding_utxo(&self) -> Result<&TxOut, FundingUtxoError> {
+        match (&self.witness_utxo, &self.non_witness_utxo) {
+            (_, Some(ref tx)) if tx.compute_txid() != self.previous_txid =>
+                Err(FundingUtxoError::MismatchingTxid),
+            (Some(ref utxo), None) => Ok(utxo),
+            (Some(ref utxo), Some(ref tx)) => {
+                let vout = self.spent_output_index as usize;
+                let txout = tx
+                    .output
+                    .get(vout)
+                    .ok_or(FundingUtxoError::OutOfBounds { vout, len: tx.output.len() })?;
+                if txout != utxo {
+                    Err(FundingUtxoError::MismatchingUtxos)
+                } else {
+                    Ok(utxo)
+                }
+            }
+            (None, Some(ref tx)) => {
+                let vout = self.spent_output_index as usize;
+                let txout = tx
+                    .output
+                    .get(vout)
+                    .ok_or(FundingUtxoError::OutOfBounds { vout, len: tx.output.len() })?;
+                Ok(txout)
+            }
+            _ => Err(FundingUtxoError::MissingUtxo),
         }
     }
 
@@ -2483,5 +2539,64 @@ mod test {
         let decoded =
             crate::encoding::decode_from_slice::<Input>(&encoded).expect("roundtrip decode failed");
         assert_eq!(decoded, input);
+    }
+
+    fn p2tr_tx_out(value: Amount) -> TxOut {
+        let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+        let script_pubkey = ScriptBuf::new_p2tr(&secp, xonly, None);
+        TxOut { value, script_pubkey }
+    }
+
+    #[test]
+    fn funding_utxo_untrusted_accepts_witness_only_p2tr() {
+        // For P2TR the sighash commits to the witness UTXO's value and script, so a
+        // witness-only funding UTXO is acceptable even without the full transaction.
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(p2tr_tx_out(Amount::from_sat(1_000)));
+
+        let utxo = input.funding_utxo_untrusted().expect("witness-only P2TR is acceptable");
+        assert_eq!(utxo.value, Amount::from_sat(1_000));
+    }
+
+    #[test]
+    fn funding_utxo_rejects_mismatching_utxo_forms() {
+        // Both forms present but describing different outputs: the witness UTXO must
+        // match the output of the funding transaction.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut { value: Amount::from_sat(1_000), script_pubkey }],
+        };
+        let mut input = Input::new(&OutPoint { txid: funding_tx.compute_txid(), vout: 0 });
+        // The witness UTXO claims a different value than the funding transaction pays.
+        input.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(9_000),
+            script_pubkey: funding_tx.output[0].script_pubkey.clone(),
+        });
+        input.non_witness_utxo = Some(funding_tx);
+
+        assert_eq!(input.funding_utxo().unwrap_err(), FundingUtxoError::MismatchingUtxos);
+    }
+
+    #[test]
+    fn funding_utxo_rejects_mismatching_utxo_forms_for_p2tr() {
+        // P2TR gets the same consistency check: the sighash commits to the witness
+        // UTXO, so the two forms must agree when both are provided.
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![p2tr_tx_out(Amount::from_sat(1_000))],
+        };
+        let mut input = Input::new(&OutPoint { txid: funding_tx.compute_txid(), vout: 0 });
+        // The witness UTXO claims a different value than the funding transaction pays.
+        input.witness_utxo = Some(p2tr_tx_out(Amount::from_sat(9_000)));
+        input.non_witness_utxo = Some(funding_tx);
+
+        assert_eq!(input.funding_utxo().unwrap_err(), FundingUtxoError::MismatchingUtxos);
     }
 }

@@ -471,14 +471,30 @@ pub enum FundingUtxoError {
     },
     /// No funding utxo found.
     MissingUtxo,
+    /// Witness and non witness utxo were provided, but they do not match.
+    MismatchingUtxos,
+    /// All non P2TR inputs should provide non witness utxo.
+    UnverifiableUtxo,
+    /// The non witness utxo provided does not match the prevout txid.
+    MismatchingTxid,
 }
 
 impl fmt::Display for FundingUtxoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::OutOfBounds { vout, len } =>
-                write!(f, "vout {} out of bounds for tx list len: {}", vout, len),
+            Self::OutOfBounds { vout, len } => {
+                write!(f, "vout {} out of bounds for tx list len: {}", vout, len)
+            }
             Self::MissingUtxo => write!(f, "no funding utxo found"),
+            Self::MismatchingUtxos => {
+                write!(f, "witness and non witness data were provided, but they do not match")
+            }
+            Self::UnverifiableUtxo => {
+                write!(f, "all non p2tr inputs should provide non witness utxo")
+            }
+            Self::MismatchingTxid => {
+                write!(f, "the txid from the non witness utxo doesn't match the prevout txid")
+            }
         }
     }
 }
@@ -487,7 +503,11 @@ impl fmt::Display for FundingUtxoError {
 impl std::error::Error for FundingUtxoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::OutOfBounds { .. } | Self::MissingUtxo => None,
+            Self::OutOfBounds { .. }
+            | Self::MissingUtxo
+            | Self::MismatchingUtxos
+            | Self::UnverifiableUtxo
+            | Self::MismatchingTxid => None,
         }
     }
 }

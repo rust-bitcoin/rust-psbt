@@ -679,6 +679,7 @@ impl Psbt {
         self.checked_input(index)?;
         Ok(&mut self.inputs[index])
     }
+
     /// Gets a reference to the input at `index` after checking that it is a valid index.
     pub(crate) fn checked_input(&self, index: usize) -> Result<&Input, IndexOutOfBoundsError> {
         if index >= self.inputs.len() {
@@ -1302,7 +1303,10 @@ mod tests {
         psbt.inputs[0].spent_output_index = 0;
         psbt.inputs[0].non_witness_utxo = Some(funding_tx);
 
-        assert_eq!(psbt.signer_checks(0), Err(SignError::NonWitnessUtxoTxidMismatch));
+        assert_eq!(
+            psbt.signer_checks(0),
+            Err(SignError::FundingUtxo(FundingUtxoError::MismatchingTxid))
+        );
     }
 
     #[test]
