@@ -14,7 +14,8 @@ use psbt_v2::bitcoin::hex::FromHex;
 use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{OutPoint, PrivateKey, PublicKey, ScriptBuf, TxOut};
 use psbt_v2::{
-    Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0, Signer,
+    Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0,
+    SignableInput, Signer,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -101,6 +102,10 @@ enum Supplementary {
         #[serde(default)]
         psbts: Vec<PsbtData>,
     },
+    FailStrictSign {
+        #[serde(default)]
+        psbts: Vec<PsbtData>,
+    },
     Deserialize {
         #[serde(default)]
         psbts: Vec<PsbtData>,
@@ -120,6 +125,15 @@ enum Supplementary {
         output_updates: Vec<OutputUpdate>,
         #[serde(default, deserialize_with = "deserialize_sighash")]
         sighash: Option<PsbtSighashType>,
+    },
+    StrictSign {
+        #[serde(default)]
+        psbts: Vec<PsbtData>,
+        xpriv: Xpriv,
+        #[serde(default)]
+        seed: Option<PrivateKey>,
+        #[serde(default)]
+        private_keys: Vec<PrivKeyPath>,
     },
     TrustedSign {
         #[serde(default)]
@@ -200,6 +214,31 @@ impl TestCase {
                     let secp = Secp256k1::new();
                     let signer = Signer::new(base64_psbt).expect("lock time must be determinable");
                     assert!(signer.sign(&key_map, &secp).is_err(), "expected sign() to fail");
+                }
+            }
+            Supplementary::FailStrictSign { psbts } => {
+                for PsbtData { hex, base64 } in psbts {
+                    let hex = hex.as_deref().expect("fail vector must have hex");
+                    let base64 = base64.as_deref().expect("fail vector must have base64");
+                    let hex_psbt = hex_psbt_v0(hex).expect("should parse");
+                    let base64_psbt = PsbtV0::deserialize_base64(base64)
+                        .expect("base64 must decode when hex decoded")
+                        .into_psbt();
+                    assert_eq!(hex_psbt, base64_psbt);
+
+                    let input_len = base64_psbt.inputs.len();
+
+                    // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
+                    // full tx prevout.
+                    // Under strict signing, inputs with missing full tx prevout must fail while
+                    // getting the signable inputs.
+                    let mut signer =
+                        Signer::new(base64_psbt).expect("lock time must be determinable");
+                    let provider = signer.session();
+                    assert!(
+                        (0..input_len).any(|idx| provider.signable_input(idx).is_err()),
+                        "expected signable_input() to fail"
+                    );
                 }
             }
             // Deserialize: the PSBT must parse successfully.
@@ -311,6 +350,49 @@ impl TestCase {
                         input.sighash_type = Some(sighash);
                     }
                 }
+
+                assert_eq!(psbt, expected_psbt);
+            }
+            Supplementary::StrictSign { psbts, xpriv, seed, private_keys } => {
+                let secp = Secp256k1::new();
+                let xpriv = *xpriv;
+
+                if let Some(sk) = seed {
+                    let seeded =
+                        Xpriv::new_master(xpriv.network, &sk.inner.secret_bytes()).unwrap();
+                    assert_eq!(seeded, xpriv);
+                }
+
+                assert!(!psbts.is_empty(), "strict_signer task needs at least one input PSBT");
+                let input_hex = psbts[0].hex.as_deref().expect("sign input must have hex");
+                let psbt = hex_psbt_v0(input_hex).expect("sign input PSBT must be valid");
+
+                let expected_hex =
+                    self.expected.hex.as_deref().expect("sign expected must have hex");
+                let expected_psbt =
+                    hex_psbt_v0(expected_hex).expect("sign expected PSBT must be valid");
+
+                let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
+
+                for PrivKeyPath { key: wif_priv, path } in private_keys {
+                    let derived =
+                        xpriv.derive_priv(&secp, path).expect("derivation must succeed").to_priv();
+                    assert_eq!(
+                        *wif_priv, derived,
+                        "WIF key in vector must match derivation from canonical xpriv"
+                    );
+                    key_map.insert(wif_priv.public_key(&secp), *wif_priv);
+                }
+
+                let inputs_len = psbt.inputs.len();
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let sigs = {
+                    let mut provider = signer.session();
+                    let signable_inputs: Vec<SignableInput> =
+                        (0..inputs_len).map(|x| provider.signable_input(x).unwrap()).collect();
+                    provider.get_all(&signable_inputs, &key_map, &secp)
+                };
+                let psbt = signer.apply(sigs).unwrap();
 
                 assert_eq!(psbt, expected_psbt);
             }

@@ -86,7 +86,8 @@ pub use crate::{
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
-        InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
+        InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, SignableInput, Signer,
+        SigningSession, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
