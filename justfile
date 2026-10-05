@@ -61,4 +61,4 @@ mutants-since baseline="master": tools
 # Run mutants in a file or glob
 [group('mutants')]
 mutants-in glob: tools
-  cargo +$(cargo rbmt toolchains --stable) mutants --file '{{glob}}'
+  cargo +$(cargo rbmt toolchains --nightly) mutants --file '{{glob}}' -- -- -Z unstable-options --fail-fast
