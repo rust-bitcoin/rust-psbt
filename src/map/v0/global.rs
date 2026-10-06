@@ -183,7 +183,7 @@ impl Encoder for GlobalMapEncoder<'_> {
 
 /// Information decoded out of a v0 global into a v2 global with input and output data.
 pub(crate) type V0GlobalInfo =
-    (crate::Global, Vec<(Txid, u32, Sequence)>, Vec<(Amount, ScriptBuf)>, absolute::LockTime);
+    (crate::Global, Vec<(Txid, u32, Sequence)>, Vec<(Amount, ScriptBuf)>);
 
 #[derive(Debug, Default)]
 enum Stage {
@@ -314,7 +314,6 @@ impl Decoder for GlobalMapDecoder {
                             },
                             tx_inputs,
                             tx_outputs,
-                            lock_time,
                         ));
                         return Ok(DecoderStatus::Ready);
                     }
