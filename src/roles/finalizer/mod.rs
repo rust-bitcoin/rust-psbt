@@ -233,10 +233,101 @@ mod tests {
 
     use super::*;
     use crate::roles::{Creator, Signer};
-    use crate::{Input, Output, RequiredHeightLockTime};
+    use crate::{Count, Input, Output, RequiredHeightLockTime};
 
     const TEST_XPRIV: &str =
         "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu";
+
+    #[test]
+    fn new_rejects_taproot_key_sighash_mismatch() {
+        let output_key = bitcoin::XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let mut input = Input::new(&OutPoint::null());
+        input.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new_p2tr(&Secp256k1::verification_only(), output_key, None),
+        });
+        input.sighash_type = Some(crate::PsbtSighashType::ALL);
+        input.tap_key_sig = Some(bitcoin::taproot::Signature {
+            signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: bitcoin::TapSighashType::Default,
+        });
+        let psbt = Psbt {
+            global: crate::Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Default::default()
+            },
+            inputs: alloc::vec![input],
+            outputs: alloc::vec![Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        };
+
+        match Finalizer::new(psbt) {
+            Err(role::Error::SignatureSighashType(e)) => {
+                assert_eq!(e.input_index, 0);
+                assert_eq!(e.source, crate::SignatureSource::TapKey);
+                assert!(alloc::format!("{}", e).starts_with("input 0 taproot key-spend signature "));
+            }
+            other => panic!("expected a sighash type error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn new_refuses_undeclared_sighash_none() {
+        // SIGHASH_NONE commits to no output, so it needs an explicit PSBT_IN_SIGHASH_TYPE.
+        let mut psbt = unsigned_psbt();
+        psbt.inputs[0].sighash_type = Some(bitcoin::EcdsaSighashType::None.into());
+        let mut signed = sign(psbt);
+        signed.inputs[0].sighash_type = None;
+
+        assert!(
+            matches!(Finalizer::new(signed), Err(role::Error::SignatureSighashType(_))),
+            "finalizer must reject undeclared SIGHASH_NONE with a sighash type error"
+        );
+    }
+
+    /// Returns the sighash type error `Finalizer::new` reports for `psbt`.
+    fn sighash_type_error(psbt: Psbt) -> crate::SignatureSighashTypeError {
+        match Finalizer::new(psbt) {
+            Err(role::Error::SignatureSighashType(e)) => e,
+            other => panic!("expected a sighash type error, got {:?}", other),
+        }
+    }
+
+    fn ecdsa_sig(sighash_type: bitcoin::EcdsaSighashType) -> bitcoin::ecdsa::Signature {
+        bitcoin::ecdsa::Signature {
+            signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+            sighash_type,
+        }
+    }
+
+    #[test]
+    fn new_rejects_ecdsa_sighash_mismatch() {
+        let mut psbt = unsigned_psbt();
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        psbt.inputs[0].sighash_type = Some(crate::PsbtSighashType::ALL);
+        psbt.inputs[0].partial_sigs.insert(pubkey, ecdsa_sig(bitcoin::EcdsaSighashType::None));
+
+        let error = sighash_type_error(psbt);
+        assert_eq!(error.source, crate::SignatureSource::Ecdsa(pubkey));
+        assert_eq!(error.declared, Some(crate::PsbtSighashType::ALL));
+    }
+
+    #[test]
+    fn new_rejects_undeclared_ecdsa_sighash_type() {
+        // With no declared type, an ECDSA signature must use SIGHASH_ALL.
+        let mut psbt = unsigned_psbt();
+        psbt.inputs[0].partial_sigs.insert(
+            PublicKey::from_slice(&[2u8; 33]).unwrap(),
+            ecdsa_sig(bitcoin::EcdsaSighashType::None),
+        );
+
+        let error = sighash_type_error(psbt);
+        assert_eq!(error.declared, None);
+        assert!(alloc::format!("{}", error).starts_with("input 0 ECDSA signature for "));
+    }
 
     /// Signs `psbt` with the fixture key (`TEST_XPRIV`).
     fn sign(psbt: Psbt) -> Psbt {

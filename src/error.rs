@@ -2,8 +2,8 @@
 
 use core::fmt;
 
-use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError};
-use bitcoin::{transaction, PublicKey};
+use bitcoin::taproot::TapLeafHash;
+use bitcoin::{sighash, transaction, PublicKey, XOnlyPublicKey};
 use bitcoin_consensus_encoding::VecDecoderError;
 
 /// Error while deserializing a PSBT.
@@ -359,63 +359,56 @@ impl std::error::Error for DetermineLockTimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
 }
 
-// TODO: Consider creating a type that has input_index and E and simplify all these similar error types?
-/// Error checking the partials sigs have correct sighash types.
-#[derive(Debug)]
-pub enum PartialSigsSighashTypeError {
-    /// Non-standard sighash type found in `input.sighash_type` field.
-    NonStandardInputSighashType {
-        /// The input index with the non-standard sighash type.
-        input_index: usize,
-        /// The non-standard sighash type error.
-        error: NonStandardSighashTypeError,
-    },
-    /// Non-standard sighash type found in `input.partial_sigs`.
-    NonStandardPartialSigsSighashType {
-        /// The input index with the non-standard sighash type.
-        input_index: usize,
-        /// The non-standard sighash type error.
-        error: NonStandardSighashTypeError,
-    },
-    /// Wrong sighash flag in partial signature.
-    WrongSighashFlag {
-        /// The input index with the wrong sighash flag.
-        input_index: usize,
-        /// The sighash type we got.
-        got: EcdsaSighashType,
-        /// The sighash type we require.
-        required: EcdsaSighashType,
-        /// The associated pubkey (key into the `input.partial_sigs` map).
-        pubkey: PublicKey,
-    },
+/// The signature field containing a sighash type that differs from the required type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SignatureSource {
+    /// An ECDSA partial signature identified by its public key.
+    Ecdsa(PublicKey),
+    /// A taproot key-spend signature.
+    TapKey,
+    /// A taproot script-spend signature identified by its key and leaf hash.
+    TapScript(XOnlyPublicKey, TapLeafHash),
 }
 
-impl fmt::Display for PartialSigsSighashTypeError {
+impl fmt::Display for SignatureSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NonStandardInputSighashType { input_index, ref error } =>
-                write_err!(f, "non-standard sighash type for input {} in sighash_type field", input_index; error),
-            Self::NonStandardPartialSigsSighashType { input_index, ref error } =>
-                write_err!(f, "non-standard sighash type for input {} in partial_sigs", input_index; error),
-            Self::WrongSighashFlag { input_index, got, required, pubkey } => write!(
-                f,
-                "wrong sighash flag for input {} (got: {}, required: {}) pubkey: {}",
-                input_index, got, required, pubkey
-            ),
+            Self::Ecdsa(pubkey) => write!(f, "ECDSA signature for {}", pubkey),
+            Self::TapKey => write!(f, "taproot key-spend signature"),
+            Self::TapScript(key, leaf_hash) =>
+                write!(f, "taproot script-spend signature for {} in leaf {}", key, leaf_hash),
+        }
+    }
+}
+
+/// Error checking signatures against an input's required sighash type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SignatureSighashTypeError {
+    /// The index of the input containing the signature.
+    pub input_index: usize,
+    /// The signature with the wrong sighash type.
+    pub source: SignatureSource,
+    /// The sighash type carried by the signature.
+    pub got: crate::PsbtSighashType,
+    /// The sighash type `PSBT_IN_SIGHASH_TYPE` declares, if set.
+    pub declared: Option<crate::PsbtSighashType>,
+}
+
+impl fmt::Display for SignatureSighashTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "input {} {} has sighash type {}", self.input_index, self.source, self.got)?;
+        match self.declared {
+            Some(declared) => write!(f, " rather than declared {}", declared),
+            None => f.write_str(" but PSBT_IN_SIGHASH_TYPE does not declare it"),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for PartialSigsSighashTypeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // TODO: Is this correct for a struct error fields?
-        match self {
-            Self::NonStandardInputSighashType { input_index: _, ref error } => Some(error),
-            Self::NonStandardPartialSigsSighashType { input_index: _, ref error } => Some(error),
-            Self::WrongSighashFlag { .. } => None,
-        }
-    }
+impl std::error::Error for SignatureSighashTypeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
 }
 
 /// An error while calculating the fee.

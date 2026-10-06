@@ -81,7 +81,8 @@ pub use crate::{
     error::{
         DeserializeError, DetermineLockTimeError, FeeError, FundingUtxoError,
         IndexOutOfBoundsError, InputsNotModifiableError, NotUnsignedError,
-        OutputsNotModifiableError, PartialSigsSighashTypeError, PsbtNotModifiableError, SignError,
+        OutputsNotModifiableError, PsbtNotModifiableError, SignError, SignatureSighashTypeError,
+        SignatureSource,
     },
     map::{
         // We do not re-export any of the input/output/global error types, use form `input::DecodeError`.

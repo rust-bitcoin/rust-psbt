@@ -47,6 +47,8 @@ use crate::encoding::codecs::leaf_script::{LeafScriptDecoder, TapLeafScript};
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
 use crate::encoding::{ExactLenEncoder, PsbtEncode};
 use crate::error::FundingUtxoError;
+#[cfg(feature = "miniscript")]
+use crate::error::SignatureSource;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::PsbtSighashType;
@@ -471,6 +473,30 @@ impl Input {
     /// If the `sighash_type` field is set to an invalid Taproot sighash value.
     pub fn taproot_hash_ty(&self) -> Result<TapSighashType, InvalidSighashTypeError> {
         self.sighash_type.map_or(Ok(TapSighashType::Default), PsbtSighashType::taproot_hash_ty)
+    }
+
+    /// Returns the first signature whose sighash type differs from this input's required type.
+    ///
+    /// The required type is `PSBT_IN_SIGHASH_TYPE` when set. Otherwise signatures must use
+    /// `SIGHASH_DEFAULT` or `SIGHASH_ALL`, so a type that does not commit to every output, such as
+    /// `SIGHASH_NONE`, needs an explicit `PSBT_IN_SIGHASH_TYPE`.
+    #[cfg(feature = "miniscript")]
+    pub(crate) fn sighash_mismatch(&self) -> Option<(SignatureSource, PsbtSighashType)> {
+        let ecdsa = self.partial_sigs.iter().map(|(pubkey, sig)| {
+            (SignatureSource::Ecdsa(*pubkey), PsbtSighashType::from(sig.sighash_type))
+        });
+        let tap_key = self
+            .tap_key_sig
+            .iter()
+            .map(|sig| (SignatureSource::TapKey, PsbtSighashType::from(sig.sighash_type)));
+        let tap_script = self.tap_script_sigs.iter().map(|(&(key, leaf_hash), sig)| {
+            (SignatureSource::TapScript(key, leaf_hash), PsbtSighashType::from(sig.sighash_type))
+        });
+
+        ecdsa.chain(tap_key).chain(tap_script).find(|&(_, got)| match self.sighash_type {
+            Some(declared) => got != declared,
+            None => got != PsbtSighashType::ALL && got != PsbtSighashType::from(TapSighashType::Default),
+        })
     }
 
     /// Combines this [`Input`] with `other`.

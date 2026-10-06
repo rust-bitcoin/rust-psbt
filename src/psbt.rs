@@ -29,8 +29,6 @@ use core::fmt;
 
 use bitcoin::hex::DisplayHex;
 use bitcoin::locktime::absolute;
-#[cfg(feature = "miniscript")]
-use bitcoin::sighash::EcdsaSighashType;
 use bitcoin::{Amount, Sequence, Transaction, TxOut, Txid};
 use bitcoin_consensus_encoding::{ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder4};
 
@@ -44,8 +42,6 @@ use crate::error::{
 use crate::global::{self, Global};
 use crate::input::{self, Input};
 use crate::output::{self, Output};
-#[cfg(feature = "miniscript")]
-use crate::PartialSigsSighashTypeError;
 use crate::PsbtSighashType;
 
 /// The magic bytes that identify a PSBT (`"psbt"` in ASCII).
@@ -504,41 +500,6 @@ impl Psbt {
         })?;
 
         input_value.checked_sub(output_value).map(Amount::from_sat).ok_or(FeeError::Negative)
-    }
-
-    /// Checks the sighash types of input partial sigs (ECDSA).
-    ///
-    /// This can be used at anytime but is primarily used during PSBT finalizing.
-    #[cfg(feature = "miniscript")]
-    pub(crate) fn check_partial_sigs_sighash_type(
-        &self,
-    ) -> Result<(), PartialSigsSighashTypeError> {
-        for (input_index, input) in self.inputs.iter().enumerate() {
-            let target_ecdsa_sighash_ty = match input.sighash_type {
-                Some(psbt_hash_ty) => psbt_hash_ty.ecdsa_hash_ty().map_err(|error| {
-                    PartialSigsSighashTypeError::NonStandardInputSighashType { input_index, error }
-                })?,
-                None => EcdsaSighashType::All,
-            };
-
-            for (key, ecdsa_sig) in &input.partial_sigs {
-                let flag = EcdsaSighashType::from_standard(ecdsa_sig.sighash_type as u32).map_err(
-                    |error| PartialSigsSighashTypeError::NonStandardPartialSigsSighashType {
-                        input_index,
-                        error,
-                    },
-                )?;
-                if target_ecdsa_sighash_ty != flag {
-                    return Err(PartialSigsSighashTypeError::WrongSighashFlag {
-                        input_index,
-                        required: target_ecdsa_sighash_ty,
-                        got: flag,
-                        pubkey: *key,
-                    });
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -1194,5 +1155,163 @@ mod tests {
         assert!(!psbt.global.tx_modifiable_flags.is_inputs_modifiable());
         assert!(!psbt.global.tx_modifiable_flags.is_outputs_modifiable());
         assert!(!psbt.global.tx_modifiable_flags.has_sighash_single());
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_accepts_taproot_default() {
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::from(bitcoin::TapSighashType::Default));
+        psbt.inputs[0].tap_key_sig = Some(bitcoin::taproot::Signature {
+            signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: bitcoin::TapSighashType::Default,
+        });
+
+        assert_eq!(psbt.inputs[0].sighash_mismatch(), None);
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_rejects_taproot_key_mismatch() {
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::ALL);
+        psbt.inputs[0].tap_key_sig = Some(bitcoin::taproot::Signature {
+            signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: bitcoin::TapSighashType::Default,
+        });
+
+        assert_eq!(
+            psbt.inputs[0].sighash_mismatch(),
+            Some((
+                crate::SignatureSource::TapKey,
+                PsbtSighashType::from(bitcoin::TapSighashType::Default)
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_rejects_ecdsa_mismatch() {
+        let mut psbt = single_input_psbt();
+        let pubkey = bitcoin::PublicKey::from_slice(&[2u8; 33]).unwrap();
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::ALL);
+        psbt.inputs[0].partial_sigs.insert(
+            pubkey,
+            bitcoin::ecdsa::Signature {
+                signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::None,
+            },
+        );
+
+        assert_eq!(
+            psbt.inputs[0].sighash_mismatch(),
+            Some((
+                crate::SignatureSource::Ecdsa(pubkey),
+                PsbtSighashType::from(EcdsaSighashType::None)
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_rejects_taproot_script_mismatch() {
+        use bitcoin::hashes::Hash as _;
+
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::ALL);
+        let key = (
+            bitcoin::XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap(),
+            bitcoin::taproot::TapLeafHash::from_byte_array([3u8; 32]),
+        );
+        psbt.inputs[0].tap_script_sigs.insert(
+            key,
+            bitcoin::taproot::Signature {
+                signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+                sighash_type: bitcoin::TapSighashType::Default,
+            },
+        );
+
+        assert_eq!(
+            psbt.inputs[0].sighash_mismatch(),
+            Some((
+                crate::SignatureSource::TapScript(key.0, key.1),
+                PsbtSighashType::from(bitcoin::TapSighashType::Default)
+            ))
+        );
+        assert!(alloc::format!("{}", crate::SignatureSource::TapScript(key.0, key.1))
+            .starts_with("taproot script-spend signature for "));
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_rejects_undeclared_ecdsa_type() {
+        // With no declared type, an ECDSA signature must use SIGHASH_ALL.
+        let mut psbt = single_input_psbt();
+        let pubkey = bitcoin::PublicKey::from_slice(&[2u8; 33]).unwrap();
+        psbt.inputs[0].partial_sigs.insert(
+            pubkey,
+            bitcoin::ecdsa::Signature {
+                signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::None,
+            },
+        );
+
+        assert_eq!(
+            psbt.inputs[0].sighash_mismatch(),
+            Some((
+                crate::SignatureSource::Ecdsa(pubkey),
+                PsbtSighashType::from(EcdsaSighashType::None)
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_rejects_undeclared_taproot_none() {
+        // With no declared type, a taproot signature must use SIGHASH_DEFAULT or SIGHASH_ALL.
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].tap_key_sig = Some(bitcoin::taproot::Signature {
+            signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: bitcoin::TapSighashType::None,
+        });
+
+        assert_eq!(
+            psbt.inputs[0].sighash_mismatch(),
+            Some((
+                crate::SignatureSource::TapKey,
+                PsbtSighashType::from(bitcoin::TapSighashType::None)
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "miniscript")]
+    fn signature_sighash_check_accepts_undeclared_ecdsa_all_and_taproot_default_and_all() {
+        use bitcoin::hashes::Hash as _;
+
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].partial_sigs.insert(
+            bitcoin::PublicKey::from_slice(&[2u8; 33]).unwrap(),
+            bitcoin::ecdsa::Signature {
+                signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::All,
+            },
+        );
+        psbt.inputs[0].tap_key_sig = Some(bitcoin::taproot::Signature {
+            signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: bitcoin::TapSighashType::All,
+        });
+        psbt.inputs[0].tap_script_sigs.insert(
+            (
+                bitcoin::XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap(),
+                bitcoin::taproot::TapLeafHash::from_byte_array([3u8; 32]),
+            ),
+            bitcoin::taproot::Signature {
+                signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+                sighash_type: bitcoin::TapSighashType::Default,
+            },
+        );
+
+        assert_eq!(psbt.inputs[0].sighash_mismatch(), None);
     }
 }
