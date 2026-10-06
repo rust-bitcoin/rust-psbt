@@ -18,5 +18,8 @@ pub use finalizer::{
     FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
     InterpreterCheckInputError,
 };
-pub use signer::{SignableInput, Signer, SigningSession};
+pub use signer::{
+    GetKey, GetKeyError, KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys,
+    SigningSession,
+};
 pub use updater::Updater;

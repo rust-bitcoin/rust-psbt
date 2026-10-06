@@ -81,13 +81,13 @@ pub use crate::{
         ProprietaryType,
     },
     psbt::{
-        combine, CombineError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt, PsbtV2Decoder,
-        PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
+        combine, CombineError, OutputType, Psbt, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm,
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
-        InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, SignableInput, Signer,
-        SigningSession, Updater,
+        GetKey, GetKeyError, InputsOnlyModifiable, KeyRequest, Mod, Modifiable,
+        OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
+        Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
