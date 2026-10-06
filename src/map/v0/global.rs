@@ -195,8 +195,9 @@ pub(crate) struct V0Global {
     pub lock_time: absolute::LockTime,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum Stage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingUnsignedTx {
@@ -254,7 +255,7 @@ impl Stage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct GlobalMapDecoder {
     stage: Stage,
     version: Option<Version>,
@@ -269,26 +270,6 @@ pub(crate) struct GlobalMapDecoder {
     tx_inputs: Option<Vec<(Txid, u32, Sequence)>>,
     tx_outputs: Option<Vec<(Amount, ScriptBuf)>>,
     tx_lock_time: Option<absolute::LockTime>,
-}
-
-impl Default for GlobalMapDecoder {
-    fn default() -> Self {
-        Self {
-            stage: Stage::DecodingSeparator,
-            version: None,
-            tx_version: None,
-            xpubs: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-            tx_inputs: None,
-            tx_outputs: None,
-            tx_lock_time: None,
-        }
-    }
 }
 
 impl Decoder for GlobalMapDecoder {
