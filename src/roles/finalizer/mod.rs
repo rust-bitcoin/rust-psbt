@@ -233,7 +233,7 @@ mod tests {
 
     use super::*;
     use crate::roles::{Creator, Signer};
-    use crate::{Input, Output};
+    use crate::{Input, Output, SignableInput};
 
     const TEST_XPRIV: &str =
         "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu";
@@ -242,8 +242,23 @@ mod tests {
     fn sign(psbt: Psbt) -> Psbt {
         let secp = Secp256k1::new();
         let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
-        let (signed, _) = Signer::new(psbt).unwrap().sign(&xpriv, &secp).unwrap();
-        signed
+        let inputs_len = psbt.inputs.len();
+        let mut signer = Signer::new(psbt).expect("test env, psbt should be well formed");
+        let sigs = {
+            let mut session = signer.session();
+            let inputs: Vec<SignableInput> = (0..inputs_len)
+                .map(|x| {
+                    session.assume_checked_input(x).expect(
+                        "test env, input
+                        should be well formed",
+                    )
+                })
+                .collect();
+            session.get_all(&inputs, &xpriv, &secp)
+        };
+        signer
+            .apply(sigs)
+            .expect("signature created in this same function, should be within bounds")
     }
 
     /// Builds a signed P2WPKH PSBT: the fixture signed with `TEST_XPRIV`.

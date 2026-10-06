@@ -8,6 +8,8 @@
 //!
 //! This code is similar to `v0.rs` on purpose to show the differences between the APIs.
 
+use bitcoin::transaction::Version;
+use bitcoin::Transaction;
 use psbt_v2::bitcoin::bip32::{DerivationPath, KeySource, Xpriv, Xpub};
 use psbt_v2::bitcoin::hashes::Hash as _;
 use psbt_v2::bitcoin::locktime::absolute;
@@ -18,7 +20,8 @@ use psbt_v2::bitcoin::{
     Sequence, TxOut, Txid,
 };
 use psbt_v2::{
-    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, Signer, Updater,
+    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, SignableInput,
+    Signer, Updater,
 };
 
 const DUMMY_UTXO_AMOUNT: Amount = Amount::from_sat(20_000_000);
@@ -47,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (previous_output_a, change_address_a, change_value_a) = alice.contribute_to_multisig()?;
 
     // Bob has a UTXO the right size so no change needed.
-    let previous_output_b = bob.contribute_to_multisig();
+    let previous_output_b = bob.contribute_to_multisig()?;
 
     // In PSBT v1 the creator and constructor roles can be the same entity, for an example of having
     // them separate see `./v2-separate-creator-constructor.rs`.
@@ -61,9 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // If no lock time is required we can just create the `Input` directly.
-    let input_b = InputBuilder::new(&previous_output_b)
-        // .segwit_fund(txout); TODO: Add funding utxo.
-        .build();
+    let input_b = InputBuilder::new(&previous_output_b).legacy_fund(bob.funding_tx()?).build();
 
     // Build Alice's change output.
     let change = TxOut { value: change_value_a, script_pubkey: change_address_a.script_pubkey() };
@@ -97,8 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The signer role.
 
     // Each party then acts in the signer role.
-    let signed_by_a = alice.sign(updated.clone())?;
-    let signed_by_b = bob.sign(updated)?;
+    let signed_by_a = alice.sign(updated.clone())?; // Asumes the user has verified the prevout
+                                                    // amounts
+    let signed_by_b = bob.sign_strict(updated)?; // Fails if input fails to provide enough data to
+                                                 // verify prevout amounts
 
     let _signed = combine(signed_by_a, signed_by_b);
 
@@ -209,16 +212,39 @@ impl Bob {
         self.0.public_key("m/84'/0'/0'/20")
     }
 
-    /// Bob provides an input to be used to create the multisig, its the right size so no change.
-    pub fn contribute_to_multisig(&self) -> OutPoint {
-        // An obviously invalid output, we just use all zeros then use the `vout` to differentiate
-        // Alice's output from Bob's.
-        OutPoint { txid: Txid::all_zeros(), vout: 1 }
+    /// Provide the original full funding tx
+    pub fn funding_tx(&self) -> Result<Transaction, Box<dyn std::error::Error>> {
+        Ok(Transaction {
+            version: Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![self.input_utxo()?],
+        })
     }
 
-    /// Signs `psbt`.
-    pub fn sign(&self, psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
-        self.0.sign_ecdsa(psbt, Self::PATH)
+    /// Bob provides an input to be used to create the multisig, its the right size so no change.
+    pub fn contribute_to_multisig(&self) -> Result<OutPoint, Box<dyn std::error::Error>> {
+        let tx = self.funding_tx()?;
+        let txid = tx.compute_txid();
+        Ok(OutPoint { txid, vout: 0 })
+    }
+
+    /// Signs `psbt` enforcing verification of input prevout amounts
+    pub fn sign_strict(&self, psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
+        // Usually we'd have to check this was our input and provide the correct key.
+        let path = Self::PATH.parse::<DerivationPath>()?;
+        let xpriv = self.0.master.derive_priv(&self.0.secp, &path)?;
+
+        let mut signer = Signer::new(psbt)?;
+        let sigs = {
+            let mut session = signer.session();
+            let inputs: SignableInput = session
+                .signable_input(1)
+                .expect("owned input with full tx prevout should be verifiable");
+            session.get_all(&[inputs], &xpriv, &self.0.secp)
+        };
+        let psbt = signer.apply(sigs).unwrap();
+        Ok(psbt)
     }
 
     /// Alice updates the PSBT, adding her utxo and key source.
@@ -298,10 +324,20 @@ impl Entity {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;
 
-        let signer = Signer::new(psbt)?;
-        match signer.sign(&xpriv, &self.secp) {
-            Ok((psbt, _signing_keys)) => Ok(psbt),
-            Err(e) => panic!("signing failed: {:?}", e),
-        }
+        let inputs_len = psbt.inputs.len();
+        let mut signer = Signer::new(psbt)?;
+        let sigs = {
+            let mut session = signer.session();
+            let mut inputs: Vec<SignableInput> = vec![];
+            for index in 0..inputs_len {
+                match session.assume_checked_input(index) {
+                    Ok(signable_input) => inputs.push(signable_input),
+                    Err(e) => panic!("Malformed input, cannot be signed: {}", e),
+                }
+            }
+            session.get_all(&inputs, &xpriv, &self.secp)
+        };
+        let psbt = signer.apply(sigs).unwrap();
+        Ok(psbt)
     }
 }

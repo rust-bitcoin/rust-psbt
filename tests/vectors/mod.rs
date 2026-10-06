@@ -210,10 +210,14 @@ impl TestCase {
 
                     // The BIP-174 signer validity checks run upfront in `sign` (before any
                     // signature is produced), so signing must fail even though we hold no keys.
-                    let key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
-                    let secp = Secp256k1::new();
-                    let signer = Signer::new(base64_psbt).expect("lock time must be determinable");
-                    assert!(signer.sign(&key_map, &secp).is_err(), "expected sign() to fail");
+                    let inputs_len = base64_psbt.inputs.len();
+                    let mut signer =
+                        Signer::new(base64_psbt).expect("lock time must be determinable");
+                    let session = signer.session();
+                    assert!(
+                        (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err()),
+                        "expected sign() to fail"
+                    );
                 }
             }
             Supplementary::FailStrictSign { psbts } => {
@@ -234,9 +238,9 @@ impl TestCase {
                     // getting the signable inputs.
                     let mut signer =
                         Signer::new(base64_psbt).expect("lock time must be determinable");
-                    let provider = signer.session();
+                    let session = signer.session();
                     assert!(
-                        (0..input_len).any(|idx| provider.signable_input(idx).is_err()),
+                        (0..input_len).any(|idx| session.signable_input(idx).is_err()),
                         "expected signable_input() to fail"
                     );
                 }
@@ -387,10 +391,13 @@ impl TestCase {
                 let inputs_len = psbt.inputs.len();
                 let mut signer = Signer::new(psbt).expect("lock time must be determinable");
                 let sigs = {
-                    let mut provider = signer.session();
-                    let signable_inputs: Vec<SignableInput> =
-                        (0..inputs_len).map(|x| provider.signable_input(x).unwrap()).collect();
-                    provider.get_all(&signable_inputs, &key_map, &secp)
+                    let mut session = signer.session();
+                    let signable_inputs: Vec<SignableInput> = (0..inputs_len)
+                        .map(|x| {
+                            session.signable_input(x).expect("input is well formed and verifiable")
+                        })
+                        .collect();
+                    session.get_all(&signable_inputs, &key_map, &secp)
                 };
                 let psbt = signer.apply(sigs).unwrap();
 
@@ -427,11 +434,21 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let signer = Signer::new(psbt).expect("lock time must be determinable");
-                let (psbt, _) = match signer.sign(&key_map, &secp) {
-                    Ok(signed) => signed,
-                    Err((_, errors)) => panic!("unexpected sign errors: {:?}", errors),
+                let inputs_len = psbt.inputs.len();
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let sigs = {
+                    let mut session = signer.session();
+                    let mut inputs: Vec<SignableInput> = vec![];
+                    for idx in 0..inputs_len {
+                        match session.assume_checked_input(idx) {
+                            Ok(signable_input) => inputs.push(signable_input),
+                            Err(error) => panic!("unexpected sign error: {:?}", error),
+                        }
+                    }
+                    session.get_all(&inputs, &key_map, &secp)
                 };
+                let psbt = signer.apply(sigs).unwrap();
+
                 assert_eq!(psbt, expected_psbt);
             }
             // Combine: merge multiple PSBTs into one.
