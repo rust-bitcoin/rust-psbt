@@ -9,7 +9,7 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
 };
 
-use super::Key;
+use super::{Key, KeyDecodeError};
 use crate::consts;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
@@ -277,6 +277,199 @@ impl std::error::Error for ValueDecodeError {
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OutputValueDecodeError {
+    /// Error decoding the value's compact-size length prefix.
+    LengthPrefix(CompactSizeDecoderError),
+    /// Error decoding the amount value (8-byte fixed value).
+    Amount(UnexpectedEofError),
+    /// Error decoding the script pubkey.
+    Script(ByteVecDecoderError),
+    /// Error decoding the redeem script.
+    RedeemScript(ByteVecDecoderError),
+    /// Error decoding the witness script.
+    WitnessScript(ByteVecDecoderError),
+    /// Error decoding the BIP32 derivation value.
+    Bip32Derivation(ByteVecDecoderError),
+    /// Error decoding the taproot internal key (32-byte fixed value).
+    TapInternalKey(UnexpectedEofError),
+    /// Error decoding the taproot tree.
+    TapTree(ByteVecDecoderError),
+    /// The decoded value is not a valid taproot tree.
+    InvalidTapTree,
+    /// Error decoding the taproot BIP32 derivation value.
+    TapBip32Derivation(ByteVecDecoderError),
+    /// Error decoding a proprietary value.
+    ProprietaryValue(ByteVecDecoderError),
+    /// Error decoding an unknown value.
+    UnknownValue(ByteVecDecoderError),
+    /// Error decoding a silent payments v0 info (66-byte fixed value).
+    #[cfg(feature = "silent-payments")]
+    SpV0Info(UnexpectedEofError),
+    /// Error decoding a silent payments v0 label (4-byte fixed value).
+    #[cfg(feature = "silent-payments")]
+    SpV0Label(UnexpectedEofError),
+}
+
+impl fmt::Display for OutputValueDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
+            Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
+            Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
+            Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
+            Self::WitnessScript(ref e) => write_err!(f, "error decoding witness script"; e),
+            Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
+            Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
+            Self::TapTree(ref e) => write_err!(f, "error decoding tap tree"; e),
+            Self::InvalidTapTree => write!(f, "invalid tap tree"),
+            Self::TapBip32Derivation(ref e) =>
+                write_err!(f, "error decoding tap BIP32 derivation"; e),
+            Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
+            Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpV0Info(ref e) => write_err!(f, "error decoding SP v0 info"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpV0Label(ref e) => write_err!(f, "error decoding SP v0 label"; e),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for OutputValueDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LengthPrefix(ref e) => Some(e),
+            Self::Amount(ref e) => Some(e),
+            Self::Script(ref e) => Some(e),
+            Self::RedeemScript(ref e) => Some(e),
+            Self::WitnessScript(ref e) => Some(e),
+            Self::Bip32Derivation(ref e) => Some(e),
+            Self::TapInternalKey(ref e) => Some(e),
+            Self::TapTree(ref e) => Some(e),
+            Self::TapBip32Derivation(ref e) => Some(e),
+            Self::ProprietaryValue(ref e) => Some(e),
+            Self::UnknownValue(ref e) => Some(e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpV0Info(ref e) => Some(e),
+            #[cfg(feature = "silent-payments")]
+            Self::SpV0Label(ref e) => Some(e),
+            Self::InvalidTapTree => None,
+        }
+    }
+}
+
+/// An error while decoding.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum OutputDecodeError {
+    /// Error inserting a key-value pair.
+    InsertPair(OutputInsertPairError),
+    /// Error decoding a raw PSBT key.
+    KeyDecode(KeyDecodeError),
+    /// Error decoding a value.
+    ValueDecode(OutputValueDecodeError),
+    /// Called build() before fully decoding the output map.
+    EarlyEnd,
+    /// Encoded output is missing a value.
+    MissingValue,
+    /// Encoded output is missing a script pubkey.
+    MissingScriptPubkey,
+    /// Encoded output is missing a sp_v0_info.
+    LabelWithoutInfo,
+    /// Invalid leaf version.
+    InvalidLeafVersion,
+    /// Value that was supposed to be present was not.
+    MissingExpectedValue(&'static str),
+}
+
+impl fmt::Display for OutputDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InsertPair(ref e) => write_err!(f, "error inserting a pair"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
+            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
+            Self::MissingValue => write!(f, "encoded output is missing a value"),
+            Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
+            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
+            Self::MissingExpectedValue(name) => write!(f, "missing expected value: {}", name),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for OutputDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InsertPair(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
+            Self::ValueDecode(ref e) => Some(e),
+            Self::EarlyEnd
+            | Self::MissingValue
+            | Self::MissingScriptPubkey
+            | Self::LabelWithoutInfo
+            | Self::InvalidLeafVersion
+            | Self::MissingExpectedValue(_) => None,
+        }
+    }
+}
+
+impl From<OutputInsertPairError> for OutputDecodeError {
+    fn from(e: OutputInsertPairError) -> Self { Self::InsertPair(e) }
+}
+
+#[derive(Debug)]
+pub enum OutputInsertPairError {
+    /// Keys within key-value map should never be duplicated.
+    DuplicateKey(Key),
+    /// Key should contain data.
+    InvalidKeyDataEmpty(Key),
+    /// Key should not contain data.
+    InvalidKeyDataNotEmpty(Key),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(bitcoin::key::FromSliceError),
+    /// Invalid xonly public key when parsing key data.
+    InvalidXOnlyPublicKey,
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
+    /// Value was not the correct length (got, expected).
+    ValueWrongLength(usize, usize),
+}
+
+impl fmt::Display for OutputInsertPairError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
+            Self::InvalidKeyDataNotEmpty(ref key) =>
+                write!(f, "key should not contain data: {}", key),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::ValueWrongLength(got, expected) => {
+                write!(f, "value wrong length (got: {}, expected: {})", got, expected)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for OutputInsertPairError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::DuplicateKey(_)
+            | Self::InvalidKeyDataEmpty(_)
+            | Self::InvalidKeyDataNotEmpty(_)
+            | Self::InvalidXOnlyPublicKey
+            | Self::InvalidProprietaryKey
+            | Self::ValueWrongLength(..) => None,
         }
     }
 }

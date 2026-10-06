@@ -1327,7 +1327,7 @@ pub enum DecodeError {
     /// Error decoding input map.
     Input(input::DecodeError),
     /// Error decoding output map.
-    Output(output::DecodeError),
+    Output(crate::map::error::OutputDecodeError),
 }
 
 impl fmt::Display for DecodeError {
@@ -1363,8 +1363,8 @@ impl From<input::DecodeError> for DecodeError {
     fn from(e: input::DecodeError) -> Self { Self::Input(e) }
 }
 
-impl From<output::DecodeError> for DecodeError {
-    fn from(e: output::DecodeError) -> Self { Self::Output(e) }
+impl From<crate::map::error::OutputDecodeError> for DecodeError {
+    fn from(e: crate::map::error::OutputDecodeError) -> Self { Self::Output(e) }
 }
 
 /// If the "base64" feature is enabled we implement `Display` and `FromStr` using base64 encoding.
