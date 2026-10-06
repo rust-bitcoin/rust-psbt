@@ -981,7 +981,7 @@ impl PsbtEncode for Global {
     }
 }
 
-/// Error decoding a global map. Re-exported from [`crate::map::error`].
+/// Error decoding a global map.
 pub use crate::map::error::GlobalDecodeError;
 pub(crate) use crate::map::error::{InsertPairError, ValueDecodeError};
 

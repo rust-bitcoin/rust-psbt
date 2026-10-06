@@ -3,10 +3,6 @@
 //! PSBT v0 global map encoder and decoder.
 //!
 //! `<global-map> := <unsigned_tx> <xpub>* <proprietary>* <unknown>* 0x00`
-//!
-//! The decoder produces a [`V0Global`] which includes the reconstructed
-//! [`Global`](crate::Global) plus the per-input and per-output data extracted
-//! from the unsigned transaction.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -114,27 +110,20 @@ impl<'e> GlobalMapEncoder<'e> {
 
     fn ecdh_or_next(&self) -> State<'e> {
         #[cfg(feature = "silent-payments")]
-        {
-            if !self.psbt.global.sp_ecdh_shares.is_empty() {
-                return State::Ecdh(IterEncoder::new(EcdhKeyValueIter::new(
-                    self.psbt.global.sp_ecdh_shares.iter(),
-                )));
-            }
-            self.dleq_or_next()
+        if !self.psbt.global.sp_ecdh_shares.is_empty() {
+            return State::Ecdh(IterEncoder::new(EcdhKeyValueIter::new(
+                self.psbt.global.sp_ecdh_shares.iter(),
+            )));
         }
-        #[cfg(not(feature = "silent-payments"))]
-        State::Separator(SeparatorEncoder::new())
+        self.dleq_or_next()
     }
 
-    #[allow(dead_code)]
     fn dleq_or_next(&self) -> State<'e> {
         #[cfg(feature = "silent-payments")]
-        {
-            if !self.psbt.global.sp_dleq_proofs.is_empty() {
-                return State::Dleq(IterEncoder::new(DleqKeyValueIter::new(
-                    self.psbt.global.sp_dleq_proofs.iter(),
-                )));
-            }
+        if !self.psbt.global.sp_dleq_proofs.is_empty() {
+            return State::Dleq(IterEncoder::new(DleqKeyValueIter::new(
+                self.psbt.global.sp_dleq_proofs.iter(),
+            )));
         }
         State::Separator(SeparatorEncoder::new())
     }
