@@ -7,7 +7,7 @@ use psbt_v2::{
     Psbt,
 };
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the PSBT.
     let created = Creator::new().inputs_modifiable().outputs_modifiable().psbt();
 
