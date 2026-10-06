@@ -121,7 +121,7 @@ enum Supplementary {
         #[serde(default, deserialize_with = "deserialize_sighash")]
         sighash: Option<PsbtSighashType>,
     },
-    Sign {
+    TrustedSign {
         #[serde(default)]
         psbts: Vec<PsbtData>,
         xpriv: Xpriv,
@@ -314,8 +314,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            // Sign: derive keys, sign the PSBT, compare against expected.
-            Supplementary::Sign { psbts, xpriv, seed, private_keys } => {
+            Supplementary::TrustedSign { psbts, xpriv, seed, private_keys } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
