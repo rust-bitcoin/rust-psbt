@@ -197,12 +197,12 @@ pub(crate) struct V0Global {
 
 #[derive(Debug)]
 enum Stage {
-    DecodingUnsignedTxKey(KeyDecoder),
-    DecodingUnsignedTxValue {
-        decoder: ValueDecoder<UnsignedTxDecoder>,
-    },
     DecodingSeparator,
     DecodingKey(KeyDecoder),
+    DecodingUnsignedTx {
+        key: Key,
+        decoder: ValueDecoder<UnsignedTxDecoder>,
+    },
     DecodingXpub {
         key: Key,
         decoder: ByteVecDecoder,
@@ -237,7 +237,7 @@ impl Stage {
     fn from_key(key: Key) -> Result<Self, GlobalDecodeError> {
         match key.type_value {
             PSBT_GLOBAL_UNSIGNED_TX =>
-                Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(key))),
+                Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() }),
             PSBT_GLOBAL_XPUB => Ok(Self::DecodingXpub { key, decoder: ByteVecDecoder::new() }),
             PSBT_GLOBAL_VERSION =>
                 Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
@@ -274,7 +274,7 @@ pub(crate) struct GlobalMapDecoder {
 impl Default for GlobalMapDecoder {
     fn default() -> Self {
         Self {
-            stage: Stage::DecodingUnsignedTxKey(KeyDecoder::default()),
+            stage: Stage::DecodingSeparator,
             version: None,
             tx_version: None,
             xpubs: BTreeMap::default(),
@@ -355,9 +355,7 @@ impl Decoder for GlobalMapDecoder {
             }
 
             let status = match &mut self.stage {
-                Stage::DecodingUnsignedTxKey(d) =>
-                    d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
-                Stage::DecodingUnsignedTxValue { ref mut decoder, .. } =>
+                Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
                         Decoder2Error::First(e) =>
                             GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
@@ -417,27 +415,6 @@ impl Decoder for GlobalMapDecoder {
 
             let old = core::mem::replace(&mut self.stage, Stage::Errored);
             match old {
-                Stage::DecodingUnsignedTxKey(decoder) => {
-                    let key = decoder.end().map_err(GlobalDecodeError::KeyDecode)?;
-                    if key.type_value != PSBT_GLOBAL_UNSIGNED_TX || !key.key.is_empty() {
-                        return Err(GlobalDecodeError::MissingUnsignedTx);
-                    }
-                    self.stage =
-                        Stage::DecodingUnsignedTxValue { decoder: ValueDecoder::default() };
-                }
-                Stage::DecodingUnsignedTxValue { decoder } => {
-                    let (_value_len, (version, tx_inputs, tx_outputs, lock_time)) =
-                        decoder.end().map_err(|e| match e {
-                            Decoder2Error::First(e) =>
-                                GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
-                            Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
-                        })?;
-                    self.tx_version = Some(version);
-                    self.tx_inputs = Some(tx_inputs);
-                    self.tx_outputs = Some(tx_outputs);
-                    self.tx_lock_time = Some(lock_time);
-                    self.stage = Stage::DecodingSeparator;
-                }
                 Stage::DecodingKey(decoder) => {
                     let key = decoder.end().map_err(GlobalDecodeError::KeyDecode)?;
                     self.stage = Stage::from_key(key)?;
@@ -476,6 +453,29 @@ impl Decoder for GlobalMapDecoder {
                         )));
                     }
                     self.version = Some(V2);
+                    self.stage = Stage::DecodingSeparator;
+                }
+                Stage::DecodingUnsignedTx { key, decoder } => {
+                    if !key.key.is_empty() {
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::InvalidKeyDataNotEmpty(key),
+                        ));
+                    }
+                    if self.tx_version.is_some() {
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
+                    }
+                    let (_value_len, (version, tx_inputs, tx_outputs, lock_time)) =
+                        decoder.end().map_err(|e| match e {
+                            Decoder2Error::First(e) =>
+                                GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
+                        })?;
+                    self.tx_version = Some(version);
+                    self.tx_inputs = Some(tx_inputs);
+                    self.tx_outputs = Some(tx_outputs);
+                    self.tx_lock_time = Some(lock_time);
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingXpub { key, decoder } => {
@@ -607,8 +607,7 @@ impl Decoder for GlobalMapDecoder {
 
     fn read_limit(&self) -> usize {
         match &self.stage {
-            Stage::DecodingUnsignedTxKey(d) => d.read_limit(),
-            Stage::DecodingUnsignedTxValue { ref decoder, .. } => decoder.read_limit(),
+            Stage::DecodingUnsignedTx { ref decoder, .. } => decoder.read_limit(),
             Stage::DecodingKey(d) => d.read_limit(),
             Stage::DecodingVersion { ref decoder, .. } => decoder.read_limit(),
             Stage::DecodingXpub { ref decoder, .. } => decoder.read_limit(),
@@ -626,7 +625,7 @@ impl Decoder for GlobalMapDecoder {
     fn end(self) -> Result<Self::Output, Self::Error> {
         match self.stage {
             Stage::Done(v0) => Ok(v0),
-            _ => Err(GlobalDecodeError::MissingUnsignedTx),
+            _ => Err(GlobalDecodeError::EarlyEnd),
         }
     }
 }
@@ -642,6 +641,8 @@ mod tests {
 
     const TEST_XPUB: &str =
         "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+    const TEST_XPUB_2: &str =
+        "xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEjWgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw";
 
     /// Drain a [`KeyValueEncoder`] into the byte payload for the decoder.
     fn encode_kv(key_type: u64, key_data: &[u8], value: &[u8]) -> Vec<u8> {
@@ -654,28 +655,31 @@ mod tests {
         ))
     }
 
-    const MINIMAL_UNSIGNED_TX: [u8; 10] = [
-        0x02, 0x00, 0x00, 0x00, // version 2
-        0x00, // 0 inputs
-        0x00, // 0 outputs
-        0x00, 0x00, 0x00, 0x00, // locktime 0
-    ];
+    /// Minimal unsigned tx for testing (version 2, 0 inputs, 0 outputs, locktime 0).
+    const MINIMAL_UNSIGNED_TX: [u8; 10] =
+        [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
     #[test]
     fn rejects_duplicate_unsigned_tx_key() {
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
-        let dup = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &[]);
-        let err = dec.push_bytes(&mut &*dup).unwrap_err();
+        let _ = dec.push_bytes(&mut &*encode_kv(
+            consts::PSBT_GLOBAL_UNSIGNED_TX,
+            &[],
+            &MINIMAL_UNSIGNED_TX,
+        ));
+        let err = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_UNSIGNED_TX,
+                &[],
+                &MINIMAL_UNSIGNED_TX,
+            ))
+            .unwrap_err();
         assert!(matches!(err, GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(_))));
     }
 
     #[test]
     fn rejects_version_value_wrong_length() {
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
             .unwrap_err();
@@ -688,8 +692,6 @@ mod tests {
     #[test]
     fn rejects_nonzero_version_in_v0_map() {
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[2, 0, 0, 0]))
             .unwrap_err();
@@ -699,10 +701,12 @@ mod tests {
     #[test]
     fn rejects_nonempty_version_key_data() {
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
         let err = dec
-            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[0x42], &[0, 0, 0, 0]))
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_VERSION,
+                &[1], // non-empty key data, version keys must have none.
+                &[0, 0, 0, 0],
+            ))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -711,11 +715,34 @@ mod tests {
     }
 
     #[test]
+    fn decodes_xpub_with_and_without_derivation() {
+        // Fingerprint only (value length 4).
+        let xpub: Xpub = TEST_XPUB.parse().unwrap();
+        let mut dec = GlobalMapDecoder::default();
+        let status = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_XPUB,
+                &xpub.encode(),
+                xpub.fingerprint().as_bytes(),
+            ))
+            .unwrap();
+        assert!(status.needs_more());
+
+        // Fingerprint + one child (total 8 bytes).
+        let xpub2: Xpub = TEST_XPUB_2.parse().unwrap();
+        let mut dec2 = GlobalMapDecoder::default();
+        let mut value = xpub2.fingerprint().as_bytes().to_vec();
+        value.extend_from_slice(&[0; 4]);
+        let status = dec2
+            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub2.encode(), &value))
+            .unwrap();
+        assert!(status.needs_more());
+    }
+
+    #[test]
     fn rejects_xpub_value_too_short() {
         let xpub: Xpub = TEST_XPUB.parse().unwrap();
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
         let err = dec
             .push_bytes(&mut &*encode_kv(
                 consts::PSBT_GLOBAL_XPUB,
@@ -730,11 +757,28 @@ mod tests {
     }
 
     #[test]
+    fn read_limit_lifecycle() {
+        let mut dec = GlobalMapDecoder::default();
+        assert_eq!(dec.read_limit(), 1, "fresh decoder should request bytes");
+        let _ = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_UNSIGNED_TX,
+                &[],
+                &MINIMAL_UNSIGNED_TX,
+            ))
+            .unwrap();
+
+        // Push the separator to finish the map.
+        let mut sep: &[u8] = &[crate::consts::PSBT_SEPARATOR];
+        let status = dec.push_bytes(&mut sep).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(dec.read_limit(), 0, "completed decoder should request no bytes");
+    }
+
+    #[test]
     fn rejects_xpub_derivation_not_multiple_of_4() {
         let xpub: Xpub = TEST_XPUB.parse().unwrap();
         let mut dec = GlobalMapDecoder::default();
-        let payload = encode_kv(consts::PSBT_GLOBAL_UNSIGNED_TX, &[], &MINIMAL_UNSIGNED_TX);
-        let _ = dec.push_bytes(&mut &*payload); // consumes the unsigned-tx keypair
 
         let mut value = xpub.fingerprint().as_bytes().to_vec();
         value.extend_from_slice(&[0; 5]);
