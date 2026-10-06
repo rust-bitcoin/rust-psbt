@@ -302,8 +302,11 @@ impl Decoder for GlobalMapDecoder {
                                     .then_some(lock_time),
                                 input_count: tx_inputs.len(),
                                 output_count: tx_outputs.len(),
+                                // v0 has no PSBT_GLOBAL_TX_MODIFIABLE key, but we are assuming
+                                // construction is over and setting all to unmodifiable.
                                 tx_modifiable_flags: 0,
-                                version: self.version.unwrap_or(V2),
+                                // The PSBT is now in v2 form.
+                                version: V2,
                                 xpubs: core::mem::take(&mut self.xpubs),
                                 #[cfg(feature = "silent-payments")]
                                 sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
@@ -325,12 +328,6 @@ impl Decoder for GlobalMapDecoder {
             }
 
             let status = match &mut self.stage {
-                Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
-                    })?,
                 Stage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
                 Stage::DecodingVersion { ref mut decoder, .. } =>
@@ -345,6 +342,12 @@ impl Decoder for GlobalMapDecoder {
                                     e.version(),
                                 )),
                         },
+                    })?,
+                Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
                     })?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
