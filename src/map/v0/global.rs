@@ -181,19 +181,9 @@ impl Encoder for GlobalMapEncoder<'_> {
     }
 }
 
-/// The result of decoding a v0 global map.
-#[derive(Debug)]
-pub(crate) struct V0Global {
-    /// The reconstructed v2 global.
-    pub global: crate::Global,
-    /// Per-input data extracted from the unsigned transaction.
-    pub tx_inputs: Vec<(Txid, u32, Sequence)>,
-    /// Per-output data extracted from the unsigned transaction.
-    pub tx_outputs: Vec<(Amount, ScriptBuf)>,
-    /// The lock time resolved from the unsigned transaction.
-    #[allow(dead_code)]
-    pub lock_time: absolute::LockTime,
-}
+/// Information decoded out of a v0 global into a v2 global with input and output data.
+pub(crate) type V0GlobalInfo =
+    (crate::Global, Vec<(Txid, u32, Sequence)>, Vec<(Amount, ScriptBuf)>, absolute::LockTime);
 
 #[derive(Debug, Default)]
 enum Stage {
@@ -230,7 +220,7 @@ enum Stage {
         key: Key,
         decoder: ValueDecoder<bitcoin_consensus_encoding::ArrayDecoder<64>>,
     },
-    Done(V0Global),
+    Done(V0GlobalInfo),
     Errored,
 }
 
@@ -273,7 +263,7 @@ pub(crate) struct GlobalMapDecoder {
 }
 
 impl Decoder for GlobalMapDecoder {
-    type Output = V0Global;
+    type Output = V0GlobalInfo;
     type Error = GlobalDecodeError;
 
     #[allow(clippy::too_many_lines)]
@@ -305,8 +295,8 @@ impl Decoder for GlobalMapDecoder {
                             }
                         }
 
-                        self.stage = Stage::Done(V0Global {
-                            global: crate::Global {
+                        self.stage = Stage::Done((
+                            crate::Global {
                                 tx_version,
                                 fallback_lock_time: (lock_time != absolute::LockTime::ZERO)
                                     .then_some(lock_time),
@@ -325,7 +315,7 @@ impl Decoder for GlobalMapDecoder {
                             tx_inputs,
                             tx_outputs,
                             lock_time,
-                        });
+                        ));
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {

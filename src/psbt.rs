@@ -462,29 +462,29 @@ impl Decoder for PsbtV0Decoder {
                         V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());
                 }
                 V0DecoderStage::Global(decoder) => {
-                    let v0 = decoder.end()?;
-                    let in_count = v0.tx_inputs.len();
-                    let out_count = v0.tx_outputs.len();
+                    let (global, tx_inputs, tx_outputs, _lock_time) = decoder.end()?;
+                    let in_count = tx_inputs.len();
+                    let out_count = tx_outputs.len();
                     if in_count == 0 {
                         if out_count == 0 {
                             self.stage = V0DecoderStage::Done(Psbt {
-                                global: v0.global,
+                                global,
                                 inputs: Vec::new(),
                                 outputs: Vec::new(),
                             });
                         } else {
                             self.stage = V0DecoderStage::Outputs(
-                                v0.global,
+                                global,
                                 Vec::new(),
-                                v0.tx_outputs,
+                                tx_outputs,
                                 crate::map::v0::OutputsDecoder::new(out_count),
                             );
                         }
                     } else {
                         self.stage = V0DecoderStage::Inputs(
-                            v0.global,
-                            v0.tx_inputs,
-                            v0.tx_outputs,
+                            global,
+                            tx_inputs,
+                            tx_outputs,
                             crate::map::v0::InputsDecoder::new(in_count),
                         );
                     }
