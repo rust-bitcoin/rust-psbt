@@ -28,7 +28,7 @@ const MAINNET: Network = Network::Bitcoin; // Bitcoin mainnet network.
 const FEE: Amount = Amount::from_sat(1_000); // Usually this would be calculated.
 const DUMMY_CHANGE_AMOUNT: Amount = Amount::from_sat(100_000);
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Mimic two people, Alice and Bob, who wish to create a 2-of-2 multisig output together.
     let alice = Alice::new();
     let bob = Bob::new();
@@ -134,13 +134,15 @@ impl Alice {
     }
 
     /// Returns the public key for this entity.
-    pub fn multisig_public_key(&self) -> anyhow::Result<bitcoin::PublicKey> {
+    pub fn multisig_public_key(&self) -> Result<bitcoin::PublicKey, Box<dyn std::error::Error>> {
         self.0.public_key("m/84'/0'/0'/123")
     }
 
     /// Alice provides an input to be used to create the multisig and the details required to get
     /// some change back (change address and amount).
-    pub fn contribute_to_multisig(&self) -> anyhow::Result<(OutPoint, Address, Amount)> {
+    pub fn contribute_to_multisig(
+        &self,
+    ) -> Result<(OutPoint, Address, Amount), Box<dyn std::error::Error>> {
         // An obviously invalid output, we just use all zeros then use the `vout` to differentiate
         // Alice's output from Bob's.
         let out = OutPoint { txid: Txid::all_zeros(), vout: 0 };
@@ -158,10 +160,12 @@ impl Alice {
     }
 
     /// Signs `psbt`.
-    pub fn sign(&self, psbt: Psbt) -> anyhow::Result<Psbt> { self.0.sign_ecdsa(psbt, Self::PATH) }
+    pub fn sign(&self, psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
+        self.0.sign_ecdsa(psbt, Self::PATH)
+    }
 
     /// Alice updates the PSBT, adding her utxo and key source.
-    pub fn update(&self, mut psbt: Psbt) -> anyhow::Result<Psbt> {
+    pub fn update(&self, mut psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
         let input = &mut psbt.inputs[0];
 
         // The dummy input utxo we are spending and the pubkey/keysource that will be used to sign it.
@@ -172,9 +176,11 @@ impl Alice {
     }
 
     /// Provides the actual UTXO that Alice is contributing, this would usually come from the chain.
-    fn input_utxo(&self) -> anyhow::Result<TxOut> { self.0.input_utxo(Self::PATH) }
+    fn input_utxo(&self) -> Result<TxOut, Box<dyn std::error::Error>> {
+        self.0.input_utxo(Self::PATH)
+    }
 
-    fn bip32_derivation(&self) -> anyhow::Result<(PublicKey, KeySource)> {
+    fn bip32_derivation(&self) -> Result<(PublicKey, KeySource), Box<dyn std::error::Error>> {
         self.0.bip32_derivation(Self::PATH)
     }
 }
@@ -199,7 +205,7 @@ impl Bob {
     }
 
     /// Returns the public key for this entity.
-    pub fn multisig_public_key(&self) -> anyhow::Result<bitcoin::PublicKey> {
+    pub fn multisig_public_key(&self) -> Result<bitcoin::PublicKey, Box<dyn std::error::Error>> {
         self.0.public_key("m/84'/0'/0'/20")
     }
 
@@ -211,10 +217,12 @@ impl Bob {
     }
 
     /// Signs `psbt`.
-    pub fn sign(&self, psbt: Psbt) -> anyhow::Result<Psbt> { self.0.sign_ecdsa(psbt, Self::PATH) }
+    pub fn sign(&self, psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
+        self.0.sign_ecdsa(psbt, Self::PATH)
+    }
 
     /// Alice updates the PSBT, adding her utxo and key source.
-    pub fn update(&self, mut psbt: Psbt) -> anyhow::Result<Psbt> {
+    pub fn update(&self, mut psbt: Psbt) -> Result<Psbt, Box<dyn std::error::Error>> {
         let input = &mut psbt.inputs[1];
 
         // The dummy input utxo we are spending and the pubkey/keysource that will be used to sign it.
@@ -225,9 +233,11 @@ impl Bob {
     }
 
     /// Provides the actual UTXO that Alice is contributing, this would usually come from the chain.
-    fn input_utxo(&self) -> anyhow::Result<TxOut> { self.0.input_utxo(Self::PATH) }
+    fn input_utxo(&self) -> Result<TxOut, Box<dyn std::error::Error>> {
+        self.0.input_utxo(Self::PATH)
+    }
 
-    fn bip32_derivation(&self) -> anyhow::Result<(PublicKey, KeySource)> {
+    fn bip32_derivation(&self) -> Result<(PublicKey, KeySource), Box<dyn std::error::Error>> {
         self.0.bip32_derivation(Self::PATH)
     }
 }
@@ -247,7 +257,10 @@ impl Entity {
     pub fn new(master: Xpriv) -> Self { Self { master, secp: Secp256k1::new() } }
 
     /// Returns the pubkey for this entity at `derivation_path`.
-    fn public_key(&self, derivation_path: &str) -> anyhow::Result<bitcoin::PublicKey> {
+    fn public_key(
+        &self,
+        derivation_path: &str,
+    ) -> Result<bitcoin::PublicKey, Box<dyn std::error::Error>> {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;
         let pk = Xpub::from_priv(&self.secp, &xpriv);
@@ -255,7 +268,7 @@ impl Entity {
     }
 
     /// Returns a dummy utxo that we can spend.
-    fn input_utxo(&self, derivation_path: &str) -> anyhow::Result<TxOut> {
+    fn input_utxo(&self, derivation_path: &str) -> Result<TxOut, Box<dyn std::error::Error>> {
         // A dummy script_pubkey representing a UTXO that is locked to a pubkey that Alice controls.
         let script_pubkey = ScriptBuf::new_p2wpkh(
             &self.public_key(derivation_path)?.wpubkey_hash().expect("uncompressed key"),
@@ -264,7 +277,10 @@ impl Entity {
     }
 
     /// Returns the BOP-32 stuff needed to sign an ECDSA input using the [`v2::Psbt`] BIP-32 signing API.
-    fn bip32_derivation(&self, derivation_path: &str) -> anyhow::Result<(PublicKey, KeySource)> {
+    fn bip32_derivation(
+        &self,
+        derivation_path: &str,
+    ) -> Result<(PublicKey, KeySource), Box<dyn std::error::Error>> {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path).expect("failed to derive xpriv");
         let fingerprint = xpriv.fingerprint(&self.secp);
@@ -273,7 +289,11 @@ impl Entity {
     }
 
     /// Signs any ECDSA inputs for which we have keys.
-    pub fn sign_ecdsa(&self, psbt: Psbt, derivation_path: &str) -> anyhow::Result<Psbt> {
+    pub fn sign_ecdsa(
+        &self,
+        psbt: Psbt,
+        derivation_path: &str,
+    ) -> Result<Psbt, Box<dyn std::error::Error>> {
         // Usually we'd have to check this was our input and provide the correct key.
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;

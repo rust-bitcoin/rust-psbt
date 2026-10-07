@@ -40,7 +40,7 @@ const INPUT_1_REDEEM_SCRIPT_HEX: &str =
 /// The 2-of-2 multisig witness script for input 1.
 const INPUT_1_WITNESS_SCRIPT_HEX: &str = "522103089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc21023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7352ae";
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Receive a v0 PSBT (e.g., from a coordinator that only speaks BIP-174).
     let received_bytes = Vec::from_hex(RECEIVED_V0_HEX)?;
     println!("received v0 PSBT ({} bytes)\n", received_bytes.len());
@@ -109,7 +109,7 @@ fn add_derivation(
     map: &mut std::collections::BTreeMap<PublicKey, (Fingerprint, DerivationPath)>,
     fingerprint: Fingerprint,
     paths: &[(&str, &str)],
-) -> anyhow::Result<()> {
+) -> Result<(), Box<dyn std::error::Error>> {
     for (key, path) in paths {
         let pubkey = PublicKey::from_slice(&Vec::from_hex(key)?)?;
         let path = path.parse::<DerivationPath>()?;
