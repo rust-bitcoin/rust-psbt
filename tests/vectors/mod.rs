@@ -474,3 +474,4 @@ make_check_case!(bip174);
 make_check_case!(bip370);
 make_check_case!(bip371);
 make_check_case!(bip375);
+make_check_case!(fuzz);

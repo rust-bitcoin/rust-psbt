@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "description": "Valid: PSBTv2 with present PSBT_OUT_SCRIPT field but empty script.",
+      "version": 2,
+      "supplementary": {
+        "task": "deserialize",
+        "psbts": [
+          {
+            "hex": "70736274ff01fb040200000001020402000000010401010105010100010e200101010101010101010101010101010101010101010101010101010101010101010f040000000000010308100000000000000001040000",
+            "base64": "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEBAAEOIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ8EAAAAAAABAwgQAAAAAAAAAAEEAAA="
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -83,6 +83,7 @@ mod invalid {
     #[test]
     fn psbtv2_missing_out_amount() { bip370("Invalid: PSBTv2 missing PSBT_OUT_AMOUNT."); }
 
+    // The field is not present in the serialization, i.e., there is no 0x04 key type in the vector.
     #[test]
     fn psbtv2_missing_out_script() { bip370("Invalid: PSBTv2 missing PSBT_OUT_SCRIPT."); }
 

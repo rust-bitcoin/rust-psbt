@@ -1917,14 +1917,15 @@ mod tests {
     }
 
     #[test]
-    fn constructor_rejects_output_missing_script() {
-        assert_eq!(
-            Constructor::<Modifiable>::default().output(output_without_script()).err(),
-            Some(output::ValidationError::MissingScriptPubkey)
+    fn constructor_accepts_output_with_empty_script() {
+        // BIP-370 requires `PSBT_OUT_SCRIPT` to be present, not non-empty
+        assert!(
+            Constructor::<Modifiable>::default().output(output_without_script()).is_ok(),
+            "constructor must accept an output with an empty script pubkey"
         );
-        assert_eq!(
-            Constructor::<OutputsOnlyModifiable>::default().output(output_without_script()).err(),
-            Some(output::ValidationError::MissingScriptPubkey)
+        assert!(
+            Constructor::<OutputsOnlyModifiable>::default().output(output_without_script()).is_ok(),
+            "constructor must accept an output with an empty script pubkey"
         );
     }
 
