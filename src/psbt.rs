@@ -427,11 +427,7 @@ impl Decoder for PsbtV0Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Global(decoder) =>
-                    if decoder
-                        .push_bytes(bytes)
-                        .map_err(DeserializeError::DecodeV0Global)?
-                        .needs_more()
-                    {
+                    if decoder.push_bytes(bytes)?.needs_more() {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Inputs(_, _, _, d) =>
@@ -466,29 +462,29 @@ impl Decoder for PsbtV0Decoder {
                         V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());
                 }
                 V0DecoderStage::Global(decoder) => {
-                    let v0 = decoder.end().map_err(DeserializeError::DecodeV0Global)?;
-                    let in_count = v0.tx_inputs.len();
-                    let out_count = v0.tx_outputs.len();
+                    let (global, tx_inputs, tx_outputs) = decoder.end()?;
+                    let in_count = tx_inputs.len();
+                    let out_count = tx_outputs.len();
                     if in_count == 0 {
                         if out_count == 0 {
                             self.stage = V0DecoderStage::Done(Psbt {
-                                global: v0.global,
+                                global,
                                 inputs: Vec::new(),
                                 outputs: Vec::new(),
                             });
                         } else {
                             self.stage = V0DecoderStage::Outputs(
-                                v0.global,
+                                global,
                                 Vec::new(),
-                                v0.tx_outputs,
+                                tx_outputs,
                                 crate::map::v0::OutputsDecoder::new(out_count),
                             );
                         }
                     } else {
                         self.stage = V0DecoderStage::Inputs(
-                            v0.global,
-                            v0.tx_inputs,
-                            v0.tx_outputs,
+                            global,
+                            tx_inputs,
+                            tx_outputs,
                             crate::map::v0::InputsDecoder::new(in_count),
                         );
                     }
@@ -1327,7 +1323,7 @@ pub enum DecodeError {
     /// Signals that there are no more key-value pairs in a key-value map.
     NoMorePairs,
     /// Error decoding global map.
-    Global(global::DecodeError),
+    Global(global::GlobalDecodeError),
     /// Error decoding input map.
     Input(input::DecodeError),
     /// Error decoding output map.
@@ -1359,8 +1355,8 @@ impl std::error::Error for DecodeError {
     }
 }
 
-impl From<global::DecodeError> for DecodeError {
-    fn from(e: global::DecodeError) -> Self { Self::Global(e) }
+impl From<global::GlobalDecodeError> for DecodeError {
+    fn from(e: global::GlobalDecodeError) -> Self { Self::Global(e) }
 }
 
 impl From<input::DecodeError> for DecodeError {

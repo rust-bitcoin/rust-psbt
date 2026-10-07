@@ -149,6 +149,19 @@ impl core::fmt::Display for UnsignedTxDecodeError {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for UnsignedTxDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DecodeVersion(e) => Some(e),
+            Self::DecodeLockTime(e) => Some(e),
+            Self::Inputs(e) => Some(e),
+            Self::Outputs(e) => Some(e),
+            Self::EarlyEnd | Self::InvalidScriptSig(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct UnsignedTxDecoder {
     state: State,

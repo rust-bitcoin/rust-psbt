@@ -19,6 +19,8 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+/// Error types shared by map decoders.
+pub mod error;
 /// The `global-map`.
 pub mod global;
 /// The `input-map`.

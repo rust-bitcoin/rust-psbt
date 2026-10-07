@@ -3,14 +3,9 @@
 //! PSBT v0 global map encoder and decoder.
 //!
 //! `<global-map> := <unsigned_tx> <xpub>* <proprietary>* <unknown>* 0x00`
-//!
-//! The decoder produces a [`V0Global`] which includes the reconstructed
-//! [`Global`](crate::Global) plus the per-input and per-output data extracted
-//! from the unsigned transaction.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::fmt;
 
 use bitcoin::bip32::{self, DerivationPath, Fingerprint, Xpub};
 use bitcoin::locktime::absolute;
@@ -22,7 +17,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, IterEncoder,
 };
 
-use super::unsigned_tx::{UnsignedTxDecodeError, UnsignedTxDecoder, UnsignedTxEncoder};
+use super::unsigned_tx::{UnsignedTxDecoder, UnsignedTxEncoder};
 use crate::consts::{
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
     PSBT_SEPARATOR,
@@ -35,7 +30,8 @@ use crate::dleq::DleqProof;
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
-use crate::map::{Key, KeyDecodeError, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
+use crate::map::error::{GlobalDecodeError, InsertPairError, ValueDecodeError};
+use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
 
@@ -114,27 +110,20 @@ impl<'e> GlobalMapEncoder<'e> {
 
     fn ecdh_or_next(&self) -> State<'e> {
         #[cfg(feature = "silent-payments")]
-        {
-            if !self.psbt.global.sp_ecdh_shares.is_empty() {
-                return State::Ecdh(IterEncoder::new(EcdhKeyValueIter::new(
-                    self.psbt.global.sp_ecdh_shares.iter(),
-                )));
-            }
-            self.dleq_or_next()
+        if !self.psbt.global.sp_ecdh_shares.is_empty() {
+            return State::Ecdh(IterEncoder::new(EcdhKeyValueIter::new(
+                self.psbt.global.sp_ecdh_shares.iter(),
+            )));
         }
-        #[cfg(not(feature = "silent-payments"))]
-        State::Separator(SeparatorEncoder::new())
+        self.dleq_or_next()
     }
 
-    #[allow(dead_code)]
     fn dleq_or_next(&self) -> State<'e> {
         #[cfg(feature = "silent-payments")]
-        {
-            if !self.psbt.global.sp_dleq_proofs.is_empty() {
-                return State::Dleq(IterEncoder::new(DleqKeyValueIter::new(
-                    self.psbt.global.sp_dleq_proofs.iter(),
-                )));
-            }
+        if !self.psbt.global.sp_dleq_proofs.is_empty() {
+            return State::Dleq(IterEncoder::new(DleqKeyValueIter::new(
+                self.psbt.global.sp_dleq_proofs.iter(),
+            )));
         }
         State::Separator(SeparatorEncoder::new())
     }
@@ -181,83 +170,19 @@ impl Encoder for GlobalMapEncoder<'_> {
     }
 }
 
-/// The result of decoding a v0 global map.
-#[derive(Debug)]
-pub(crate) struct V0Global {
-    /// The reconstructed v2 global.
-    pub global: crate::Global,
-    /// Per-input data extracted from the unsigned transaction.
-    pub tx_inputs: Vec<(Txid, u32, Sequence)>,
-    /// Per-output data extracted from the unsigned transaction.
-    pub tx_outputs: Vec<(Amount, ScriptBuf)>,
-    /// The lock time resolved from the unsigned transaction.
-    #[allow(dead_code)]
-    pub lock_time: absolute::LockTime,
-}
+/// Information decoded out of a v0 global into a v2 global with input and output data.
+pub(crate) type V0GlobalInfo =
+    (crate::Global, Vec<(Txid, u32, Sequence)>, Vec<(Amount, ScriptBuf)>);
 
-/// Error decoding a v0 global map.
-#[derive(Debug)]
-pub enum DecodeError {
-    KeyDecode(KeyDecodeError),
-    MissingUnsignedTx,
-    UnsignedTx(UnsignedTxDecodeError),
-    LengthPrefix(bitcoin_consensus_encoding::CompactSizeDecoderError),
-    DuplicateKey(Key),
-    NonEmptyVersionKey,
-    WrongVersion(u32),
-    ValueWrongLength(usize, usize),
-    InvalidXpub(bip32::Error),
-    XpubValueTooShort(usize),
-    InvalidProprietaryKey,
-    UnexpectedEof(bitcoin_consensus_encoding::UnexpectedEofError),
-    UnknownValue(bitcoin_consensus_encoding::ByteVecDecoderError),
-    #[cfg(feature = "silent-payments")]
-    SpEcdh(bitcoin_consensus_encoding::UnexpectedEofError),
-    #[cfg(feature = "silent-payments")]
-    SpDleq(bitcoin_consensus_encoding::UnexpectedEofError),
-    #[allow(dead_code)]
-    FieldMismatch,
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::KeyDecode(e) => write!(f, "key decode: {}", e),
-            Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
-            Self::UnsignedTx(e) => write!(f, "unsigned tx: {}", e),
-            Self::LengthPrefix(e) => write!(f, "value length prefix: {}", e),
-            Self::DuplicateKey(k) => write!(f, "duplicate key: {}", k),
-            Self::NonEmptyVersionKey => write!(f, "version key must be empty"),
-            Self::WrongVersion(v) => write!(f, "unsupported PSBT version {}", v),
-            Self::ValueWrongLength(got, exp) =>
-                write!(f, "value length {} (expected {})", got, exp),
-            Self::InvalidXpub(e) => write!(f, "invalid xpub: {}", e),
-            Self::XpubValueTooShort(len) =>
-                write!(f, "xpub value too short ({} bytes, need >= 4)", len),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::UnexpectedEof(e) => write!(f, "{}", e),
-            Self::UnknownValue(e) => write!(f, "unknown value: {}", e),
-            #[cfg(feature = "silent-payments")]
-            Self::SpEcdh(e) => write!(f, "sp ecdh share: {}", e),
-            #[cfg(feature = "silent-payments")]
-            Self::SpDleq(e) => write!(f, "sp dleq proof: {}", e),
-            Self::FieldMismatch =>
-                write!(f, "silent payment fields must be present in matching pairs"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for DecodeError {}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum Stage {
-    DecodingUnsignedTxKey(KeyDecoder),
-    DecodingUnsignedTxValue {
-        decoder: ValueDecoder<UnsignedTxDecoder>,
-    },
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
+    DecodingUnsignedTx {
+        key: Key,
+        decoder: ValueDecoder<UnsignedTxDecoder>,
+    },
     DecodingXpub {
         key: Key,
         decoder: ByteVecDecoder,
@@ -284,14 +209,15 @@ enum Stage {
         key: Key,
         decoder: ValueDecoder<bitcoin_consensus_encoding::ArrayDecoder<64>>,
     },
-    Done(V0Global),
+    Done(V0GlobalInfo),
     Errored,
 }
 
 impl Stage {
-    fn from_key(key: Key) -> Result<Self, DecodeError> {
+    fn from_key(key: Key) -> Result<Self, GlobalDecodeError> {
         match key.type_value {
-            PSBT_GLOBAL_UNSIGNED_TX => Err(DecodeError::DuplicateKey(key)),
+            PSBT_GLOBAL_UNSIGNED_TX =>
+                Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() }),
             PSBT_GLOBAL_XPUB => Ok(Self::DecodingXpub { key, decoder: ByteVecDecoder::new() }),
             PSBT_GLOBAL_VERSION =>
                 Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
@@ -308,7 +234,7 @@ impl Stage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct GlobalMapDecoder {
     stage: Stage,
     version: Option<Version>,
@@ -325,29 +251,9 @@ pub(crate) struct GlobalMapDecoder {
     tx_lock_time: Option<absolute::LockTime>,
 }
 
-impl Default for GlobalMapDecoder {
-    fn default() -> Self {
-        Self {
-            stage: Stage::DecodingUnsignedTxKey(KeyDecoder::default()),
-            version: None,
-            tx_version: None,
-            xpubs: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-            tx_inputs: None,
-            tx_outputs: None,
-            tx_lock_time: None,
-        }
-    }
-}
-
 impl Decoder for GlobalMapDecoder {
-    type Output = V0Global;
-    type Error = DecodeError;
+    type Output = V0GlobalInfo;
+    type Error = GlobalDecodeError;
 
     #[allow(clippy::too_many_lines)]
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
@@ -360,31 +266,36 @@ impl Decoder for GlobalMapDecoder {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
-                        let tx_version = self.tx_version.ok_or(DecodeError::MissingUnsignedTx)?;
+                        let tx_version =
+                            self.tx_version.ok_or(GlobalDecodeError::MissingUnsignedTx)?;
                         let tx_inputs =
-                            self.tx_inputs.take().ok_or(DecodeError::MissingUnsignedTx)?;
+                            self.tx_inputs.take().ok_or(GlobalDecodeError::MissingUnsignedTx)?;
                         let tx_outputs =
-                            self.tx_outputs.take().ok_or(DecodeError::MissingUnsignedTx)?;
-                        let lock_time = self.tx_lock_time.ok_or(DecodeError::MissingUnsignedTx)?;
+                            self.tx_outputs.take().ok_or(GlobalDecodeError::MissingUnsignedTx)?;
+                        let lock_time =
+                            self.tx_lock_time.ok_or(GlobalDecodeError::MissingUnsignedTx)?;
 
                         #[cfg(feature = "silent-payments")]
                         {
                             let has_ecdh = !self.sp_ecdh_shares.is_empty();
                             let has_dleq = !self.sp_dleq_proofs.is_empty();
                             if has_ecdh != has_dleq {
-                                return Err(DecodeError::FieldMismatch);
+                                return Err(GlobalDecodeError::FieldMismatch);
                             }
                         }
 
-                        self.stage = Stage::Done(V0Global {
-                            global: crate::Global {
+                        self.stage = Stage::Done((
+                            crate::Global {
                                 tx_version,
                                 fallback_lock_time: (lock_time != absolute::LockTime::ZERO)
                                     .then_some(lock_time),
                                 input_count: tx_inputs.len(),
                                 output_count: tx_outputs.len(),
+                                // v0 has no PSBT_GLOBAL_TX_MODIFIABLE key, but we are assuming
+                                // construction is over and setting all to unmodifiable.
                                 tx_modifiable_flags: 0,
-                                version: self.version.unwrap_or(V2),
+                                // The PSBT is now in v2 form.
+                                version: V2,
                                 xpubs: core::mem::take(&mut self.xpubs),
                                 #[cfg(feature = "silent-payments")]
                                 sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
@@ -395,8 +306,7 @@ impl Decoder for GlobalMapDecoder {
                             },
                             tx_inputs,
                             tx_outputs,
-                            lock_time,
-                        });
+                        ));
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {
@@ -407,40 +317,54 @@ impl Decoder for GlobalMapDecoder {
             }
 
             let status = match &mut self.stage {
-                Stage::DecodingUnsignedTxKey(d) =>
-                    d.push_bytes(bytes).map_err(DecodeError::KeyDecode)?,
-                Stage::DecodingUnsignedTxValue { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => DecodeError::UnsignedTx(e),
-                    })?,
-                Stage::DecodingKey(d) => d.push_bytes(bytes).map_err(DecodeError::KeyDecode)?,
+                Stage::DecodingKey(d) =>
+                    d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
                 Stage::DecodingVersion { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) => match e {
-                            VersionDecoderError::UnexpectedEof(e) => DecodeError::UnexpectedEof(e),
+                            VersionDecoderError::UnexpectedEof(e) =>
+                                GlobalDecodeError::ValueDecode(ValueDecodeError::Version(e)),
                             VersionDecoderError::UnsupportedVersion(e) =>
-                                DecodeError::WrongVersion(e.version()),
+                                GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(
+                                    e.version(),
+                                )),
                         },
                     })?,
+                Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
+                    })?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(DecodeError::UnknownValue)?,
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?,
                 Stage::DecodingProprietary { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(DecodeError::UnknownValue)?,
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?,
                 Stage::DecodingUnknown { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(DecodeError::UnknownValue)?,
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => DecodeError::SpEcdh(e),
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
                     })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => DecodeError::SpDleq(e),
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
                     })?,
                 Stage::Done(_) => return Ok(DecoderStatus::Ready),
                 Stage::DecodingSeparator | Stage::Errored =>
@@ -453,19 +377,62 @@ impl Decoder for GlobalMapDecoder {
 
             let old = core::mem::replace(&mut self.stage, Stage::Errored);
             match old {
-                Stage::DecodingUnsignedTxKey(decoder) => {
-                    let key = decoder.end().map_err(DecodeError::KeyDecode)?;
-                    if key.type_value != PSBT_GLOBAL_UNSIGNED_TX || !key.key.is_empty() {
-                        return Err(DecodeError::MissingUnsignedTx);
-                    }
-                    self.stage =
-                        Stage::DecodingUnsignedTxValue { decoder: ValueDecoder::default() };
+                Stage::DecodingKey(decoder) => {
+                    let key = decoder.end().map_err(GlobalDecodeError::KeyDecode)?;
+                    self.stage = Stage::from_key(key)?;
                 }
-                Stage::DecodingUnsignedTxValue { decoder } => {
+                Stage::DecodingVersion { key, decoder } => {
+                    let (value_len, version) = decoder.end().map_err(|e| match e {
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) => match e {
+                            VersionDecoderError::UnexpectedEof(e) =>
+                                GlobalDecodeError::ValueDecode(ValueDecodeError::Version(e)),
+                            VersionDecoderError::UnsupportedVersion(e) =>
+                                GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(
+                                    e.version(),
+                                )),
+                        },
+                    })?;
+                    if value_len != 4 {
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::ValueWrongLength(value_len as usize, 4),
+                        ));
+                    }
+                    if version != V0 {
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(
+                            version.to_u32(),
+                        )));
+                    }
+                    if !key.key.is_empty() {
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::InvalidKeyDataNotEmpty(key),
+                        ));
+                    }
+                    if self.version.is_some() {
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
+                    }
+                    self.version = Some(V2);
+                    self.stage = Stage::DecodingSeparator;
+                }
+                Stage::DecodingUnsignedTx { key, decoder } => {
+                    if !key.key.is_empty() {
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::InvalidKeyDataNotEmpty(key),
+                        ));
+                    }
+                    if self.tx_version.is_some() {
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
+                    }
                     let (_value_len, (version, tx_inputs, tx_outputs, lock_time)) =
                         decoder.end().map_err(|e| match e {
-                            Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                            Decoder2Error::Second(e) => DecodeError::UnsignedTx(e),
+                            Decoder2Error::First(e) =>
+                                GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
                         })?;
                     self.tx_version = Some(version);
                     self.tx_inputs = Some(tx_inputs);
@@ -473,47 +440,26 @@ impl Decoder for GlobalMapDecoder {
                     self.tx_lock_time = Some(lock_time);
                     self.stage = Stage::DecodingSeparator;
                 }
-                Stage::DecodingKey(decoder) => {
-                    let key = decoder.end().map_err(DecodeError::KeyDecode)?;
-                    self.stage = Stage::from_key(key)?;
-                }
-                Stage::DecodingVersion { key, decoder } => {
-                    let (value_len, version) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => match e {
-                            VersionDecoderError::UnexpectedEof(e) => DecodeError::UnexpectedEof(e),
-                            VersionDecoderError::UnsupportedVersion(e) =>
-                                DecodeError::WrongVersion(e.version()),
-                        },
-                    })?;
-                    if value_len != 4 {
-                        return Err(DecodeError::ValueWrongLength(value_len as usize, 4));
-                    }
-                    if version != V0 {
-                        return Err(DecodeError::WrongVersion(version.to_u32()));
-                    }
-                    if !key.key.is_empty() {
-                        return Err(DecodeError::NonEmptyVersionKey);
-                    }
-                    if self.version.is_some() {
-                        return Err(DecodeError::DuplicateKey(key));
-                    }
-                    self.version = Some(V2);
-                    self.stage = Stage::DecodingSeparator;
-                }
                 Stage::DecodingXpub { key, decoder } => {
-                    let value = decoder.end().map_err(DecodeError::UnknownValue)?;
+                    let value = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?;
                     if value.len() < 4 {
-                        return Err(DecodeError::XpubValueTooShort(value.len()));
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::XpubValueTooShort(value.len()),
+                        ));
                     }
-                    let xpub = Xpub::decode(&key.key).map_err(DecodeError::InvalidXpub)?;
+                    let xpub = Xpub::decode(&key.key)
+                        .map_err(|e| GlobalDecodeError::InsertPair(InsertPairError::Bip32(e)))?;
                     let fingerprint = Fingerprint::from(
                         <[u8; 4]>::try_from(&value[..4]).expect("checked length >= 4"),
                     );
                     let derivation: DerivationPath = if value.len() > 4 {
                         let child_bytes = &value[4..];
                         if child_bytes.len() % 4 != 0 {
-                            return Err(DecodeError::XpubValueTooShort(value.len()));
+                            return Err(GlobalDecodeError::InsertPair(
+                                InsertPairError::XpubValueTooShort(value.len()),
+                            ));
                         }
                         let children: Vec<bip32::ChildNumber> = child_bytes
                             .chunks_exact(4)
@@ -528,25 +474,37 @@ impl Decoder for GlobalMapDecoder {
                         bip32::DerivationPath::master()
                     };
                     if self.xpubs.contains_key(&xpub) {
-                        return Err(DecodeError::DuplicateKey(key));
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
                     }
                     self.xpubs.insert(xpub, (fingerprint, derivation));
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingProprietary { key, decoder } => {
-                    let value = decoder.end().map_err(DecodeError::UnknownValue)?;
+                    let value = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
-                        .map_err(|_| DecodeError::InvalidProprietaryKey)?;
+                        .map_err(|_| {
+                            GlobalDecodeError::InsertPair(InsertPairError::InvalidProprietaryKey)
+                        })?;
                     if self.proprietaries.contains_key(&prop_key) {
-                        return Err(DecodeError::DuplicateKey(prop_key.to_key()));
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            prop_key.to_key(),
+                        )));
                     }
                     self.proprietaries.insert(prop_key, value);
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingUnknown { key, decoder } => {
-                    let value = decoder.end().map_err(DecodeError::UnknownValue)?;
+                    let value = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                    })?;
                     if self.unknowns.contains_key(&key) {
-                        return Err(DecodeError::DuplicateKey(key));
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
                     }
                     self.unknowns.insert(key, value);
                     self.stage = Stage::DecodingSeparator;
@@ -554,18 +512,26 @@ impl Decoder for GlobalMapDecoder {
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { key, decoder } => {
                     let (value_len, arr) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => DecodeError::SpEcdh(e),
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
                     })?;
                     if value_len != 33 {
-                        return Err(DecodeError::ValueWrongLength(value_len as usize, 33));
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::ValueWrongLength(value_len as usize, 33),
+                        ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| DecodeError::InvalidProprietaryKey)?;
-                    let share = CompressedPublicKey::from_slice(&arr)
-                        .map_err(|_| DecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::InsertPair(InsertPairError::InvalidProprietaryKey)
+                    })?;
+                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
+                        GlobalDecodeError::InsertPair(InsertPairError::InvalidProprietaryKey)
+                    })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
-                        return Err(DecodeError::DuplicateKey(key));
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
                     }
                     self.sp_ecdh_shares.insert(scan_key, share);
                     self.stage = Stage::DecodingSeparator;
@@ -573,17 +539,24 @@ impl Decoder for GlobalMapDecoder {
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { key, decoder } => {
                     let (value_len, arr) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) => DecodeError::LengthPrefix(e),
-                        Decoder2Error::Second(e) => DecodeError::SpDleq(e),
+                        Decoder2Error::First(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                        Decoder2Error::Second(e) =>
+                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
                     })?;
                     if value_len != 64 {
-                        return Err(DecodeError::ValueWrongLength(value_len as usize, 64));
+                        return Err(GlobalDecodeError::InsertPair(
+                            InsertPairError::ValueWrongLength(value_len as usize, 64),
+                        ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| DecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::InsertPair(InsertPairError::InvalidProprietaryKey)
+                    })?;
                     let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
-                        return Err(DecodeError::DuplicateKey(key));
+                        return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
+                            key,
+                        )));
                     }
                     self.sp_dleq_proofs.insert(scan_key, proof);
                     self.stage = Stage::DecodingSeparator;
@@ -596,8 +569,7 @@ impl Decoder for GlobalMapDecoder {
 
     fn read_limit(&self) -> usize {
         match &self.stage {
-            Stage::DecodingUnsignedTxKey(d) => d.read_limit(),
-            Stage::DecodingUnsignedTxValue { ref decoder, .. } => decoder.read_limit(),
+            Stage::DecodingUnsignedTx { ref decoder, .. } => decoder.read_limit(),
             Stage::DecodingKey(d) => d.read_limit(),
             Stage::DecodingVersion { ref decoder, .. } => decoder.read_limit(),
             Stage::DecodingXpub { ref decoder, .. } => decoder.read_limit(),
@@ -615,7 +587,169 @@ impl Decoder for GlobalMapDecoder {
     fn end(self) -> Result<Self::Output, Self::Error> {
         match self.stage {
             Stage::Done(v0) => Ok(v0),
-            _ => Err(DecodeError::MissingUnsignedTx),
+            _ => Err(GlobalDecodeError::EarlyEnd),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin_consensus_encoding::{
+        drain_to_vec, BytesEncoder, CompactSizeEncoder, Decoder, Encoder2,
+    };
+
+    use super::*;
+    use crate::consts;
+
+    const TEST_XPUB: &str =
+        "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+    const TEST_XPUB_2: &str =
+        "xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEjWgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw";
+
+    /// Drain a [`KeyValueEncoder`] into the byte payload for the decoder.
+    fn encode_kv(key_type: u64, key_data: &[u8], value: &[u8]) -> Vec<u8> {
+        drain_to_vec(&mut crate::encoding::KeyValueEncoder::from_sized_kv(
+            Encoder2::new(
+                CompactSizeEncoder::new_u64(key_type),
+                BytesEncoder::without_length_prefix(key_data),
+            ),
+            BytesEncoder::without_length_prefix(value),
+        ))
+    }
+
+    /// Minimal unsigned tx for testing (version 2, 0 inputs, 0 outputs, locktime 0).
+    const MINIMAL_UNSIGNED_TX: [u8; 10] =
+        [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+    #[test]
+    fn rejects_duplicate_unsigned_tx_key() {
+        let mut dec = GlobalMapDecoder::default();
+        let _ = dec.push_bytes(&mut &*encode_kv(
+            consts::PSBT_GLOBAL_UNSIGNED_TX,
+            &[],
+            &MINIMAL_UNSIGNED_TX,
+        ));
+        let err = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_UNSIGNED_TX,
+                &[],
+                &MINIMAL_UNSIGNED_TX,
+            ))
+            .unwrap_err();
+        assert!(matches!(err, GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(_))));
+    }
+
+    #[test]
+    fn rejects_version_value_wrong_length() {
+        let mut dec = GlobalMapDecoder::default();
+        let err = dec
+            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GlobalDecodeError::InsertPair(InsertPairError::ValueWrongLength(5, 4))
+        ));
+    }
+
+    #[test]
+    fn rejects_nonzero_version_in_v0_map() {
+        let mut dec = GlobalMapDecoder::default();
+        let err = dec
+            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[2, 0, 0, 0]))
+            .unwrap_err();
+        assert!(matches!(err, GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(2))));
+    }
+
+    #[test]
+    fn rejects_nonempty_version_key_data() {
+        let mut dec = GlobalMapDecoder::default();
+        let err = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_VERSION,
+                &[1], // non-empty key data, version keys must have none.
+                &[0, 0, 0, 0],
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GlobalDecodeError::InsertPair(InsertPairError::InvalidKeyDataNotEmpty(_))
+        ));
+    }
+
+    #[test]
+    fn decodes_xpub_with_and_without_derivation() {
+        // Fingerprint only (value length 4).
+        let xpub: Xpub = TEST_XPUB.parse().unwrap();
+        let mut dec = GlobalMapDecoder::default();
+        let status = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_XPUB,
+                &xpub.encode(),
+                xpub.fingerprint().as_bytes(),
+            ))
+            .unwrap();
+        assert!(status.needs_more());
+
+        // Fingerprint + one child (total 8 bytes).
+        let xpub2: Xpub = TEST_XPUB_2.parse().unwrap();
+        let mut dec2 = GlobalMapDecoder::default();
+        let mut value = xpub2.fingerprint().as_bytes().to_vec();
+        value.extend_from_slice(&[0; 4]);
+        let status = dec2
+            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub2.encode(), &value))
+            .unwrap();
+        assert!(status.needs_more());
+    }
+
+    #[test]
+    fn rejects_xpub_value_too_short() {
+        let xpub: Xpub = TEST_XPUB.parse().unwrap();
+        let mut dec = GlobalMapDecoder::default();
+        let err = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_XPUB,
+                &xpub.encode(),
+                &xpub.fingerprint().as_bytes()[..3],
+            ))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GlobalDecodeError::InsertPair(InsertPairError::XpubValueTooShort(3))
+        ));
+    }
+
+    #[test]
+    fn read_limit_lifecycle() {
+        let mut dec = GlobalMapDecoder::default();
+        assert_eq!(dec.read_limit(), 1, "fresh decoder should request bytes");
+        let _ = dec
+            .push_bytes(&mut &*encode_kv(
+                consts::PSBT_GLOBAL_UNSIGNED_TX,
+                &[],
+                &MINIMAL_UNSIGNED_TX,
+            ))
+            .unwrap();
+
+        // Push the separator to finish the map.
+        let mut sep: &[u8] = &[crate::consts::PSBT_SEPARATOR];
+        let status = dec.push_bytes(&mut sep).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(dec.read_limit(), 0, "completed decoder should request no bytes");
+    }
+
+    #[test]
+    fn rejects_xpub_derivation_not_multiple_of_4() {
+        let xpub: Xpub = TEST_XPUB.parse().unwrap();
+        let mut dec = GlobalMapDecoder::default();
+
+        let mut value = xpub.fingerprint().as_bytes().to_vec();
+        value.extend_from_slice(&[0; 5]);
+        let err = dec
+            .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub.encode(), &value))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            GlobalDecodeError::InsertPair(InsertPairError::XpubValueTooShort(_))
+        ));
     }
 }
