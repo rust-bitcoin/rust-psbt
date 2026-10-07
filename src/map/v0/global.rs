@@ -30,7 +30,7 @@ use crate::dleq::DleqProof;
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
-use crate::map::error::{GlobalDecodeError, InsertPairError, ValueDecodeError};
+use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, InsertPairError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
@@ -322,10 +322,10 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingVersion { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) => match e {
                             VersionDecoderError::UnexpectedEof(e) =>
-                                GlobalDecodeError::ValueDecode(ValueDecodeError::Version(e)),
+                                GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e)),
                             VersionDecoderError::UnsupportedVersion(e) =>
                                 GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(
                                     e.version(),
@@ -335,36 +335,36 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
                     })?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?,
                 Stage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?,
                 Stage::DecodingUnknown { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
                     })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
                     })?,
                 Stage::Done(_) => return Ok(DecoderStatus::Ready),
                 Stage::DecodingSeparator | Stage::Errored =>
@@ -384,10 +384,10 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingVersion { key, decoder } => {
                     let (value_len, version) = decoder.end().map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) => match e {
                             VersionDecoderError::UnexpectedEof(e) =>
-                                GlobalDecodeError::ValueDecode(ValueDecodeError::Version(e)),
+                                GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e)),
                             VersionDecoderError::UnsupportedVersion(e) =>
                                 GlobalDecodeError::InsertPair(InsertPairError::WrongVersion(
                                     e.version(),
@@ -430,8 +430,9 @@ impl Decoder for GlobalMapDecoder {
                     }
                     let (_value_len, (version, tx_inputs, tx_outputs, lock_time)) =
                         decoder.end().map_err(|e| match e {
-                            Decoder2Error::First(e) =>
-                                GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            Decoder2Error::First(e) => GlobalDecodeError::ValueDecode(
+                                GlobalValueDecodeError::LengthPrefix(e),
+                            ),
                             Decoder2Error::Second(e) => GlobalDecodeError::UnsignedTx(e),
                         })?;
                     self.tx_version = Some(version);
@@ -442,7 +443,7 @@ impl Decoder for GlobalMapDecoder {
                 }
                 Stage::DecodingXpub { key, decoder } => {
                     let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?;
                     if value.len() < 4 {
                         return Err(GlobalDecodeError::InsertPair(
@@ -483,7 +484,7 @@ impl Decoder for GlobalMapDecoder {
                 }
                 Stage::DecodingProprietary { key, decoder } => {
                     let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
                         .map_err(|_| {
@@ -499,7 +500,7 @@ impl Decoder for GlobalMapDecoder {
                 }
                 Stage::DecodingUnknown { key, decoder } => {
                     let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ValueDecode(ValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?;
                     if self.unknowns.contains_key(&key) {
                         return Err(GlobalDecodeError::InsertPair(InsertPairError::DuplicateKey(
@@ -513,9 +514,9 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingSpEcdhShare { key, decoder } => {
                     let (value_len, arr) = decoder.end().map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpEcdh(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
                     })?;
                     if value_len != 33 {
                         return Err(GlobalDecodeError::InsertPair(
@@ -540,9 +541,9 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingSpDleqProof { key, decoder } => {
                     let (value_len, arr) = decoder.end().map_err(|e| match e {
                         Decoder2Error::First(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::LengthPrefix(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
                         Decoder2Error::Second(e) =>
-                            GlobalDecodeError::ValueDecode(ValueDecodeError::SpDleq(e)),
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
                     })?;
                     if value_len != 64 {
                         return Err(GlobalDecodeError::InsertPair(

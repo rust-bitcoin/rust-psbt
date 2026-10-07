@@ -25,7 +25,7 @@ pub enum GlobalDecodeError {
     /// Error decoding a key from the stream.
     KeyDecode(super::KeyDecodeError),
     /// Error decoding a value.
-    ValueDecode(ValueDecodeError),
+    ValueDecode(GlobalValueDecodeError),
     /// Called `end()` before the end-of-map separator was reached (v2 only).
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
@@ -211,9 +211,9 @@ impl From<bip32::Error> for InsertPairError {
     fn from(e: bip32::Error) -> Self { Self::Bip32(e) }
 }
 
-/// Error decoding a value from the stream.
+/// Error decoding a global value.
 #[derive(Debug)]
-pub enum ValueDecodeError {
+pub enum GlobalValueDecodeError {
     /// Error decoding the value's length prefix.
     LengthPrefix(CompactSizeDecoderError),
     /// Error decoding the PSBT version value.
@@ -240,7 +240,7 @@ pub enum ValueDecodeError {
     SpDleq(UnexpectedEofError),
 }
 
-impl fmt::Display for ValueDecodeError {
+impl fmt::Display for GlobalValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
@@ -261,7 +261,7 @@ impl fmt::Display for ValueDecodeError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for ValueDecodeError {
+impl std::error::Error for GlobalValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::LengthPrefix(ref e) => Some(e),
