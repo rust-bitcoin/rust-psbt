@@ -1325,7 +1325,7 @@ pub enum DecodeError {
     /// Error decoding global map.
     Global(global::GlobalDecodeError),
     /// Error decoding input map.
-    Input(input::DecodeError),
+    Input(crate::map::error::InputDecodeError),
     /// Error decoding output map.
     Output(crate::map::error::OutputDecodeError),
 }
@@ -1359,8 +1359,8 @@ impl From<global::GlobalDecodeError> for DecodeError {
     fn from(e: global::GlobalDecodeError) -> Self { Self::Global(e) }
 }
 
-impl From<input::DecodeError> for DecodeError {
-    fn from(e: input::DecodeError) -> Self { Self::Input(e) }
+impl From<crate::map::error::InputDecodeError> for DecodeError {
+    fn from(e: crate::map::error::InputDecodeError) -> Self { Self::Input(e) }
 }
 
 impl From<crate::map::error::OutputDecodeError> for DecodeError {

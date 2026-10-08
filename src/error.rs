@@ -7,8 +7,6 @@ use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError};
 use bitcoin::{transaction, PublicKey};
 use bitcoin_consensus_encoding::VecDecoderError;
 
-use crate::map::input;
-
 /// Error while deserializing a PSBT.
 ///
 /// This error is returned when deserializing a complete PSBT, not for deserializing parts
@@ -25,15 +23,15 @@ pub enum DeserializeError {
     /// Error decoding the global map (v0 or v2).
     DecodeGlobal(crate::map::error::GlobalDecodeError),
     /// Error decoding an input map.
-    DecodeInput(input::DecodeError),
+    DecodeInput(crate::map::error::InputDecodeError),
     /// Error decoding an output map.
     DecodeOutput(crate::map::error::OutputDecodeError),
     /// Error decoding the input maps sequence.
-    DecodeInputs(VecDecoderError<input::DecodeError>),
+    DecodeInputs(VecDecoderError<crate::map::error::InputDecodeError>),
     /// Error decoding the output maps sequence.
     DecodeOutputs(VecDecoderError<crate::map::error::OutputDecodeError>),
     /// Error decoding the v0 input maps sequence.
-    DecodeV0Inputs(VecDecoderError<crate::map::v0::input::InputDecodeError>),
+    DecodeV0Inputs(VecDecoderError<crate::map::error::InputDecodeError>),
     /// Error decoding the v0 output maps sequence.
     DecodeV0Outputs(VecDecoderError<crate::map::error::OutputDecodeError>),
     /// Called `end()` before decoding finished (truncated or incomplete input).
@@ -84,8 +82,8 @@ impl From<crate::map::error::GlobalDecodeError> for DeserializeError {
     fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::DecodeGlobal(e) }
 }
 
-impl From<input::DecodeError> for DeserializeError {
-    fn from(e: input::DecodeError) -> Self { Self::DecodeInput(e) }
+impl From<crate::map::error::InputDecodeError> for DeserializeError {
+    fn from(e: crate::map::error::InputDecodeError) -> Self { Self::DecodeInput(e) }
 }
 
 impl From<crate::map::error::OutputDecodeError> for DeserializeError {
