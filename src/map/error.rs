@@ -21,6 +21,7 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 /// Shared by both v0 (BIP-174) and v2 (BIP-370) global map decoders.
 /// Some variants are only produced by one decoder or the other.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum GlobalDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
@@ -157,6 +158,7 @@ impl std::error::Error for GlobalDecodeError {
 
 /// Error decoding a global value.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum GlobalValueDecodeError {
     /// Error decoding the value's length prefix.
     LengthPrefix(CompactSizeDecoderError),
@@ -304,6 +306,7 @@ impl std::error::Error for OutputDecodeError {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum OutputValueDecodeError {
     /// Error decoding the value's compact-size length prefix.
     LengthPrefix(CompactSizeDecoderError),
@@ -487,6 +490,7 @@ impl std::error::Error for InputDecodeError {
 
 /// Error decoding the body of a value from an input map.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum InputValueDecodeError {
     /// Error decoding the value's compact-size length prefix.
     LengthPrefix(CompactSizeDecoderError),
