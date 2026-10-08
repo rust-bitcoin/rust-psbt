@@ -27,8 +27,6 @@ pub enum GlobalDecodeError {
     DuplicateKey(Key),
     /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
     WrongVersion(u32),
-    /// PSBT_GLOBAL_XPUB: Must contain 4 bytes for the xpub fingerprint.
-    XpubInvalidFingerprint,
     /// PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint.
     XpubValueTooShort(usize),
     /// PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints.
@@ -37,10 +35,6 @@ pub enum GlobalDecodeError {
     XpubValueEmpty,
     /// PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type.
     Bip32(bip32::Error),
-    /// PSBT_GLOBAL_XPUB: xpubs must be unique.
-    DuplicateXpub(bitcoin::bip32::KeySource),
-    /// PSBT_GLOBAL_PROPRIETARY: Invalid proprietary key.
-    InvalidProprietaryKey,
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -73,14 +67,11 @@ impl fmt::Display for GlobalDecodeError {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
             Self::WrongVersion(v) =>
                 write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
-            Self::XpubInvalidFingerprint => write!(f, "xpub must contain a fingerprint"),
             Self::XpubValueTooShort(len) => write!(f, "xpub value too short: {} bytes", len),
             Self::XpubInvalidPath(len) =>
                 write!(f, "xpub derivation path invalid at index {}", len),
             Self::XpubValueEmpty => write!(f, "xpub value must not be empty"),
             Self::Bip32(ref e) => write_err!(f, "BIP-32"; e),
-            Self::DuplicateXpub(ref ks) => write!(f, "duplicate xpub: {:?}", ks),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
@@ -111,12 +102,9 @@ impl std::error::Error for GlobalDecodeError {
         match self {
             Self::DuplicateKey(_)
             | Self::WrongVersion(_)
-            | Self::XpubInvalidFingerprint
             | Self::XpubValueTooShort(_)
             | Self::XpubInvalidPath(_)
-            | Self::XpubValueEmpty
-            | Self::InvalidProprietaryKey
-            | Self::DuplicateXpub(_) => None,
+            | Self::XpubValueEmpty => None,
             Self::Bip32(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
@@ -661,6 +649,8 @@ pub enum KeyDecodeError {
         /// Key type value we found.
         key_type_value: u64,
     },
+    /// Invalid proprietary key (e.g., missing prefix, malformed sub-key).
+    InvalidProprietaryKey,
 }
 
 impl fmt::Display for KeyDecodeError {
@@ -672,6 +662,7 @@ impl fmt::Display for KeyDecodeError {
             Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
             Self::ExcludedKey { key_type_value } =>
                 write!(f, "excluded key type 0x{:02x}", key_type_value),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
         }
     }
 }

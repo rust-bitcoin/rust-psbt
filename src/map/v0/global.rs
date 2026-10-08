@@ -473,7 +473,9 @@ impl Decoder for GlobalMapDecoder {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                        .map_err(|_| {
+                            GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                        })?;
                     if self.proprietaries.contains_key(&prop_key) {
                         return Err(GlobalDecodeError::DuplicateKey(prop_key.to_key()));
                     }
@@ -506,10 +508,12 @@ impl Decoder for GlobalMapDecoder {
                             },
                         ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
-                    let share = CompressedPublicKey::from_slice(&arr)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
+                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -532,8 +536,9 @@ impl Decoder for GlobalMapDecoder {
                             },
                         ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));

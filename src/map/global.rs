@@ -628,8 +628,9 @@ impl Decoder for GlobalDecoder {
                     let value = decoder.end().map_err(|e| {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = ProprietaryKey::try_from(key.clone())
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                    let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
