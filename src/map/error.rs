@@ -2,12 +2,10 @@
 
 //! Error types shared by the global, input, and output map codecs (v0 and v2).
 
-use alloc::boxed::Box;
 use core::fmt;
 
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
-use bitcoin::hex::DisplayHex;
 use bitcoin::{bip32, ecdsa, hashes, key};
 use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
@@ -733,8 +731,6 @@ pub enum InputInsertPairError {
     InvalidEcdsaSignature(ecdsa::Error),
     /// Invalid proprietary key.
     InvalidProprietaryKey,
-    /// The pre-image must hash to the corresponding PSBT hash.
-    HashPreimage(HashPreimageError),
     /// Key was not the correct length (got, expected).
     KeyWrongLength(usize, usize),
     /// Value was not the correct length (got, expected).
@@ -753,7 +749,6 @@ impl fmt::Display for InputInsertPairError {
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
             Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::HashPreimage(ref e) => write_err!(f, "invalid hash preimage"; e),
             Self::KeyWrongLength(got, expected) => {
                 write!(f, "key wrong length (got: {}, expected: {})", got, expected)
             }
@@ -771,71 +766,12 @@ impl std::error::Error for InputInsertPairError {
             Self::InvalidHash(ref e) => Some(e),
             Self::InvalidPublicKey(ref e) => Some(e),
             Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::HashPreimage(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyDataEmpty(_)
             | Self::InvalidKeyDataNotEmpty(_)
             | Self::InvalidProprietaryKey
             | Self::KeyWrongLength(..)
             | Self::ValueWrongLength(..) => None,
-        }
-    }
-}
-
-impl From<HashPreimageError> for InputInsertPairError {
-    fn from(e: HashPreimageError) -> Self { Self::HashPreimage(e) }
-}
-
-/// A hash and hash preimage do not match.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HashPreimageError {
-    /// The hash-type causing this error.
-    hash_type: HashType,
-    /// The hash pre-image.
-    preimage: Box<[u8]>,
-    /// The hash (should equal hash of the preimage).
-    hash: Box<[u8]>,
-}
-
-impl fmt::Display for HashPreimageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "invalid hash preimage {} {:x} {:x}",
-            self.hash_type,
-            self.preimage.as_hex(),
-            self.hash.as_hex()
-        )
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for HashPreimageError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
-}
-
-/// Enum for marking invalid preimage error.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(dead_code)]
-#[non_exhaustive]
-pub enum HashType {
-    /// The ripemd hash algorithm.
-    Ripemd,
-    /// The sha-256 hash algorithm.
-    Sha256,
-    /// The hash-160 hash algorithm.
-    Hash160,
-    /// The Hash-256 hash algorithm.
-    Hash256,
-}
-
-impl fmt::Display for HashType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ripemd => write!(f, "Ripemd"),
-            Self::Sha256 => write!(f, "Sha256"),
-            Self::Hash160 => write!(f, "Hash160"),
-            Self::Hash256 => write!(f, "Hash256"),
         }
     }
 }
