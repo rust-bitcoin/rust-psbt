@@ -37,12 +37,10 @@ use crate::consts::{
     PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
     PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_SEPARATOR,
 };
-#[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
 use crate::encoding::KeyValueEncoder;
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
-use crate::SpV0Info;
+use crate::silent_payments::{DleqProof, SpV0Info};
 
 /// Encoder for the PSBT record separator.
 pub struct SeparatorEncoder(ArrayEncoder<1>);

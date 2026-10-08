@@ -25,13 +25,13 @@ use crate::consts::{
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
-#[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::DleqProof;
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
 
@@ -54,11 +54,11 @@ enum State<'e> {
 }
 
 impl<'e> GlobalMapEncoder<'e> {
-    pub(crate) fn new(v0: &'e crate::psbt::PsbtV0) -> Self {
+    pub(crate) fn new(v0: &'e crate::v0::PsbtV0) -> Self {
         Self { psbt: &v0.psbt, state: Self::unsigned_tx(v0) }
     }
 
-    fn unsigned_tx(v0: &'e crate::psbt::PsbtV0) -> State<'e> {
+    fn unsigned_tx(v0: &'e crate::v0::PsbtV0) -> State<'e> {
         State::UnsignedTx(KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_UNSIGNED_TX),
             UnsignedTxEncoder::from_psbt(v0),

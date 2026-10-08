@@ -23,8 +23,6 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
-#[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
 use crate::encoding::delegates::{
     FallbackLockTimeKeyValueEncoder, FallbackLockTimeValueDecoder, TxVersionKeyValueEncoder,
     TxVersionValueDecoder,
@@ -35,6 +33,8 @@ use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::DleqProof;
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
 use crate::{InconsistentKeySourcesError, V2};
 
@@ -1083,7 +1083,7 @@ mod tests {
     fn encode_silent_payments() {
         use core::str::FromStr;
 
-        use crate::dleq::DleqProof;
+        use crate::silent_payments::DleqProof;
 
         let mut global = Global::default();
         let compressed = bitcoin::CompressedPublicKey::from_str(
