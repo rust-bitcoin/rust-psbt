@@ -12,7 +12,7 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
 };
 
-use super::{Key, KeyDecodeError};
+use super::Key;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 
@@ -53,7 +53,7 @@ pub enum GlobalDecodeError {
     /// Key was not the correct length (got, expected).
     KeyWrongLength(usize, usize),
     /// Error decoding a key from the stream.
-    KeyDecode(super::KeyDecodeError),
+    KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(GlobalValueDecodeError),
     /// Called `end()` before the end-of-map separator was reached (v2 only).
@@ -652,3 +652,30 @@ impl std::error::Error for InputValueDecodeError {
         }
     }
 }
+
+/// Error returned when decoding a raw PSBT [`Key`] fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyDecodeError {
+    /// Failed to decode the key's length-prefixed byte body.
+    Bytes(ByteVecDecoderError),
+    /// The key body was empty.
+    ///
+    /// A `keylen` of zero encodes the end-of-map separator (0x00), not a [`super::Key`]; callers decoding
+    /// a PSBT map should check for the separator before decoding a [`super::Key`].
+    Empty,
+    /// Failed to decode the `keytype` compact size integer from the key body.
+    TypeValue(CompactSizeDecoderError),
+}
+
+impl fmt::Display for KeyDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Bytes(e) => write!(f, "failed to decode key body: {}", e),
+            Self::Empty => write!(f, "empty key (this is the map separator)"),
+            Self::TypeValue(e) => write!(f, "failed to decode keytype: {}", e),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for KeyDecodeError {}
