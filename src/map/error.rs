@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
-//! Error types shared by the global, input, and output map codecs (v0 and v2).
+//! Exposes general errors used by the global, input, and output codecs. Types are shared between
+//! the v2 and v0 codecs, so it is possible for certain variants to be v2 or v0 specific.
 
 use core::fmt;
 
@@ -224,6 +225,84 @@ impl std::error::Error for GlobalValueDecodeError {
     }
 }
 
+/// An error while decoding.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum OutputDecodeError {
+    /// Keys within key-value map should never be duplicated.
+    DuplicateKey(Key),
+    /// Key should contain data, or key should not contain data (unified).
+    InvalidKeyData(Key),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(key::FromSliceError),
+    /// Invalid xonly public key when parsing key data.
+    InvalidXOnlyPublicKey,
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
+    /// Value was not the correct length (got, expected).
+    ValueWrongLength(usize, usize),
+    /// Error decoding a raw PSBT key.
+    KeyDecode(KeyDecodeError),
+    /// Error decoding a value.
+    ValueDecode(OutputValueDecodeError),
+    /// Called build() before fully decoding the output map.
+    EarlyEnd,
+    /// Encoded output is missing a value.
+    MissingValue,
+    /// Encoded output is missing a script pubkey.
+    MissingScriptPubkey,
+    /// Encoded output is missing a sp_v0_info.
+    LabelWithoutInfo,
+    /// Invalid leaf version.
+    InvalidLeafVersion,
+    /// Value that was supposed to be present was not.
+    MissingExpectedValue(&'static str),
+}
+
+impl fmt::Display for OutputDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::ValueWrongLength(got, expected) =>
+                write!(f, "value length {} (expected {})", got, expected),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
+            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
+            Self::MissingValue => write!(f, "encoded output is missing a value"),
+            Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
+            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
+            Self::MissingExpectedValue(name) => write!(f, "missing expected value: {}", name),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for OutputDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::DuplicateKey(_)
+            | Self::InvalidKeyData(_)
+            | Self::InvalidXOnlyPublicKey
+            | Self::InvalidProprietaryKey
+            | Self::ValueWrongLength(..) => None,
+            Self::KeyDecode(ref e) => Some(e),
+            Self::ValueDecode(ref e) => Some(e),
+            Self::EarlyEnd
+            | Self::MissingValue
+            | Self::MissingScriptPubkey
+            | Self::LabelWithoutInfo
+            | Self::InvalidLeafVersion
+            | Self::MissingExpectedValue(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum OutputValueDecodeError {
     /// Error decoding the value's compact-size length prefix.
@@ -306,79 +385,101 @@ impl std::error::Error for OutputValueDecodeError {
     }
 }
 
-/// An error while decoding.
+/// An error while decoding an input map.
+///
+/// Shared by both v0 (BIP-174) and v2 (BIP-370) input map decoders.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum OutputDecodeError {
+pub enum InputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
     /// Key should contain data, or key should not contain data (unified).
     InvalidKeyData(Key),
+    /// Invalid hash when parsing key or value data.
+    InvalidHash(hashes::FromSliceError),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
-    /// Invalid xonly public key when parsing key data.
-    InvalidXOnlyPublicKey,
+    /// Invalid ECDSA signature when parsing value data.
+    InvalidEcdsaSignature(ecdsa::Error),
     /// Invalid proprietary key.
     InvalidProprietaryKey,
+    /// Key was not the correct length (got, expected).
+    KeyWrongLength(usize, usize),
     /// Value was not the correct length (got, expected).
     ValueWrongLength(usize, usize),
-    /// Error decoding a raw PSBT key.
+    /// Error decoding key.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
-    ValueDecode(OutputValueDecodeError),
-    /// Called build() before fully decoding the output map.
+    ValueDecode(InputValueDecodeError),
+    /// Input must contain a previous txid.
+    MissingPreviousTxid,
+    /// Input must contain a spent output index.
+    MissingSpentOutputIndex,
+    /// Called build() before fully decoding the input map.
     EarlyEnd,
-    /// Encoded output is missing a value.
-    MissingValue,
-    /// Encoded output is missing a script pubkey.
-    MissingScriptPubkey,
-    /// Encoded output is missing a sp_v0_info.
-    LabelWithoutInfo,
-    /// Invalid leaf version.
-    InvalidLeafVersion,
-    /// Value that was supposed to be present was not.
+    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
+    FieldMismatch,
+    /// Non-witness UTXO txid does not match the input's previous txid.
+    IncorrectNonWitnessUtxo {
+        /// The txid of the input being spent.
+        previous_txid: bitcoin::Txid,
+        /// The txid of the non-witness UTXO.
+        non_witness_utxo_txid: bitcoin::Txid,
+    },
+    /// Value that was supposed to be present was not (v0 only).
     MissingExpectedValue(&'static str),
 }
 
-impl fmt::Display for OutputDecodeError {
+impl fmt::Display for InputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
+            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
+            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
             Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::KeyWrongLength(got, expected) =>
+                write!(f, "key length {} (expected {})", got, expected),
             Self::ValueWrongLength(got, expected) =>
                 write!(f, "value length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
-            Self::MissingValue => write!(f, "encoded output is missing a value"),
-            Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
-            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
+            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
+            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
+            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
+            Self::FieldMismatch => {
+                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
+            }
+            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
+                f,
+                "non-witness utxo txid {} does not match previous txid {}",
+                non_witness_utxo_txid, previous_txid
+            ),
             Self::MissingExpectedValue(name) => write!(f, "missing expected value: {}", name),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for OutputDecodeError {
+impl std::error::Error for InputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::InvalidHash(ref e) => Some(e),
             Self::InvalidPublicKey(ref e) => Some(e),
+            Self::InvalidEcdsaSignature(ref e) => Some(e),
             Self::DuplicateKey(_)
             | Self::InvalidKeyData(_)
-            | Self::InvalidXOnlyPublicKey
             | Self::InvalidProprietaryKey
+            | Self::KeyWrongLength(..)
             | Self::ValueWrongLength(..) => None,
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
-            Self::EarlyEnd
-            | Self::MissingValue
-            | Self::MissingScriptPubkey
-            | Self::LabelWithoutInfo
-            | Self::InvalidLeafVersion
+            Self::MissingPreviousTxid
+            | Self::MissingSpentOutputIndex
+            | Self::EarlyEnd
+            | Self::FieldMismatch
+            | Self::IncorrectNonWitnessUtxo { .. }
             | Self::MissingExpectedValue(_) => None,
         }
     }
@@ -544,106 +645,6 @@ impl std::error::Error for InputValueDecodeError {
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
-        }
-    }
-}
-
-/// An error while decoding an input map.
-///
-/// Shared by both v0 (BIP-174) and v2 (BIP-370) input map decoders.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum InputDecodeError {
-    /// Keys within key-value map should never be duplicated.
-    DuplicateKey(Key),
-    /// Key should contain data, or key should not contain data (unified).
-    InvalidKeyData(Key),
-    /// Invalid hash when parsing key or value data.
-    InvalidHash(hashes::FromSliceError),
-    /// Invalid public key when parsing key data.
-    InvalidPublicKey(key::FromSliceError),
-    /// Invalid ECDSA signature when parsing value data.
-    InvalidEcdsaSignature(ecdsa::Error),
-    /// Invalid proprietary key.
-    InvalidProprietaryKey,
-    /// Key was not the correct length (got, expected).
-    KeyWrongLength(usize, usize),
-    /// Value was not the correct length (got, expected).
-    ValueWrongLength(usize, usize),
-    /// Error decoding key.
-    KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(InputValueDecodeError),
-    /// Input must contain a previous txid.
-    MissingPreviousTxid,
-    /// Input must contain a spent output index.
-    MissingSpentOutputIndex,
-    /// Called build() before fully decoding the input map.
-    EarlyEnd,
-    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
-    FieldMismatch,
-    /// Non-witness UTXO txid does not match the input's previous txid.
-    IncorrectNonWitnessUtxo {
-        /// The txid of the input being spent.
-        previous_txid: bitcoin::Txid,
-        /// The txid of the non-witness UTXO.
-        non_witness_utxo_txid: bitcoin::Txid,
-    },
-    /// Value that was supposed to be present was not (v0 only).
-    MissingExpectedValue(&'static str),
-}
-
-impl fmt::Display for InputDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
-            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::KeyWrongLength(got, expected) =>
-                write!(f, "key length {} (expected {})", got, expected),
-            Self::ValueWrongLength(got, expected) =>
-                write!(f, "value length {} (expected {})", got, expected),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
-            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
-            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
-            Self::FieldMismatch => {
-                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
-            }
-            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
-                f,
-                "non-witness utxo txid {} does not match previous txid {}",
-                non_witness_utxo_txid, previous_txid
-            ),
-            Self::MissingExpectedValue(name) => write!(f, "missing expected value: {}", name),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InputDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidHash(ref e) => Some(e),
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::DuplicateKey(_)
-            | Self::InvalidKeyData(_)
-            | Self::InvalidProprietaryKey
-            | Self::KeyWrongLength(..)
-            | Self::ValueWrongLength(..) => None,
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::MissingPreviousTxid
-            | Self::MissingSpentOutputIndex
-            | Self::EarlyEnd
-            | Self::FieldMismatch
-            | Self::IncorrectNonWitnessUtxo { .. }
-            | Self::MissingExpectedValue(_) => None,
         }
     }
 }
