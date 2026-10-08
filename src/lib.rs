@@ -25,8 +25,6 @@ pub extern crate bitcoin;
 pub extern crate miniscript;
 
 mod consts;
-#[cfg(feature = "silent-payments")]
-mod dleq;
 mod encoding;
 mod error;
 #[macro_use]
@@ -41,9 +39,6 @@ mod sighash_type;
 mod silent_payments;
 mod version;
 
-#[cfg(feature = "silent-payments")]
-#[doc(inline)]
-pub use crate::dleq::{DleqProof, InvalidLengthError};
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use crate::encoding::{decode_from_reader, encode_to_writer};
@@ -58,7 +53,7 @@ pub use crate::roles::{
 };
 #[cfg(feature = "silent-payments")]
 #[doc(inline)]
-pub use crate::silent_payments::SpV0Info;
+pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
 #[doc(inline)]
 pub use crate::{
     encoding::{

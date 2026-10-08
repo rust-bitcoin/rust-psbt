@@ -34,8 +34,6 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-#[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
 use crate::encoding::delegates::{
     FinalScriptWitnessPair, NonWitnessUtxoPair, SequencePair, WitnessUtxoPair,
 };
@@ -52,6 +50,8 @@ use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, InputValueDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::DleqProof;
 use crate::SignError;
 
 /// A key-value map for an input of the corresponding index in the unsigned

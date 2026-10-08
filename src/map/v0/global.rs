@@ -25,13 +25,13 @@ use crate::consts::{
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
-#[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::DleqProof;
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
 

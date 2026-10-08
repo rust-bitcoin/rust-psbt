@@ -31,8 +31,6 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-#[cfg(feature = "silent-payments")]
-use crate::dleq::DleqProof;
 use crate::encoding::delegates::{FinalScriptWitnessPair, WitnessUtxoPair};
 use crate::encoding::native::{
     Bip32DerivationIter, Hash160Iter, Hash256Iter, PartialSigIter, Ripemd160Iter, ScriptPair,
@@ -45,6 +43,8 @@ use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, InputValueDecodeError};
 use crate::sighash_type::PsbtSighashType;
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::DleqProof;
 
 pub struct InputMapEncoder<'e> {
     input: &'e Input,
