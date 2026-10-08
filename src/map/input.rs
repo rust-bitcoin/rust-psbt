@@ -467,7 +467,7 @@ impl Input {
         }
 
         v2_combine_map!(partial_sigs, self, other);
-        // TODO: Why do we not combine sighash_type?
+        v2_combine_option!(sighash_type, self, other);
         v2_combine_option!(redeem_script, self, other);
         v2_combine_option!(witness_script, self, other);
         v2_combine_map!(bip32_derivations, self, other);

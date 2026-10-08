@@ -155,6 +155,11 @@ mod valid {
     fn combine_with_unknown_key_value_pairs() {
         bip174("Valid: taking as input the PSBTs with unknown key-value pairs, a Combiner which orders keys lexicographically combines them into a single PSBT");
     }
+
+    #[test]
+    fn combine_with_scripts_keypaths_and_signatures() {
+        bip174("Valid: combine two valid PSBTs including sighash types");
+    }
 }
 
 mod workflow {
