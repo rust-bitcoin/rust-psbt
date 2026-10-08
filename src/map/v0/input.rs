@@ -41,7 +41,7 @@ use crate::encoding::native::{
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
-use crate::map::error::{InputDecodeError, InputValueDecodeError};
+use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
@@ -622,7 +622,7 @@ impl InputStage {
                         | PSBT_IN_PROPRIETARY
                 );
                 if unkeyed && !key.key.is_empty() {
-                    return Err(InputDecodeError::InvalidKeyData(key));
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
             }
@@ -972,10 +972,13 @@ impl Decoder for InputMapDecoder {
                     if self.tap_internal_key.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key = Some(
-                        XOnlyPublicKey::from_slice(&bytes)
-                            .map_err(|_| InputDecodeError::ValueWrongLength(32, 32))?,
-                    );
+                    self.tap_internal_key =
+                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
+                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
+                                got: 32,
+                                expected: 32,
+                            })
+                        })?);
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapMerkleRoot { key, decoder } => {
@@ -1016,7 +1019,7 @@ impl Decoder for InputMapDecoder {
                     })?;
                     let fprint = Fingerprint::from(
                         <[u8; 4]>::try_from(&value[..4])
-                            .map_err(|_| InputDecodeError::MissingExpectedValue("fingerprint"))?,
+                            .map_err(|_| InputDecodeError::MissingXpubFingerprint)?,
                     );
                     let mut dpath: Vec<ChildNumber> = Default::default();
                     for chunk in value[4..].chunks_exact(4) {
@@ -1100,12 +1103,16 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapScriptSig(e))
                     })?;
                     if key.key.len() != 64 {
-                        return Err(InputDecodeError::KeyWrongLength(key.key.len(), 64));
+                        return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32])
-                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
-                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64])
-                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32]).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
+                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64]).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     let sig = taproot::Signature::from_slice(&value).map_err(|_| {
                         InputDecodeError::ValueDecode(
                             InputValueDecodeError::InvalidTaprootSignature,
@@ -1128,7 +1135,9 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::InvalidControlBlock)
                     })?;
                     if value.is_empty() {
-                        return Err(InputDecodeError::ValueWrongLength(0, 1));
+                        return Err(InputDecodeError::ValueDecode(
+                            InputValueDecodeError::WrongLength { got: 0, expected: 1 },
+                        ));
                     }
                     let last = value.len() - 1;
                     let script = ScriptBuf::from_bytes(value[..last].to_vec());
@@ -1149,14 +1158,14 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapBip32Derivation(e))
                     })?;
                     if value.is_empty() {
-                        return Err(InputDecodeError::ValueWrongLength(0, 1));
+                        return Err(InputDecodeError::ValueDecode(
+                            InputValueDecodeError::WrongLength { got: 0, expected: 1 },
+                        ));
                     }
                     let count = value[0] as usize;
                     let hash_end = 1 + count * 32;
                     if value.len() < hash_end + 4 {
-                        return Err(InputDecodeError::MissingExpectedValue(
-                            "tap bip32 fingerprint",
-                        ));
+                        return Err(InputDecodeError::MissingTapBip32Fingerprint);
                     }
                     let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
                         .chunks_exact(32)
@@ -1172,8 +1181,9 @@ impl Decoder for InputMapDecoder {
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let xonly = XOnlyPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert((leaf_hashes, ks));
@@ -1188,7 +1198,9 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::ProprietaryValue(e))
                     })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
-                        .map_err(|_| InputDecodeError::InvalidProprietaryKey)?;
+                        .map_err(|_| {
+                            InputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                        })?;
                     // This will not compile as-is: need to convert from crate::map::ProprietaryKey
                     // to the generic type. We'll fix this when we connect everything.
                     if self.proprietaries.contains_key(&prop_key) {
@@ -1215,10 +1227,15 @@ impl Decoder for InputMapDecoder {
                         Decoder2Error::Second(e) =>
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)),
                     })?;
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
-                    let share = CompressedPublicKey::from_slice(&arr)
-                        .map_err(|_| InputDecodeError::ValueWrongLength(33, 33))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
+                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
+                            got: 33,
+                            expected: 33,
+                        })
+                    })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
@@ -1233,8 +1250,9 @@ impl Decoder for InputMapDecoder {
                         Decoder2Error::Second(e) =>
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)),
                     })?;
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1284,7 +1302,7 @@ impl Decoder for InputMapDecoder {
     fn end(self) -> Result<Input, Self::Error> {
         match self.stage {
             InputStage::Done(input) => Ok(input),
-            _ => Err(InputDecodeError::MissingExpectedValue("input map separator")),
+            _ => Err(InputDecodeError::EarlyEnd),
         }
     }
 }

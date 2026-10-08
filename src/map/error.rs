@@ -35,7 +35,7 @@ pub enum GlobalDecodeError {
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(GlobalValueDecodeError),
-    /// Called `end()` before the end-of-map separator was reached (v2 only).
+    /// End before the end-of-map separator was reached.
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
     MissingVersion,
@@ -213,7 +213,7 @@ pub enum OutputDecodeError {
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(OutputValueDecodeError),
-    /// Called build() before fully decoding the output map.
+    /// End before fully decoding the output map.
     EarlyEnd,
     /// Encoded output is missing an amount value.
     MissingAmount,
@@ -369,20 +369,12 @@ impl std::error::Error for OutputValueDecodeError {
 pub enum InputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
-    /// Key should contain data, or key should not contain data (unified).
-    InvalidKeyData(Key),
     /// Invalid hash when parsing key or value data.
     InvalidHash(hashes::FromSliceError),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
     /// Invalid ECDSA signature when parsing value data.
     InvalidEcdsaSignature(ecdsa::Error),
-    /// Invalid proprietary key.
-    InvalidProprietaryKey,
-    /// Key was not the correct length (got, expected).
-    KeyWrongLength(usize, usize),
-    /// Value was not the correct length (got, expected).
-    ValueWrongLength(usize, usize),
     /// Error decoding key.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -391,7 +383,7 @@ pub enum InputDecodeError {
     MissingPreviousTxid,
     /// Input must contain a spent output index.
     MissingSpentOutputIndex,
-    /// Called build() before fully decoding the input map.
+    /// End before fully decoding the input map.
     EarlyEnd,
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
     FieldMismatch,
@@ -402,23 +394,19 @@ pub enum InputDecodeError {
         /// The txid of the non-witness UTXO.
         non_witness_utxo_txid: bitcoin::Txid,
     },
-    /// Value that was supposed to be present was not (v0 only).
-    MissingExpectedValue(&'static str),
+    /// Encoded xpub key derivation is missing a fingerprint.
+    MissingXpubFingerprint,
+    /// Encoded taproot BIP32 derivation is missing a fingerprint.
+    MissingTapBip32Fingerprint,
 }
 
 impl fmt::Display for InputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
             Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::KeyWrongLength(got, expected) =>
-                write!(f, "key length {} (expected {})", got, expected),
-            Self::ValueWrongLength(got, expected) =>
-                write!(f, "value length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
@@ -432,7 +420,9 @@ impl fmt::Display for InputDecodeError {
                 "non-witness utxo txid {} does not match previous txid {}",
                 non_witness_utxo_txid, previous_txid
             ),
-            Self::MissingExpectedValue(name) => write!(f, "missing expected value: {}", name),
+            Self::MissingXpubFingerprint => write!(f, "xpub derivation missing fingerprint"),
+            Self::MissingTapBip32Fingerprint =>
+                write!(f, "tap BIP32 derivation missing fingerprint"),
         }
     }
 }
@@ -444,11 +434,7 @@ impl std::error::Error for InputDecodeError {
             Self::InvalidHash(ref e) => Some(e),
             Self::InvalidPublicKey(ref e) => Some(e),
             Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::DuplicateKey(_)
-            | Self::InvalidKeyData(_)
-            | Self::InvalidProprietaryKey
-            | Self::KeyWrongLength(..)
-            | Self::ValueWrongLength(..) => None,
+            Self::DuplicateKey(_) => None,
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
@@ -456,7 +442,8 @@ impl std::error::Error for InputDecodeError {
             | Self::EarlyEnd
             | Self::FieldMismatch
             | Self::IncorrectNonWitnessUtxo { .. }
-            | Self::MissingExpectedValue(_) => None,
+            | Self::MissingXpubFingerprint
+            | Self::MissingTapBip32Fingerprint => None,
         }
     }
 }
@@ -465,23 +452,30 @@ impl std::error::Error for InputDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum InputValueDecodeError {
+    /// Value length does not match the expected fixed size for this key type (got, expected).
+    WrongLength {
+        /// The decoded value length.
+        got: usize,
+        /// The expected value length.
+        expected: usize,
+    },
     /// Error decoding the value's compact-size length prefix.
     LengthPrefix(CompactSizeDecoderError),
-    /// Error decoding the previous transaction ID (32-byte fixed value).
+    /// Error decoding the previous transaction ID.
     PreviousTxid(UnexpectedEofError),
-    /// Error decoding the output index (4-byte fixed value).
+    /// Error decoding the output index.
     OutputIndex(UnexpectedEofError),
-    /// Error decoding the sequence number (4-byte fixed value).
+    /// Error decoding the sequence number).
     Sequence(UnexpectedEofError),
-    /// Error decoding the minimum lock time (4-byte fixed value).
+    /// Error decoding the minimum lock time.
     MinTime(UnexpectedEofError),
-    /// Error decoding the minimum lock height (4-byte fixed value).
+    /// Error decoding the minimum lock height.
     MinHeight(UnexpectedEofError),
-    /// Error decoding the sighash type (4-byte fixed value).
+    /// Error decoding the sighash type.
     SighashType(UnexpectedEofError),
-    /// Error decoding the taproot internal key (32-byte fixed value).
+    /// Error decoding the taproot internal key.
     TapInternalKey(UnexpectedEofError),
-    /// Error decoding the taproot merkle root (32-byte fixed value).
+    /// Error decoding the taproot merkle root.
     TapMerkleRoot(UnexpectedEofError),
     /// Error decoding the non-witness UTXO (full transaction).
     NonWitnessUtxo(TransactionDecoderError),
@@ -529,10 +523,10 @@ pub enum InputValueDecodeError {
     InvalidControlBlock,
     /// The decoded value is not a valid taproot leaf version.
     InvalidLeafVersion,
-    /// Error decoding a silent payments ECDH share (33-byte fixed value).
+    /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
     SpEcdh(UnexpectedEofError),
-    /// Error decoding a silent payments DLEQ proof (64-byte fixed value).
+    /// Error decoding a silent payments DLEQ proof).
     #[cfg(feature = "silent-payments")]
     SpDleq(UnexpectedEofError),
 }
@@ -540,6 +534,8 @@ pub enum InputValueDecodeError {
 impl fmt::Display for InputValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WrongLength { got, expected } =>
+                write!(f, "value length {} (expected {})", got, expected),
             Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
             Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
             Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
@@ -586,6 +582,7 @@ impl fmt::Display for InputValueDecodeError {
 impl std::error::Error for InputValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::WrongLength { .. } => None,
             Self::LengthPrefix(ref e) => Some(e),
             Self::PreviousTxid(ref e) => Some(e),
             Self::OutputIndex(ref e) => Some(e),
