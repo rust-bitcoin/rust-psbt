@@ -32,7 +32,7 @@ use crate::encoding::native::{
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
-use crate::map::error::{OutputDecodeError, OutputInsertPairError, OutputValueDecodeError};
+use crate::map::error::{OutputDecodeError, OutputValueDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::SpV0Info;
 
@@ -443,9 +443,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::Amount(e)),
                     })?;
                     if self.amount.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.amount = Some(Amount::from_sat(u64::from_le_bytes(bytes)));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -455,9 +453,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::Script(e))
                     })?;
                     if self.script_pubkey.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.script_pubkey = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -467,9 +463,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.redeem_script = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -479,9 +473,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.witness_script = Some(ScriptBuf::from(value));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -499,17 +491,14 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::InvalidPublicKey(e))
-                    })?;
+                    let pk = PublicKey::from_slice(&key.key)
+                        .map_err(OutputDecodeError::InvalidPublicKey)?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(ks);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -522,13 +511,11 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         ),
                     })?;
                     if self.tap_internal_key.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.tap_internal_key = Some(
                         XOnlyPublicKey::from_slice(&bytes)
-                            .map_err(|_| OutputInsertPairError::ValueWrongLength(32, 32))?,
+                            .map_err(|_| OutputDecodeError::ValueWrongLength(32, 32))?,
                     );
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -537,9 +524,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::TapTree(e))
                     })?;
                     if self.tap_tree.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.tap_tree = {
                         let mut builder = taproot::TaprootBuilder::new();
@@ -613,17 +598,14 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         let ks = (fprint, DerivationPath::from(dpath));
                         (leaf_hashes, ks)
                     };
-                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::InvalidXOnlyPublicKey)
-                    })?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key)
+                        .map_err(|_| OutputDecodeError::InvalidXOnlyPublicKey)?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(pair);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -636,20 +618,15 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
                     })?;
                     if self.sp_v0_info.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     if !key.key.is_empty() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::InvalidKeyDataNotEmpty(key),
-                        ));
+                        return Err(OutputDecodeError::InvalidKeyData(key));
                     }
-                    self.sp_v0_info = Some(SpV0Info::from_byte_array(&bytes).map_err(|e| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::InvalidPublicKey(
-                            e.into(),
-                        ))
-                    })?);
+                    self.sp_v0_info = Some(
+                        SpV0Info::from_byte_array(&bytes)
+                            .map_err(|e| OutputDecodeError::InvalidPublicKey(e.into()))?,
+                    );
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 #[cfg(feature = "silent-payments")]
@@ -661,14 +638,10 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
                     })?;
                     if self.sp_v0_label.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     if !key.key.is_empty() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::InvalidKeyDataNotEmpty(key),
-                        ));
+                        return Err(OutputDecodeError::InvalidKeyData(key));
                     }
                     self.sp_v0_label = Some(u32::from_le_bytes(bytes));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -678,15 +651,13 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::ProprietaryValue(e))
                     })?;
                     let pk = ProprietaryKey::try_from(key.clone())
-                        .map_err(|_| OutputInsertPairError::InvalidProprietaryKey)?;
+                        .map_err(|_| OutputDecodeError::InvalidProprietaryKey)?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -699,9 +670,7 @@ let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(k) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(k.key().clone()),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(k.key().clone())),
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }

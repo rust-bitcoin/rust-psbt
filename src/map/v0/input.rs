@@ -43,7 +43,7 @@ use crate::encoding::native::{
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
-use crate::map::error::{InputDecodeError, InputInsertPairError, InputValueDecodeError};
+use crate::map::error::{InputDecodeError, InputValueDecodeError};
 use crate::sighash_type::PsbtSighashType;
 
 pub struct InputMapEncoder<'e> {
@@ -622,9 +622,7 @@ impl InputStage {
                         | PSBT_IN_PROPRIETARY
                 );
                 if unkeyed && !key.key.is_empty() {
-                    return Err(InputDecodeError::InsertPair(
-                        InputInsertPairError::InvalidKeyDataNotEmpty(key),
-                    ));
+                    return Err(InputDecodeError::InvalidKeyData(key));
                 }
                 Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
             }
@@ -874,9 +872,7 @@ impl Decoder for InputMapDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::NonWitnessUtxo(e)),
                     })?;
                     if self.non_witness_utxo.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.non_witness_utxo = Some(tx);
                     self.stage = InputStage::DecodingSeparator;
@@ -889,9 +885,7 @@ impl Decoder for InputMapDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::WitnessUtxo(e)),
                     })?;
                     if self.witness_utxo.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.witness_utxo = Some(txout);
                     self.stage = InputStage::DecodingSeparator;
@@ -904,9 +898,7 @@ impl Decoder for InputMapDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e)),
                     })?;
                     if self.sighash_type.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.sighash_type = Some(PsbtSighashType { inner: u32::from_le_bytes(bytes) });
                     self.stage = InputStage::DecodingSeparator;
@@ -916,9 +908,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.redeem_script = Some(ScriptBuf::from(value));
                     self.stage = InputStage::DecodingSeparator;
@@ -928,9 +918,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.witness_script = Some(ScriptBuf::from(value));
                     self.stage = InputStage::DecodingSeparator;
@@ -940,9 +928,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::FinalScriptSig(e))
                     })?;
                     if self.final_script_sig.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.final_script_sig = Some(ScriptBuf::from(value));
                     self.stage = InputStage::DecodingSeparator;
@@ -956,9 +942,7 @@ impl Decoder for InputMapDecoder {
                         ),
                     })?;
                     if self.final_script_witness.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.final_script_witness = Some(witness);
                     self.stage = InputStage::DecodingSeparator;
@@ -968,9 +952,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapKeySig(e))
                     })?;
                     if self.tap_key_sig.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.tap_key_sig =
                         Some(taproot::Signature::from_slice(&value).map_err(|_| {
@@ -988,16 +970,12 @@ impl Decoder for InputMapDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e)),
                     })?;
                     if self.tap_internal_key.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key =
-                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
-                            InputDecodeError::InsertPair(InputInsertPairError::ValueWrongLength(
-                                32, 32,
-                            ))
-                        })?);
+                    self.tap_internal_key = Some(
+                        XOnlyPublicKey::from_slice(&bytes)
+                            .map_err(|_| InputDecodeError::ValueWrongLength(32, 32))?,
+                    );
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapMerkleRoot { key, decoder } => {
@@ -1008,33 +986,27 @@ impl Decoder for InputMapDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e)),
                     })?;
                     if self.tap_merkle_root.is_some() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_merkle_root = Some(TapNodeHash::from_slice(&bytes).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidHash(e))
-                    })?);
+                    self.tap_merkle_root = Some(
+                        TapNodeHash::from_slice(&bytes).map_err(InputDecodeError::InvalidHash)?,
+                    );
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingPartialSig { key, decoder } => {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::PartialSig(e))
                     })?;
-                    let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidPublicKey(e))
-                    })?;
-                    let sig = ecdsa::Signature::from_slice(&value).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidEcdsaSignature(e))
-                    })?;
+                    let pk = PublicKey::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidPublicKey)?;
+                    let sig = ecdsa::Signature::from_slice(&value)
+                        .map_err(InputDecodeError::InvalidEcdsaSignature)?;
                     match self.partial_sigs.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(sig);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1052,17 +1024,14 @@ impl Decoder for InputMapDecoder {
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidPublicKey(e))
-                    })?;
+                    let pk = PublicKey::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidPublicKey)?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(ks);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1070,17 +1039,14 @@ impl Decoder for InputMapDecoder {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::Ripemd160Preimage(e))
                     })?;
-                    let hash = ripemd160::Hash::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidHash(e))
-                    })?;
+                    let hash = ripemd160::Hash::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidHash)?;
                     match self.ripemd160_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1088,17 +1054,14 @@ impl Decoder for InputMapDecoder {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::Sha256Preimage(e))
                     })?;
-                    let hash = sha256::Hash::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidHash(e))
-                    })?;
+                    let hash = sha256::Hash::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidHash)?;
                     match self.sha256_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1106,17 +1069,14 @@ impl Decoder for InputMapDecoder {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::Hash160Preimage(e))
                     })?;
-                    let hash = hash160::Hash::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidHash(e))
-                    })?;
+                    let hash = hash160::Hash::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidHash)?;
                     match self.hash160_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1124,17 +1084,14 @@ impl Decoder for InputMapDecoder {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::Hash256Preimage(e))
                     })?;
-                    let hash = sha256d::Hash::from_slice(&key.key).map_err(|e| {
-                        InputDecodeError::InsertPair(InputInsertPairError::InvalidHash(e))
-                    })?;
+                    let hash = sha256d::Hash::from_slice(&key.key)
+                        .map_err(InputDecodeError::InvalidHash)?;
                     match self.hash256_preimages.entry(hash) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1143,16 +1100,12 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapScriptSig(e))
                     })?;
                     if key.key.len() != 64 {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::KeyWrongLength(key.key.len(), 64),
-                        ));
+                        return Err(InputDecodeError::KeyWrongLength(key.key.len(), 64));
                     }
-                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32]).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::KeyWrongLength(32, 32))
-                    })?;
-                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64]).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::KeyWrongLength(32, 32))
-                    })?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32])
+                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
+                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64])
+                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
                     let sig = taproot::Signature::from_slice(&value).map_err(|_| {
                         InputDecodeError::ValueDecode(
                             InputValueDecodeError::InvalidTaprootSignature,
@@ -1163,9 +1116,7 @@ impl Decoder for InputMapDecoder {
                             e.insert(sig);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1177,9 +1128,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::InvalidControlBlock)
                     })?;
                     if value.is_empty() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::ValueWrongLength(0, 1),
-                        ));
+                        return Err(InputDecodeError::ValueWrongLength(0, 1));
                     }
                     let last = value.len() - 1;
                     let script = ScriptBuf::from_bytes(value[..last].to_vec());
@@ -1191,9 +1140,7 @@ impl Decoder for InputMapDecoder {
                             e.insert((script, ver));
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1202,9 +1149,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapBip32Derivation(e))
                     })?;
                     if value.is_empty() {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::ValueWrongLength(0, 1),
-                        ));
+                        return Err(InputDecodeError::ValueWrongLength(0, 1));
                     }
                     let count = value[0] as usize;
                     let hash_end = 1 + count * 32;
@@ -1227,17 +1172,14 @@ impl Decoder for InputMapDecoder {
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::KeyWrongLength(32, 32))
-                    })?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key)
+                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert((leaf_hashes, ks));
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(InputDecodeError::InsertPair(
-                                InputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(InputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
@@ -1246,17 +1188,11 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::ProprietaryValue(e))
                     })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
-                        .map_err(|_| {
-                            InputDecodeError::InsertPair(
-                                InputInsertPairError::InvalidProprietaryKey,
-                            )
-                        })?;
+                        .map_err(|_| InputDecodeError::InvalidProprietaryKey)?;
                     // This will not compile as-is: need to convert from crate::map::ProprietaryKey
                     // to the generic type. We'll fix this when we connect everything.
                     if self.proprietaries.contains_key(&prop_key) {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(prop_key.to_key()),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(prop_key.to_key()));
                     }
                     self.proprietaries.insert(prop_key, value);
                     self.stage = InputStage::DecodingSeparator;
@@ -1266,9 +1202,7 @@ impl Decoder for InputMapDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::UnknownValue(e))
                     })?;
                     if self.unknowns.contains_key(&key) {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.unknowns.insert(key, value);
                     self.stage = InputStage::DecodingSeparator;
@@ -1281,19 +1215,12 @@ impl Decoder for InputMapDecoder {
                         Decoder2Error::Second(e) =>
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)),
                     })?;
-                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::KeyWrongLength(
-                            key.key.len(),
-                            33,
-                        ))
-                    })?;
-                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::ValueWrongLength(33, 33))
-                    })?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key)
+                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
+                    let share = CompressedPublicKey::from_slice(&arr)
+                        .map_err(|_| InputDecodeError::ValueWrongLength(33, 33))?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.sp_ecdh_shares.insert(scan_key, share);
                     self.stage = InputStage::DecodingSeparator;
@@ -1306,17 +1233,11 @@ impl Decoder for InputMapDecoder {
                         Decoder2Error::Second(e) =>
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)),
                     })?;
-                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
-                        InputDecodeError::InsertPair(InputInsertPairError::KeyWrongLength(
-                            key.key.len(),
-                            33,
-                        ))
-                    })?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key)
+                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
                     let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
-                        return Err(InputDecodeError::InsertPair(
-                            InputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.sp_dleq_proofs.insert(scan_key, proof);
                     self.stage = InputStage::DecodingSeparator;

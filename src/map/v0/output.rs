@@ -32,7 +32,7 @@ use crate::encoding::native::{
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
-use crate::map::error::{OutputDecodeError, OutputInsertPairError, OutputValueDecodeError};
+use crate::map::error::{OutputDecodeError, OutputValueDecodeError};
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
 use crate::SpV0Info;
@@ -327,9 +327,7 @@ impl OutputStage {
                         | PSBT_OUT_PROPRIETARY
                 );
                 if unkeyed && !key.key.is_empty() {
-                    return Err(OutputDecodeError::InsertPair(
-                        OutputInsertPairError::InvalidKeyDataNotEmpty(key),
-                    ));
+                    return Err(OutputDecodeError::InvalidKeyData(key));
                 }
                 Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
             }
@@ -504,9 +502,7 @@ impl Decoder for OutputMapDecoder {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.redeem_script = Some(ScriptBuf::from(value));
                     self.stage = OutputStage::DecodingSeparator;
@@ -516,9 +512,7 @@ impl Decoder for OutputMapDecoder {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.witness_script = Some(ScriptBuf::from(value));
                     self.stage = OutputStage::DecodingSeparator;
@@ -537,17 +531,14 @@ impl Decoder for OutputMapDecoder {
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let pk = PublicKey::from_slice(&key.key).map_err(|e| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::InvalidPublicKey(e))
-                    })?;
+                    let pk = PublicKey::from_slice(&key.key)
+                        .map_err(OutputDecodeError::InvalidPublicKey)?;
                     match self.bip32_derivations.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(ks);
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = OutputStage::DecodingSeparator;
                 }
@@ -560,16 +551,12 @@ impl Decoder for OutputMapDecoder {
                         ),
                     })?;
                     if self.tap_internal_key.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key =
-                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
-                            OutputDecodeError::InsertPair(OutputInsertPairError::ValueWrongLength(
-                                32, 32,
-                            ))
-                        })?);
+                    self.tap_internal_key = Some(
+                        XOnlyPublicKey::from_slice(&bytes)
+                            .map_err(|_| OutputDecodeError::ValueWrongLength(32, 32))?,
+                    );
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingTapTree { key, decoder } => {
@@ -577,9 +564,7 @@ impl Decoder for OutputMapDecoder {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::TapTree(e))
                     })?;
                     if self.tap_tree.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.tap_tree = {
                         let mut builder = TaprootBuilder::new();
@@ -615,9 +600,7 @@ impl Decoder for OutputMapDecoder {
                         ))
                     })?;
                     if value.is_empty() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::ValueWrongLength(0, 1),
-                        ));
+                        return Err(OutputDecodeError::ValueWrongLength(0, 1));
                     }
                     let count = value[0] as usize;
                     let hash_end = 1 + count * 32;
@@ -640,17 +623,14 @@ impl Decoder for OutputMapDecoder {
                         dpath.push(ChildNumber::from(index));
                     }
                     let ks = (fprint, DerivationPath::from(dpath));
-                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::InvalidXOnlyPublicKey)
-                    })?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key)
+                        .map_err(|_| OutputDecodeError::InvalidXOnlyPublicKey)?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert((leaf_hashes, ks));
                         }
                         btree_map::Entry::Occupied(_) =>
-                            return Err(OutputDecodeError::InsertPair(
-                                OutputInsertPairError::DuplicateKey(key),
-                            )),
+                            return Err(OutputDecodeError::DuplicateKey(key)),
                     }
                     self.stage = OutputStage::DecodingSeparator;
                 }
@@ -658,16 +638,10 @@ impl Decoder for OutputMapDecoder {
                     let value = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let prop_key: ProprietaryKey =
-                        core::convert::TryInto::try_into(key).map_err(|_| {
-                            OutputDecodeError::InsertPair(
-                                OutputInsertPairError::InvalidProprietaryKey,
-                            )
-                        })?;
+                    let prop_key: ProprietaryKey = core::convert::TryInto::try_into(key)
+                        .map_err(|_| OutputDecodeError::InvalidProprietaryKey)?;
                     if self.proprietaries.contains_key(&prop_key) {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(prop_key.to_key()),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(prop_key.to_key()));
                     }
                     self.proprietaries.insert(prop_key, value);
                     self.stage = OutputStage::DecodingSeparator;
@@ -677,9 +651,7 @@ impl Decoder for OutputMapDecoder {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::UnknownValue(e))
                     })?;
                     if self.unknowns.contains_key(&key) {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.unknowns.insert(key, value);
                     self.stage = OutputStage::DecodingSeparator;
@@ -693,20 +665,15 @@ impl Decoder for OutputMapDecoder {
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
                     })?;
                     if value_len != 66 {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::ValueWrongLength(value_len as usize, 66),
-                        ));
+                        return Err(OutputDecodeError::ValueWrongLength(value_len as usize, 66));
                     }
                     if self.sp_v0_info.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.sp_v0_info = Some(SpV0Info::from_byte_array(&arr).map_err(|_| {
-                        OutputDecodeError::InsertPair(OutputInsertPairError::ValueWrongLength(
-                            66, 66,
-                        ))
-                    })?);
+                    self.sp_v0_info = Some(
+                        SpV0Info::from_byte_array(&arr)
+                            .map_err(|_| OutputDecodeError::ValueWrongLength(66, 66))?,
+                    );
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 #[cfg(feature = "silent-payments")]
@@ -718,14 +685,10 @@ impl Decoder for OutputMapDecoder {
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
                     })?;
                     if value_len != 4 {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::ValueWrongLength(value_len as usize, 4),
-                        ));
+                        return Err(OutputDecodeError::ValueWrongLength(value_len as usize, 4));
                     }
                     if self.sp_v0_label.is_some() {
-                        return Err(OutputDecodeError::InsertPair(
-                            OutputInsertPairError::DuplicateKey(key),
-                        ));
+                        return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     self.sp_v0_label = Some(u32::from_le_bytes(arr));
                     self.stage = OutputStage::DecodingSeparator;

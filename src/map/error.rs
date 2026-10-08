@@ -12,7 +12,6 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::{Key, KeyDecodeError};
-use crate::consts;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 
@@ -22,8 +21,35 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 /// Some variants are only produced by one decoder or the other.
 #[derive(Debug)]
 pub enum GlobalDecodeError {
-    /// Error inserting a key-value pair.
-    InsertPair(InsertPairError),
+    /// Keys within key-value map should never be duplicated.
+    DuplicateKey(Key),
+    /// Key should contain data, or key should not contain data (unified).
+    InvalidKeyData(Key),
+    /// Value was not the correct length (got, want).
+    ValueWrongLength(usize, usize),
+    /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
+    WrongVersion(u32),
+    /// PSBT_GLOBAL_XPUB: Must contain 4 bytes for the xpub fingerprint.
+    XpubInvalidFingerprint,
+    /// PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint.
+    XpubValueTooShort(usize),
+    /// PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints.
+    XpubInvalidPath(usize),
+    /// PSBT_GLOBAL_XPUB: value must not be empty.
+    XpubValueEmpty,
+    /// PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type.
+    Bip32(bip32::Error),
+    /// PSBT_GLOBAL_XPUB: xpubs must be unique.
+    DuplicateXpub(bitcoin::bip32::KeySource),
+    /// PSBT_GLOBAL_PROPRIETARY: Invalid proprietary key.
+    InvalidProprietaryKey,
+    /// Key must be excluded from this version of PSBT (see consts.rs for u8 values).
+    ExcludedKey {
+        /// Key type value we found.
+        key_type_value: u64,
+    },
+    /// Key was not the correct length (got, expected).
+    KeyWrongLength(usize, usize),
     /// Error decoding a key from the stream.
     KeyDecode(super::KeyDecodeError),
     /// Error decoding a value.
@@ -53,7 +79,24 @@ pub enum GlobalDecodeError {
 impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InsertPair(ref e) => write_err!(f, "error inserting a pair"; e),
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
+            Self::ValueWrongLength(got, expected) =>
+                write!(f, "value length {} (expected {})", got, expected),
+            Self::WrongVersion(v) =>
+                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
+            Self::XpubInvalidFingerprint => write!(f, "xpub must contain a fingerprint"),
+            Self::XpubValueTooShort(len) => write!(f, "xpub value too short: {} bytes", len),
+            Self::XpubInvalidPath(len) =>
+                write!(f, "xpub derivation path invalid at index {}", len),
+            Self::XpubValueEmpty => write!(f, "xpub value must not be empty"),
+            Self::Bip32(ref e) => write_err!(f, "BIP-32"; e),
+            Self::DuplicateXpub(ref ks) => write!(f, "duplicate xpub: {:?}", ks),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::ExcludedKey { key_type_value } =>
+                write!(f, "excluded key type 0x{:02x}", key_type_value),
+            Self::KeyWrongLength(got, expected) =>
+                write!(f, "key length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
@@ -82,7 +125,19 @@ impl fmt::Display for GlobalDecodeError {
 impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InsertPair(ref e) => Some(e),
+            Self::DuplicateKey(_)
+            | Self::InvalidKeyData(_)
+            | Self::ValueWrongLength(..)
+            | Self::WrongVersion(_)
+            | Self::XpubInvalidFingerprint
+            | Self::XpubValueTooShort(_)
+            | Self::XpubInvalidPath(_)
+            | Self::XpubValueEmpty
+            | Self::InvalidProprietaryKey
+            | Self::DuplicateXpub(_)
+            | Self::ExcludedKey { .. }
+            | Self::KeyWrongLength(..) => None,
+            Self::Bip32(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::UnsignedTx(ref e) => Some(e),
@@ -97,120 +152,6 @@ impl std::error::Error for GlobalDecodeError {
             | Self::EarlyEnd => None,
         }
     }
-}
-
-impl From<InsertPairError> for GlobalDecodeError {
-    fn from(e: InsertPairError) -> Self { Self::InsertPair(e) }
-}
-
-/// Error inserting a key-value pair.
-#[derive(Debug)]
-pub enum InsertPairError {
-    /// Keys within key-value map should never be duplicated.
-    DuplicateKey(Key),
-    /// Key should contain data.
-    InvalidKeyDataEmpty(Key),
-    /// Key should not contain data.
-    InvalidKeyDataNotEmpty(Key),
-    /// Value was not the correct length (got, want).
-    ValueWrongLength(usize, usize),
-    /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
-    WrongVersion(u32),
-    /// PSBT_GLOBAL_XPUB: Must contain 4 bytes for the xpub fingerprint.
-    XpubInvalidFingerprint,
-    /// PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint.
-    XpubValueTooShort(usize),
-    /// PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints.
-    XpubInvalidPath(usize),
-    /// PSBT_GLOBAL_XPUB: value must not be empty.
-    XpubValueEmpty,
-    /// PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type.
-    Bip32(bip32::Error),
-    /// PSBT_GLOBAL_XPUB: xpubs must be unique.
-    DuplicateXpub(bitcoin::bip32::KeySource),
-    /// PSBT_GLOBAL_PROPRIETARY: Invalid proprietary key.
-    InvalidProprietaryKey,
-    /// Key must be excluded from this version of PSBT (see consts.rs for u8 values).
-    ExcludedKey {
-        /// Key type value we found.
-        key_type_value: u64,
-    },
-    /// Key was not the correct length (got, expected).
-    KeyWrongLength(usize, usize),
-}
-
-impl fmt::Display for InsertPairError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
-            Self::InvalidKeyDataNotEmpty(ref key) =>
-                write!(f, "key should not contain data: {}", key),
-            Self::ValueWrongLength(got, want) => {
-                write!(f, "value (keyvalue pair) wrong length (got, want) {} {}", got, want)
-            }
-            Self::WrongVersion(v) => {
-                write!(f, "PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2, found: {}", v)
-            }
-            Self::XpubInvalidFingerprint => {
-                write!(f, "PSBT_GLOBAL_XPUB: xpub fingerprint must be 4 bytes")
-            }
-            Self::XpubInvalidPath(len) => write!(
-                f,
-                "PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints: {}",
-                len
-            ),
-            Self::XpubValueTooShort(got) => write!(
-                f,
-                "PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint, got: {}",
-                got
-            ),
-            Self::Bip32(ref e) =>
-                write_err!(f, "PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type"; e),
-            Self::DuplicateXpub((fingerprint, ref derivation_path)) => write!(
-                f,
-                "PSBT_GLOBAL_XPUB: xpubs must be unique ({}, {})",
-                fingerprint, derivation_path
-            ),
-            Self::XpubValueEmpty => write!(f, "PSBT_GLOBAL_XPUB: keypair value must not be empty"),
-            Self::InvalidProprietaryKey =>
-                write!(f, "PSBT_GLOBAL_PROPRIETARY: Invalid proprietary key"),
-            Self::ExcludedKey { key_type_value } => write!(
-                f,
-                "found a keypair type that is explicitly excluded: {}",
-                consts::psbt_global_key_type_value_to_str(*key_type_value)
-            ),
-            Self::KeyWrongLength(got, expected) => {
-                write!(f, "key wrong length (got: {}, expected: {})", got, expected)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InsertPairError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Bip32(ref e) => Some(e),
-            Self::DuplicateKey(_)
-            | Self::InvalidKeyDataEmpty(_)
-            | Self::InvalidKeyDataNotEmpty(_)
-            | Self::ValueWrongLength(..)
-            | Self::WrongVersion(_)
-            | Self::XpubInvalidFingerprint
-            | Self::XpubInvalidPath(_)
-            | Self::XpubValueTooShort(_)
-            | Self::DuplicateXpub(_)
-            | Self::XpubValueEmpty
-            | Self::InvalidProprietaryKey
-            | Self::ExcludedKey { .. }
-            | Self::KeyWrongLength(..) => None,
-        }
-    }
-}
-
-impl From<bip32::Error> for InsertPairError {
-    fn from(e: bip32::Error) -> Self { Self::Bip32(e) }
 }
 
 /// Error decoding a global value.
@@ -369,8 +310,18 @@ impl std::error::Error for OutputValueDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum OutputDecodeError {
-    /// Error inserting a key-value pair.
-    InsertPair(OutputInsertPairError),
+    /// Keys within key-value map should never be duplicated.
+    DuplicateKey(Key),
+    /// Key should contain data, or key should not contain data (unified).
+    InvalidKeyData(Key),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(key::FromSliceError),
+    /// Invalid xonly public key when parsing key data.
+    InvalidXOnlyPublicKey,
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
+    /// Value was not the correct length (got, expected).
+    ValueWrongLength(usize, usize),
     /// Error decoding a raw PSBT key.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -392,7 +343,13 @@ pub enum OutputDecodeError {
 impl fmt::Display for OutputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InsertPair(ref e) => write_err!(f, "error inserting a pair"; e),
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::ValueWrongLength(got, expected) =>
+                write!(f, "value length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
@@ -409,7 +366,12 @@ impl fmt::Display for OutputDecodeError {
 impl std::error::Error for OutputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InsertPair(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::DuplicateKey(_)
+            | Self::InvalidKeyData(_)
+            | Self::InvalidXOnlyPublicKey
+            | Self::InvalidProprietaryKey
+            | Self::ValueWrongLength(..) => None,
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::EarlyEnd
@@ -418,60 +380,6 @@ impl std::error::Error for OutputDecodeError {
             | Self::LabelWithoutInfo
             | Self::InvalidLeafVersion
             | Self::MissingExpectedValue(_) => None,
-        }
-    }
-}
-
-impl From<OutputInsertPairError> for OutputDecodeError {
-    fn from(e: OutputInsertPairError) -> Self { Self::InsertPair(e) }
-}
-
-#[derive(Debug)]
-pub enum OutputInsertPairError {
-    /// Keys within key-value map should never be duplicated.
-    DuplicateKey(Key),
-    /// Key should contain data.
-    InvalidKeyDataEmpty(Key),
-    /// Key should not contain data.
-    InvalidKeyDataNotEmpty(Key),
-    /// Invalid public key when parsing key data.
-    InvalidPublicKey(bitcoin::key::FromSliceError),
-    /// Invalid xonly public key when parsing key data.
-    InvalidXOnlyPublicKey,
-    /// Invalid proprietary key.
-    InvalidProprietaryKey,
-    /// Value was not the correct length (got, expected).
-    ValueWrongLength(usize, usize),
-}
-
-impl fmt::Display for OutputInsertPairError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
-            Self::InvalidKeyDataNotEmpty(ref key) =>
-                write!(f, "key should not contain data: {}", key),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::ValueWrongLength(got, expected) => {
-                write!(f, "value wrong length (got: {}, expected: {})", got, expected)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for OutputInsertPairError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::DuplicateKey(_)
-            | Self::InvalidKeyDataEmpty(_)
-            | Self::InvalidKeyDataNotEmpty(_)
-            | Self::InvalidXOnlyPublicKey
-            | Self::InvalidProprietaryKey
-            | Self::ValueWrongLength(..) => None,
         }
     }
 }
@@ -646,8 +554,22 @@ impl std::error::Error for InputValueDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum InputDecodeError {
-    /// Error inserting a key-value pair.
-    InsertPair(InputInsertPairError),
+    /// Keys within key-value map should never be duplicated.
+    DuplicateKey(Key),
+    /// Key should contain data, or key should not contain data (unified).
+    InvalidKeyData(Key),
+    /// Invalid hash when parsing key or value data.
+    InvalidHash(hashes::FromSliceError),
+    /// Invalid public key when parsing key data.
+    InvalidPublicKey(key::FromSliceError),
+    /// Invalid ECDSA signature when parsing value data.
+    InvalidEcdsaSignature(ecdsa::Error),
+    /// Invalid proprietary key.
+    InvalidProprietaryKey,
+    /// Key was not the correct length (got, expected).
+    KeyWrongLength(usize, usize),
+    /// Value was not the correct length (got, expected).
+    ValueWrongLength(usize, usize),
     /// Error decoding key.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -674,7 +596,16 @@ pub enum InputDecodeError {
 impl fmt::Display for InputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InsertPair(ref e) => write_err!(f, "error inserting a key-value pair"; e),
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
+            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
+            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
+            Self::KeyWrongLength(got, expected) =>
+                write!(f, "key length {} (expected {})", got, expected),
+            Self::ValueWrongLength(got, expected) =>
+                write!(f, "value length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
@@ -697,7 +628,14 @@ impl fmt::Display for InputDecodeError {
 impl std::error::Error for InputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InsertPair(ref e) => Some(e),
+            Self::InvalidHash(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::InvalidEcdsaSignature(ref e) => Some(e),
+            Self::DuplicateKey(_)
+            | Self::InvalidKeyData(_)
+            | Self::InvalidProprietaryKey
+            | Self::KeyWrongLength(..)
+            | Self::ValueWrongLength(..) => None,
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::MissingPreviousTxid
@@ -706,72 +644,6 @@ impl std::error::Error for InputDecodeError {
             | Self::FieldMismatch
             | Self::IncorrectNonWitnessUtxo { .. }
             | Self::MissingExpectedValue(_) => None,
-        }
-    }
-}
-
-impl From<InputInsertPairError> for InputDecodeError {
-    fn from(e: InputInsertPairError) -> Self { Self::InsertPair(e) }
-}
-
-/// Error inserting a key-value pair into an input map.
-#[derive(Debug)]
-pub enum InputInsertPairError {
-    /// Keys within key-value map should never be duplicated.
-    DuplicateKey(Key),
-    /// Key should contain data.
-    InvalidKeyDataEmpty(Key),
-    /// Key should not contain data.
-    InvalidKeyDataNotEmpty(Key),
-    /// Invalid hash when parsing key or value data.
-    InvalidHash(hashes::FromSliceError),
-    /// Invalid public key when parsing key data.
-    InvalidPublicKey(key::FromSliceError),
-    /// Invalid ECDSA signature when parsing value data.
-    InvalidEcdsaSignature(ecdsa::Error),
-    /// Invalid proprietary key.
-    InvalidProprietaryKey,
-    /// Key was not the correct length (got, expected).
-    KeyWrongLength(usize, usize),
-    /// Value was not the correct length (got, expected).
-    ValueWrongLength(usize, usize),
-}
-
-impl fmt::Display for InputInsertPairError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyDataEmpty(ref key) => write!(f, "key should contain data: {}", key),
-            Self::InvalidKeyDataNotEmpty(ref key) =>
-                write!(f, "key should not contain data: {}", key),
-            Self::InvalidHash(ref e) =>
-                write_err!(f, "invalid hash when parsing key or value data"; e),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::KeyWrongLength(got, expected) => {
-                write!(f, "key wrong length (got: {}, expected: {})", got, expected)
-            }
-            Self::ValueWrongLength(got, expected) => {
-                write!(f, "value wrong length (got: {}, expected: {})", got, expected)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InputInsertPairError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidHash(ref e) => Some(e),
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::DuplicateKey(_)
-            | Self::InvalidKeyDataEmpty(_)
-            | Self::InvalidKeyDataNotEmpty(_)
-            | Self::InvalidProprietaryKey
-            | Self::KeyWrongLength(..)
-            | Self::ValueWrongLength(..) => None,
         }
     }
 }
