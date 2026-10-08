@@ -555,7 +555,6 @@ impl Default for PsbtV0Decoder {
 
 /// This function is commutative `combine(this, that) = combine(that, this)`.
 pub fn combine(this: Psbt, that: Psbt) -> Result<Psbt, CombineError> { this.combine_with(that) }
-// TODO: Consider adding an iterator API that combines a list of PSBTs.
 
 /// A Partially Signed Transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
