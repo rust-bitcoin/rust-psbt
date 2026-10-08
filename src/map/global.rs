@@ -598,9 +598,6 @@ impl Decoder for GlobalDecoder {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubValue(e))
                     })?;
                     let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Bip32)?;
-                    if value.is_empty() {
-                        return Err(GlobalDecodeError::XpubValueEmpty);
-                    }
                     if value.len() < 4 {
                         return Err(GlobalDecodeError::XpubValueTooShort(value.len()));
                     }

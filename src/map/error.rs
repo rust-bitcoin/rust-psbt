@@ -25,14 +25,10 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 pub enum GlobalDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
-    /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
-    WrongVersion(u32),
     /// PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint.
     XpubValueTooShort(usize),
     /// PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints.
     XpubInvalidPath(usize),
-    /// PSBT_GLOBAL_XPUB: value must not be empty.
-    XpubValueEmpty,
     /// PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type.
     Bip32(bip32::Error),
     /// Error decoding a key from the stream.
@@ -43,6 +39,8 @@ pub enum GlobalDecodeError {
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
     MissingVersion,
+    /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
+    WrongVersion(u32),
     /// Serialized PSBT is missing the transaction version number (v2 only).
     MissingTxVersion,
     /// Serialized PSBT is missing the input count (v2 only).
@@ -70,7 +68,6 @@ impl fmt::Display for GlobalDecodeError {
             Self::XpubValueTooShort(len) => write!(f, "xpub value too short: {} bytes", len),
             Self::XpubInvalidPath(len) =>
                 write!(f, "xpub derivation path invalid at index {}", len),
-            Self::XpubValueEmpty => write!(f, "xpub value must not be empty"),
             Self::Bip32(ref e) => write_err!(f, "BIP-32"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
@@ -103,8 +100,7 @@ impl std::error::Error for GlobalDecodeError {
             Self::DuplicateKey(_)
             | Self::WrongVersion(_)
             | Self::XpubValueTooShort(_)
-            | Self::XpubInvalidPath(_)
-            | Self::XpubValueEmpty => None,
+            | Self::XpubInvalidPath(_) => None,
             Self::Bip32(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
@@ -139,7 +135,7 @@ pub enum GlobalValueDecodeError {
     Version(UnexpectedEofError),
     /// Error decoding the transaction modifiable flags value.
     ModifiableFlags(UnexpectedEofError),
-    /// Error decoding a count (VarInt) value.
+    /// Error decoding a count value.
     Count(CompactSizeDecoderError),
     /// Error decoding a transaction version value.
     TxVersion(bitcoin::transaction::VersionDecoderError),
