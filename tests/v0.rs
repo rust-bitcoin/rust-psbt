@@ -10,7 +10,9 @@
 use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer};
+use psbt_v2::{
+    Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, SignableInput, Signer,
+};
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const TEST_XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
@@ -233,7 +235,21 @@ fn sign_then_convert_preserves_signatures() {
 
     let secp = Secp256k1::<psbt_v2::bitcoin::secp256k1::All>::new();
     let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
-    let (signed, _) = Signer::new(psbt).unwrap().sign(&xpriv, &secp).unwrap();
+
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt).unwrap();
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> = (0..inputs_len)
+            .map(|x| {
+                session
+                    .assume_checked_input(x)
+                    .expect("test environment, input should be well formed")
+            })
+            .collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
 
     let parsed = round_trip_v0(&signed);
     assert_eq!(parsed.inputs[0].partial_sigs, signed.inputs[0].partial_sigs);

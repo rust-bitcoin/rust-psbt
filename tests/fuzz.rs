@@ -14,4 +14,14 @@ mod valid {
     fn psbtv2_empty_out_script() {
         fuzz("Valid: PSBTv2 with present PSBT_OUT_SCRIPT field but empty script.");
     }
+
+    #[test]
+    fn strict_signer_with_no_funding_tx_fails() {
+        fuzz("Invalid: strict signer with no prevout full tx fails to sign non-p2tr input.");
+    }
+
+    #[test]
+    fn strict_signer_with_funding_tx_succeeds() {
+        fuzz("Valid: strict signer with prevout full tx succeeds to sign non-p2tr input.");
+    }
 }

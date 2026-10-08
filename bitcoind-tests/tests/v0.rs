@@ -12,7 +12,7 @@ use psbt::bitcoin::opcodes::all::OP_CHECKMULTISIG;
 use psbt::bitcoin::secp256k1::Secp256k1;
 use psbt::bitcoin::{Address, Amount, OutPoint, PublicKey, ScriptBuf, TxOut};
 use psbt::{Creator, Extractor, Finalizer, InputBuilder, OutputBuilder, PsbtV0, Signer};
-use psbt_v2 as psbt;
+use psbt_v2::{self as psbt, SignableInput};
 
 const TEST_XPRIV: &str =
     "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
@@ -73,7 +73,16 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
+
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
@@ -149,7 +158,15 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
@@ -248,7 +265,15 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
@@ -327,7 +352,15 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
@@ -400,7 +433,15 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
@@ -498,7 +539,15 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let (signed, _) = Signer::new(psbt)?.sign(&xpriv, &secp).unwrap();
+    let inputs_len = psbt.inputs.len();
+    let mut signer = Signer::new(psbt)?;
+    let sigs = {
+        let mut session = signer.session();
+        let inputs: Vec<SignableInput> =
+            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        session.get_all(&inputs, &xpriv, &secp)
+    };
+    let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
