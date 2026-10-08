@@ -439,12 +439,11 @@ impl Decoder for PsbtV0Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Inputs(_, _, _, d) =>
-                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Inputs)?.needs_more() {
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeInputs)?.needs_more() {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Outputs(_, _, _, d) =>
-                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Outputs)?.needs_more()
-                    {
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeOutputs)?.needs_more() {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
@@ -500,7 +499,7 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Inputs(global, tx_inputs, tx_outputs, decoder) => {
-                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeV0Inputs)?;
+                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
                     for (input, (txid, vout, seq)) in inputs.iter_mut().zip(&tx_inputs) {
                         input.previous_txid = *txid;
                         input.spent_output_index = *vout;
@@ -521,7 +520,7 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Outputs(global, inputs, tx_outputs, decoder) => {
-                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeV0Outputs)?;
+                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeOutputs)?;
                     for (output, (amount, script)) in outputs.iter_mut().zip(&tx_outputs) {
                         output.amount = *amount;
                         output.script_pubkey = script.clone();
@@ -1318,62 +1317,6 @@ pub enum SigningAlgorithm {
     ///
     /// [wikipedia]: https://en.wikipedia.org/wiki/Schnorr_signature
     Schnorr,
-}
-
-/// An error occurred while decoding a v2 PSBT.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum DecodeError {
-    /// Magic bytes for a PSBT must be the ASCII for "psbt" serialized in most
-    /// significant byte order.
-    InvalidMagic,
-    /// The separator for a PSBT must be `0xff`.
-    InvalidSeparator,
-    /// Signals that there are no more key-value pairs in a key-value map.
-    NoMorePairs,
-    /// Error decoding global map.
-    Global(crate::map::error::GlobalDecodeError),
-    /// Error decoding input map.
-    Input(crate::map::error::InputDecodeError),
-    /// Error decoding output map.
-    Output(crate::map::error::OutputDecodeError),
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidMagic => f.write_str("invalid magic"),
-            Self::InvalidSeparator => f.write_str("invalid separator"),
-            Self::NoMorePairs => f.write_str("no more key-value pairs for this psbt map"),
-            Self::Global(ref e) => write_err!(f, "global map decode error"; e),
-            Self::Input(ref e) => write_err!(f, "input map decode error"; e),
-            Self::Output(ref e) => write_err!(f, "output map decode error"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for DecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidMagic | Self::InvalidSeparator | Self::NoMorePairs => None,
-            Self::Global(ref e) => Some(e),
-            Self::Input(ref e) => Some(e),
-            Self::Output(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<crate::map::error::GlobalDecodeError> for DecodeError {
-    fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::Global(e) }
-}
-
-impl From<crate::map::error::InputDecodeError> for DecodeError {
-    fn from(e: crate::map::error::InputDecodeError) -> Self { Self::Input(e) }
-}
-
-impl From<crate::map::error::OutputDecodeError> for DecodeError {
-    fn from(e: crate::map::error::OutputDecodeError) -> Self { Self::Output(e) }
 }
 
 /// If the "base64" feature is enabled we implement `Display` and `FromStr` using base64 encoding.

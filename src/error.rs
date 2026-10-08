@@ -18,22 +18,12 @@ pub enum DeserializeError {
     InvalidMagic([u8; 4]),
     /// The separator for a PSBT must be `0xff`.
     InvalidSeparator(Option<u8>),
-    /// Signals that there are no more key-value pairs in a key-value map.
-    NoMorePairs,
     /// Error decoding the global map (v0 or v2).
     DecodeGlobal(crate::map::error::GlobalDecodeError),
-    /// Error decoding an input map.
-    DecodeInput(crate::map::error::InputDecodeError),
-    /// Error decoding an output map.
-    DecodeOutput(crate::map::error::OutputDecodeError),
     /// Error decoding the input maps sequence.
     DecodeInputs(VecDecoderError<crate::map::error::InputDecodeError>),
     /// Error decoding the output maps sequence.
     DecodeOutputs(VecDecoderError<crate::map::error::OutputDecodeError>),
-    /// Error decoding the v0 input maps sequence.
-    DecodeV0Inputs(VecDecoderError<crate::map::error::InputDecodeError>),
-    /// Error decoding the v0 output maps sequence.
-    DecodeV0Outputs(VecDecoderError<crate::map::error::OutputDecodeError>),
     /// Called `end()` before decoding finished (truncated or incomplete input).
     EarlyEnd(&'static str),
 }
@@ -46,14 +36,9 @@ impl fmt::Display for DeserializeError {
                 write!(f, "invalid separator byte: 0x{:02x}", separator)
             }
             Self::InvalidSeparator(None) => write!(f, "invalid separator byte: missing"),
-            Self::NoMorePairs => f.write_str("no more key-value pairs"),
             Self::DecodeGlobal(e) => write!(f, "error decoding global map: {}", e),
-            Self::DecodeInput(e) => write!(f, "error decoding input map: {}", e),
-            Self::DecodeOutput(e) => write!(f, "error decoding output map: {}", e),
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
-            Self::DecodeV0Inputs(e) => write!(f, "error decoding v0 input maps: {}", e),
-            Self::DecodeV0Outputs(e) => write!(f, "error decoding v0 output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
         }
     }
@@ -64,16 +49,9 @@ impl std::error::Error for DeserializeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DecodeGlobal(e) => Some(e),
-            Self::DecodeInput(e) => Some(e),
-            Self::DecodeOutput(e) => Some(e),
             Self::DecodeInputs(e) => Some(e),
             Self::DecodeOutputs(e) => Some(e),
-            Self::DecodeV0Inputs(e) => Some(e),
-            Self::DecodeV0Outputs(e) => Some(e),
-            Self::InvalidMagic(_)
-            | Self::InvalidSeparator(_)
-            | Self::NoMorePairs
-            | Self::EarlyEnd(_) => None,
+            Self::InvalidMagic(_) | Self::InvalidSeparator(_) | Self::EarlyEnd(_) => None,
         }
     }
 }
