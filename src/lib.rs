@@ -39,7 +39,6 @@ mod serde_utils;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
-
 mod version;
 
 #[cfg(feature = "silent-payments")]
@@ -78,9 +77,7 @@ pub use crate::{
         global::{self, Global},
         input::{self, Input, InputBuilder},
         output::{self, Output, OutputBuilder},
-        InvalidProprietaryKeyError,
         Key,
-        KeyDecodeError,
         KeyDecoder,
         KeyEncoder,
         ProprietaryKey,
@@ -89,9 +86,8 @@ pub use crate::{
     },
     psbt::Degraded,
     psbt::{
-        combine, CombineError, DecodeError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt,
-        PsbtV0, PsbtV0Encoder, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors,
-        SigningKeys,
+        combine, CombineError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt, PsbtV0,
+        PsbtV0Encoder, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,

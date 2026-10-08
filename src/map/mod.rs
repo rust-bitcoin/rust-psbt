@@ -37,13 +37,13 @@ use core::fmt;
 
 use bitcoin::hex::DisplayHex;
 use bitcoin_consensus_encoding::{
-    ByteVecDecoder, ByteVecDecoderError, BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder,
-    CompactSizeU64Decoder, Decoder, Decoder2, DecoderStatus, Encoder2, Encoder3, ExactSizeEncoder,
-    PrefixedBytesEncoder,
+    ByteVecDecoder, BytesEncoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2,
+    DecoderStatus, Encoder2, Encoder3, ExactSizeEncoder, PrefixedBytesEncoder,
 };
 
 use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
+use crate::map::error::KeyDecodeError;
 
 /// The key of a key-value PSBT pair, in its raw byte form.
 ///
@@ -123,7 +123,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidProprietaryKeyError`] if `key` does not start with `0xFC`.
+    /// Returns `InvalidProprietaryKeyError` if `key` does not start with `0xFC`.
     fn try_from(key: Key) -> Result<Self, Self::Error> {
         if key.type_value != 0xFC {
             return Err(InvalidProprietaryKeyError);
@@ -183,33 +183,6 @@ impl<'e> Iterator for ProprietaryKeyValueIter<'e> {
         ))
     }
 }
-
-/// Error returned when decoding a raw PSBT [`Key`] fails.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeyDecodeError {
-    /// Failed to decode the key's length-prefixed byte body.
-    Bytes(ByteVecDecoderError),
-    /// The key body was empty.
-    ///
-    /// A `keylen` of zero encodes the end-of-map separator (0x00), not a [`Key`]; callers decoding
-    /// a PSBT map should check for the separator before decoding a [`Key`].
-    Empty,
-    /// Failed to decode the `keytype` compact size integer from the key body.
-    TypeValue(CompactSizeDecoderError),
-}
-
-impl fmt::Display for KeyDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Bytes(e) => write!(f, "failed to decode key body: {}", e),
-            Self::Empty => write!(f, "empty key (this is the map separator)"),
-            Self::TypeValue(e) => write!(f, "failed to decode keytype: {}", e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for KeyDecodeError {}
 
 /// Decoder for raw PSBT keys.
 #[derive(Debug, Default)]

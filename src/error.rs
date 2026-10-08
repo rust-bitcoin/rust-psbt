@@ -7,8 +7,6 @@ use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError};
 use bitcoin::{transaction, PublicKey};
 use bitcoin_consensus_encoding::VecDecoderError;
 
-use crate::map::{input, output};
-
 /// Error while deserializing a PSBT.
 ///
 /// This error is returned when deserializing a complete PSBT, not for deserializing parts
@@ -19,23 +17,13 @@ pub enum DeserializeError {
     /// Invalid magic bytes, expected the ASCII for "psbt" serialized in most significant byte order.
     InvalidMagic([u8; 4]),
     /// The separator for a PSBT must be `0xff`.
-    InvalidSeparator(Option<u8>),
-    /// Signals that there are no more key-value pairs in a key-value map.
-    NoMorePairs,
+    InvalidSeparator(u8),
     /// Error decoding the global map (v0 or v2).
     DecodeGlobal(crate::map::error::GlobalDecodeError),
-    /// Error decoding an input map.
-    DecodeInput(input::DecodeError),
-    /// Error decoding an output map.
-    DecodeOutput(output::DecodeError),
     /// Error decoding the input maps sequence.
-    DecodeInputs(VecDecoderError<input::DecodeError>),
+    DecodeInputs(VecDecoderError<crate::map::error::InputDecodeError>),
     /// Error decoding the output maps sequence.
-    DecodeOutputs(VecDecoderError<output::DecodeError>),
-    /// Error decoding the v0 input maps sequence.
-    DecodeV0Inputs(VecDecoderError<crate::map::v0::input::InputDecodeError>),
-    /// Error decoding the v0 output maps sequence.
-    DecodeV0Outputs(VecDecoderError<crate::map::v0::output::OutputDecodeError>),
+    DecodeOutputs(VecDecoderError<crate::map::error::OutputDecodeError>),
     /// Called `end()` before decoding finished (truncated or incomplete input).
     EarlyEnd(&'static str),
 }
@@ -44,18 +32,12 @@ impl fmt::Display for DeserializeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMagic(ref magic) => write!(f, "invalid magic bytes: {:?}", magic),
-            Self::InvalidSeparator(Some(separator)) => {
+            Self::InvalidSeparator(separator) => {
                 write!(f, "invalid separator byte: 0x{:02x}", separator)
             }
-            Self::InvalidSeparator(None) => write!(f, "invalid separator byte: missing"),
-            Self::NoMorePairs => f.write_str("no more key-value pairs"),
             Self::DecodeGlobal(e) => write!(f, "error decoding global map: {}", e),
-            Self::DecodeInput(e) => write!(f, "error decoding input map: {}", e),
-            Self::DecodeOutput(e) => write!(f, "error decoding output map: {}", e),
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
-            Self::DecodeV0Inputs(e) => write!(f, "error decoding v0 input maps: {}", e),
-            Self::DecodeV0Outputs(e) => write!(f, "error decoding v0 output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
         }
     }
@@ -66,30 +48,11 @@ impl std::error::Error for DeserializeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DecodeGlobal(e) => Some(e),
-            Self::DecodeInput(e) => Some(e),
-            Self::DecodeOutput(e) => Some(e),
             Self::DecodeInputs(e) => Some(e),
             Self::DecodeOutputs(e) => Some(e),
-            Self::DecodeV0Inputs(e) => Some(e),
-            Self::DecodeV0Outputs(e) => Some(e),
-            Self::InvalidMagic(_)
-            | Self::InvalidSeparator(_)
-            | Self::NoMorePairs
-            | Self::EarlyEnd(_) => None,
+            Self::InvalidMagic(_) | Self::InvalidSeparator(_) | Self::EarlyEnd(_) => None,
         }
     }
-}
-
-impl From<crate::map::error::GlobalDecodeError> for DeserializeError {
-    fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::DecodeGlobal(e) }
-}
-
-impl From<input::DecodeError> for DeserializeError {
-    fn from(e: input::DecodeError) -> Self { Self::DecodeInput(e) }
-}
-
-impl From<output::DecodeError> for DeserializeError {
-    fn from(e: output::DecodeError) -> Self { Self::DecodeOutput(e) }
 }
 
 /// Input index out of bounds (actual index, maximum index allowed).

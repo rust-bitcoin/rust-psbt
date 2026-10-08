@@ -280,7 +280,11 @@ impl Decoder for PsbtV2Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 DecoderStage::Global(decoder) =>
-                    if decoder.push_bytes(bytes)?.needs_more() {
+                    if decoder
+                        .push_bytes(bytes)
+                        .map_err(DeserializeError::DecodeGlobal)?
+                        .needs_more()
+                    {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 DecoderStage::Inputs(_, decoder) =>
@@ -318,12 +322,12 @@ impl Decoder for PsbtV2Decoder {
                     let sep = bytes[0];
                     *bytes = &bytes[1..];
                     if sep != PSBT_SEPARATOR {
-                        return Err(DeserializeError::InvalidSeparator(Some(sep)));
+                        return Err(DeserializeError::InvalidSeparator(sep));
                     }
                     self.stage = DecoderStage::Global(global::GlobalDecoder::default());
                 }
                 DecoderStage::Global(decoder) => {
-                    let global = decoder.end()?;
+                    let global = decoder.end().map_err(DeserializeError::DecodeGlobal)?;
                     let input_count = global.input_count;
                     self.stage =
                         DecoderStage::Inputs(global, input::InputsDecoder::new(input_count));
@@ -427,16 +431,19 @@ impl Decoder for PsbtV0Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Global(decoder) =>
-                    if decoder.push_bytes(bytes)?.needs_more() {
+                    if decoder
+                        .push_bytes(bytes)
+                        .map_err(DeserializeError::DecodeGlobal)?
+                        .needs_more()
+                    {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Inputs(_, _, _, d) =>
-                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Inputs)?.needs_more() {
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeInputs)?.needs_more() {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Outputs(_, _, _, d) =>
-                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeV0Outputs)?.needs_more()
-                    {
+                    if d.push_bytes(bytes).map_err(DeserializeError::DecodeOutputs)?.needs_more() {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
@@ -456,13 +463,14 @@ impl Decoder for PsbtV0Decoder {
                     let sep = bytes[0];
                     *bytes = &bytes[1..];
                     if sep != PSBT_SEPARATOR {
-                        return Err(DeserializeError::InvalidSeparator(Some(sep)));
+                        return Err(DeserializeError::InvalidSeparator(sep));
                     }
                     self.stage =
                         V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());
                 }
                 V0DecoderStage::Global(decoder) => {
-                    let (global, tx_inputs, tx_outputs) = decoder.end()?;
+                    let (global, tx_inputs, tx_outputs) =
+                        decoder.end().map_err(DeserializeError::DecodeGlobal)?;
                     let in_count = tx_inputs.len();
                     let out_count = tx_outputs.len();
                     if in_count == 0 {
@@ -491,7 +499,7 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Inputs(global, tx_inputs, tx_outputs, decoder) => {
-                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeV0Inputs)?;
+                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
                     for (input, (txid, vout, seq)) in inputs.iter_mut().zip(&tx_inputs) {
                         input.previous_txid = *txid;
                         input.spent_output_index = *vout;
@@ -512,7 +520,7 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Outputs(global, inputs, tx_outputs, decoder) => {
-                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeV0Outputs)?;
+                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeOutputs)?;
                     for (output, (amount, script)) in outputs.iter_mut().zip(&tx_outputs) {
                         output.amount = *amount;
                         output.script_pubkey = script.clone();
@@ -1310,62 +1318,6 @@ pub enum SigningAlgorithm {
     Schnorr,
 }
 
-/// An error occurred while decoding a v2 PSBT.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum DecodeError {
-    /// Magic bytes for a PSBT must be the ASCII for "psbt" serialized in most
-    /// significant byte order.
-    InvalidMagic,
-    /// The separator for a PSBT must be `0xff`.
-    InvalidSeparator,
-    /// Signals that there are no more key-value pairs in a key-value map.
-    NoMorePairs,
-    /// Error decoding global map.
-    Global(global::GlobalDecodeError),
-    /// Error decoding input map.
-    Input(input::DecodeError),
-    /// Error decoding output map.
-    Output(output::DecodeError),
-}
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidMagic => f.write_str("invalid magic"),
-            Self::InvalidSeparator => f.write_str("invalid separator"),
-            Self::NoMorePairs => f.write_str("no more key-value pairs for this psbt map"),
-            Self::Global(ref e) => write_err!(f, "global map decode error"; e),
-            Self::Input(ref e) => write_err!(f, "input map decode error"; e),
-            Self::Output(ref e) => write_err!(f, "output map decode error"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for DecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidMagic | Self::InvalidSeparator | Self::NoMorePairs => None,
-            Self::Global(ref e) => Some(e),
-            Self::Input(ref e) => Some(e),
-            Self::Output(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<global::GlobalDecodeError> for DecodeError {
-    fn from(e: global::GlobalDecodeError) -> Self { Self::Global(e) }
-}
-
-impl From<input::DecodeError> for DecodeError {
-    fn from(e: input::DecodeError) -> Self { Self::Input(e) }
-}
-
-impl From<output::DecodeError> for DecodeError {
-    fn from(e: output::DecodeError) -> Self { Self::Output(e) }
-}
-
 /// If the "base64" feature is enabled we implement `Display` and `FromStr` using base64 encoding.
 #[cfg(feature = "base64")]
 mod display_from_str {
@@ -2045,7 +1997,8 @@ mod tests {
         let mut slice = &output_encoded[..];
 
         loop {
-            use crate::map::{KeyDecodeError, KeyDecoder};
+            use crate::map::error::KeyDecodeError;
+            use crate::map::KeyDecoder;
 
             // Decode key.
             let mut key_decoder = KeyDecoder::default();
