@@ -280,7 +280,11 @@ impl Decoder for PsbtV2Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 DecoderStage::Global(decoder) =>
-                    if decoder.push_bytes(bytes)?.needs_more() {
+                    if decoder
+                        .push_bytes(bytes)
+                        .map_err(DeserializeError::DecodeGlobal)?
+                        .needs_more()
+                    {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 DecoderStage::Inputs(_, decoder) =>
@@ -323,7 +327,7 @@ impl Decoder for PsbtV2Decoder {
                     self.stage = DecoderStage::Global(global::GlobalDecoder::default());
                 }
                 DecoderStage::Global(decoder) => {
-                    let global = decoder.end()?;
+                    let global = decoder.end().map_err(DeserializeError::DecodeGlobal)?;
                     let input_count = global.input_count;
                     self.stage =
                         DecoderStage::Inputs(global, input::InputsDecoder::new(input_count));
@@ -427,7 +431,11 @@ impl Decoder for PsbtV0Decoder {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Global(decoder) =>
-                    if decoder.push_bytes(bytes)?.needs_more() {
+                    if decoder
+                        .push_bytes(bytes)
+                        .map_err(DeserializeError::DecodeGlobal)?
+                        .needs_more()
+                    {
                         return Ok(DecoderStatus::NeedsMore);
                     },
                 V0DecoderStage::Inputs(_, _, _, d) =>
@@ -462,7 +470,8 @@ impl Decoder for PsbtV0Decoder {
                         V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());
                 }
                 V0DecoderStage::Global(decoder) => {
-                    let (global, tx_inputs, tx_outputs) = decoder.end()?;
+                    let (global, tx_inputs, tx_outputs) =
+                        decoder.end().map_err(DeserializeError::DecodeGlobal)?;
                     let in_count = tx_inputs.len();
                     let out_count = tx_outputs.len();
                     if in_count == 0 {

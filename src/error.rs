@@ -78,18 +78,6 @@ impl std::error::Error for DeserializeError {
     }
 }
 
-impl From<crate::map::error::GlobalDecodeError> for DeserializeError {
-    fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::DecodeGlobal(e) }
-}
-
-impl From<crate::map::error::InputDecodeError> for DeserializeError {
-    fn from(e: crate::map::error::InputDecodeError) -> Self { Self::DecodeInput(e) }
-}
-
-impl From<crate::map::error::OutputDecodeError> for DeserializeError {
-    fn from(e: crate::map::error::OutputDecodeError) -> Self { Self::DecodeOutput(e) }
-}
-
 /// Input index out of bounds (actual index, maximum index allowed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
