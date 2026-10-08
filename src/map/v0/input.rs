@@ -220,7 +220,7 @@ impl<'e> InputMapEncoder<'e> {
 
     fn ripemd160_or_next(input: &'e Input) -> State<'e> {
         if !input.ripemd160_preimages.is_empty() {
-            State::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new_bytes(
+            State::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new(
                 input.ripemd160_preimages.iter(),
             )))
         } else {
@@ -230,9 +230,7 @@ impl<'e> InputMapEncoder<'e> {
 
     fn sha256_or_next(input: &'e Input) -> State<'e> {
         if !input.sha256_preimages.is_empty() {
-            State::Sha256Preimages(IterEncoder::new(Sha256Iter::new_bytes(
-                input.sha256_preimages.iter(),
-            )))
+            State::Sha256Preimages(IterEncoder::new(Sha256Iter::new(input.sha256_preimages.iter())))
         } else {
             Self::hash160_or_next(input)
         }
@@ -240,7 +238,7 @@ impl<'e> InputMapEncoder<'e> {
 
     fn hash160_or_next(input: &'e Input) -> State<'e> {
         if !input.hash160_preimages.is_empty() {
-            State::Hash160Preimages(IterEncoder::new(Hash160Iter::new_bytes(
+            State::Hash160Preimages(IterEncoder::new(Hash160Iter::new(
                 input.hash160_preimages.iter(),
             )))
         } else {
@@ -250,7 +248,7 @@ impl<'e> InputMapEncoder<'e> {
 
     fn hash256_or_next(input: &'e Input) -> State<'e> {
         if !input.hash256_preimages.is_empty() {
-            State::Hash256Preimages(IterEncoder::new(Hash256Iter::new_bytes(
+            State::Hash256Preimages(IterEncoder::new(Hash256Iter::new(
                 input.hash256_preimages.iter(),
             )))
         } else {

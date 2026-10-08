@@ -1863,25 +1863,25 @@ impl<'e> InputMapEncoder<'e> {
     }
 
     fn ripemd160_state(&self) -> EncoderState<'e> {
-        EncoderState::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new_bytes(
+        EncoderState::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new(
             self.input.ripemd160_preimages.iter(),
         )))
     }
 
     fn sha256_state(&self) -> EncoderState<'e> {
-        EncoderState::Sha256Preimages(IterEncoder::new(Sha256Iter::new_bytes(
+        EncoderState::Sha256Preimages(IterEncoder::new(Sha256Iter::new(
             self.input.sha256_preimages.iter(),
         )))
     }
 
     fn hash160_state(&self) -> EncoderState<'e> {
-        EncoderState::Hash160Preimages(IterEncoder::new(Hash160Iter::new_bytes(
+        EncoderState::Hash160Preimages(IterEncoder::new(Hash160Iter::new(
             self.input.hash160_preimages.iter(),
         )))
     }
 
     fn hash256_state(&self) -> EncoderState<'e> {
-        EncoderState::Hash256Preimages(IterEncoder::new(Hash256Iter::new_bytes(
+        EncoderState::Hash256Preimages(IterEncoder::new(Hash256Iter::new(
             self.input.hash256_preimages.iter(),
         )))
     }

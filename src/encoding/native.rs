@@ -24,7 +24,9 @@ use bitcoin_consensus_encoding::{
     Encoder2, Encoder4, EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
-use super::{BytesValue, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder};
+use super::{
+    BytesKeyValueIter, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder,
+};
 #[cfg(feature = "silent-payments")]
 use crate::consts::{
     PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE,
@@ -258,22 +260,22 @@ pub(crate) type PreviousTxidPair<'e> =
 impl_hash_encoder!(ripemd160::Hash, 20);
 
 pub(crate) type Ripemd160Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
 
 impl_hash_encoder!(hash160::Hash, 20);
 
 pub(crate) type Hash160Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
 
 impl_hash_encoder!(sha256::Hash, 32);
 
 pub(crate) type Sha256Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
 
 impl_hash_encoder!(sha256d::Hash, 32);
 
 pub(crate) type Hash256Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
 
 impl_hash_encoder!(TapLeafHash, 32);
 impl_hash_encoder!(TapNodeHash, 32);

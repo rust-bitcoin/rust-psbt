@@ -11,7 +11,6 @@ pub mod native;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use bitcoin_consensus_encoding::{
     BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, DecodeError,
@@ -152,41 +151,25 @@ impl<D: Decoder + Default> Decoder for ValueDecoder<D> {
     fn read_limit(&self) -> usize { self.0.read_limit() }
 }
 
-/// Iterator yielding [`PairEncoder`]s for a map, prefixing each key's encoder
-/// with the constant compact-size type value `TYPE`.
+/// Iterator yielding [`KeyValueEncoder`]s for a map, prefixing each key's
+/// encoder with the constant compact-size type value `TYPE`.
 ///
 /// Works with any iterator of borrowed `(key, value)` pairs (e.g.
 /// `btree_map::Iter`); the yielded items implement [`ExactSizeEncoder`] when
 /// both key and value encoders do.
 ///
-/// The third parameter selects how values are encoded:
-/// - [`PsbtValue`] (the default): `V: PsbtEncode`, encoded via `psbt_encoder`.
-/// - [`BytesValue`]: `V: AsRef<[u8]>`, encoded as raw unprefixed bytes via
-///   [`BytesEncoder::without_length_prefix`]. Used for `Vec<u8>` values (e.g.
-///   preimage maps) without requiring an `impl PsbtEncode for Vec<u8>`.
-pub(crate) struct KeyValueIter<I, const TYPE: u64, M = PsbtValue> {
+/// For maps whose values are raw byte slices (`Vec<u8>` preimage maps), use
+/// [`BytesKeyValueIter`] instead.
+pub(crate) struct KeyValueIter<I, const TYPE: u64> {
     iter: I,
-    _marker: PhantomData<M>,
 }
 
-/// Value-encoding mode: encode `V` via its [`PsbtEncode`] impl.
-pub(crate) struct PsbtValue;
-
-/// Value-encoding mode: encode `V: AsRef<[u8]>` as raw unprefixed bytes.
-pub(crate) struct BytesValue;
-
-impl<I, const TYPE: u64> KeyValueIter<I, TYPE, PsbtValue> {
+impl<I, const TYPE: u64> KeyValueIter<I, TYPE> {
     /// Constructs a pair iterator from the given underlying iterator.
-    pub(crate) fn new(iter: I) -> Self { Self { iter, _marker: PhantomData } }
+    pub(crate) fn new(iter: I) -> Self { Self { iter } }
 }
 
-impl<I, const TYPE: u64> KeyValueIter<I, TYPE, BytesValue> {
-    /// Constructs a pair iterator that encodes each value as raw unprefixed
-    /// bytes (no length prefix; the pair framing supplies the length).
-    pub(crate) fn new_bytes(iter: I) -> Self { Self { iter, _marker: PhantomData } }
-}
-
-impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE, PsbtValue>
+impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE>
 where
     I: Iterator<Item = (&'e K, &'e V)>,
     K: PsbtEncode + 'e,
@@ -205,7 +188,21 @@ where
     }
 }
 
-impl<'e, K, V, I, const TYPE: u64> Iterator for KeyValueIter<I, TYPE, BytesValue>
+/// Iterator yielding [`KeyValueEncoder`]s for a map whose values are raw
+/// bytes (e.g. preimage maps).
+///
+/// Like [`KeyValueIter`] but encodes each value as raw unprefixed bytes via
+/// [`BytesEncoder::without_length_prefix`], avoiding the need for `V: PsbtEncode`.
+pub(crate) struct BytesKeyValueIter<I, const TYPE: u64> {
+    iter: I,
+}
+
+impl<I, const TYPE: u64> BytesKeyValueIter<I, TYPE> {
+    /// Constructs a byte-valued pair iterator from the given underlying iterator.
+    pub(crate) fn new(iter: I) -> Self { Self { iter } }
+}
+
+impl<'e, K, V, I, const TYPE: u64> Iterator for BytesKeyValueIter<I, TYPE>
 where
     I: Iterator<Item = (&'e K, &'e V)>,
     K: PsbtEncode + 'e,
@@ -390,12 +387,12 @@ mod tests {
     }
 
     #[test]
-    fn key_value_iter_bytes_value_yields_items_then_none() {
+    fn bytes_key_value_iter_yields_items_then_none() {
         let mut map = alloc::collections::BTreeMap::new();
         map.insert(Sequence::ZERO, alloc::vec![0xaa, 0xbb]);
         map.insert(Sequence::MAX, alloc::vec![0xcc]);
 
-        let mut iter = KeyValueIter::<_, 0x02, BytesValue>::new_bytes(map.iter());
+        let mut iter = BytesKeyValueIter::<_, 0x02>::new(map.iter());
 
         // <keylen=5> <type=0x02> <sequence ZERO> <vallen=2> <value>
         let mut first = iter.next().expect("yields first pair");
