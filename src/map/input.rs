@@ -460,10 +460,8 @@ impl Input {
         v2_combine_option!(min_height, self, other);
         v2_combine_option!(non_witness_utxo, self, other);
 
-        // TODO: Copied from v0, confirm this is correct.
         if let (&None, Some(witness_utxo)) = (&self.witness_utxo, other.witness_utxo) {
             self.witness_utxo = Some(witness_utxo);
-            self.non_witness_utxo = None; // Clear out any non-witness UTXO when we set a witness one
         }
 
         v2_combine_map!(partial_sigs, self, other);
@@ -2521,6 +2519,42 @@ mod test {
         assert!(decoder.push_bytes(&mut remaining).unwrap().is_ready());
         let decoded = decoder.end().expect("matching txid must decode");
         assert_eq!(decoded.previous_txid, txid);
+    }
+
+    #[test]
+    fn combine_keeps_non_witness_utxo_when_witness_utxo_added() {
+        // BIP 174 permits both UTXO fields on one input and requires a combiner
+        // to retain all key-value pairs.
+        // Matches Bitcoin Core's PSBTInput::Merge, which never clears
+        // non_witness_utxo when filling witness_utxo.
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::locktime::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let txid = funding_tx.compute_txid();
+        let out_point = OutPoint { txid, vout: 0 };
+
+        let mut a = Input::new(&out_point);
+        a.non_witness_utxo = Some(funding_tx);
+
+        let mut b = Input::new(&out_point);
+        b.witness_utxo = Some(TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        });
+
+        a.combine(b).expect("combine of same outpoint must succeed");
+
+        assert!(a.witness_utxo.is_some(), "witness_utxo must be filled from other");
+        assert!(
+            a.non_witness_utxo.is_some(),
+            "combiner must retain non_witness_utxo (BIP 174); without it amounts cannot be verified for non-p2tr scripts"
+        );
     }
 
     #[test]
