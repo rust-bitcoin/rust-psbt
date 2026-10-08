@@ -25,8 +25,6 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 pub enum GlobalDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
-    /// Value was not the correct length (got, want).
-    ValueWrongLength(usize, usize),
     /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
     WrongVersion(u32),
     /// PSBT_GLOBAL_XPUB: Must contain 4 bytes for the xpub fingerprint.
@@ -73,8 +71,6 @@ impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::ValueWrongLength(got, expected) =>
-                write!(f, "value length {} (expected {})", got, expected),
             Self::WrongVersion(v) =>
                 write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
             Self::XpubInvalidFingerprint => write!(f, "xpub must contain a fingerprint"),
@@ -114,7 +110,6 @@ impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DuplicateKey(_)
-            | Self::ValueWrongLength(..)
             | Self::WrongVersion(_)
             | Self::XpubInvalidFingerprint
             | Self::XpubValueTooShort(_)
@@ -143,6 +138,13 @@ impl std::error::Error for GlobalDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GlobalValueDecodeError {
+    /// Value length does not match the expected fixed size for this key type (got, expected).
+    WrongLength {
+        /// The decoded value length.
+        got: usize,
+        /// The expected value length.
+        expected: usize,
+    },
     /// Error decoding the value's length prefix.
     LengthPrefix(CompactSizeDecoderError),
     /// Error decoding the PSBT version value.
@@ -172,6 +174,8 @@ pub enum GlobalValueDecodeError {
 impl fmt::Display for GlobalValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::WrongLength { got, expected } =>
+                write!(f, "value length {} (expected {})", got, expected),
             Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
             Self::Version(ref e) => write_err!(f, "error decoding PSBT version"; e),
             Self::ModifiableFlags(ref e) => write_err!(f, "error decoding modifiable flags"; e),
@@ -193,6 +197,7 @@ impl fmt::Display for GlobalValueDecodeError {
 impl std::error::Error for GlobalValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::WrongLength { .. } => None,
             Self::LengthPrefix(ref e) => Some(e),
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),

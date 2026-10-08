@@ -391,7 +391,12 @@ impl Decoder for GlobalMapDecoder {
                         },
                     })?;
                     if value_len != 4 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 4));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 4,
+                            },
+                        ));
                     }
                     if version != V0 {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
@@ -494,7 +499,12 @@ impl Decoder for GlobalMapDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
                     })?;
                     if value_len != 33 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 33));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 33,
+                            },
+                        ));
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key)
                         .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
@@ -515,7 +525,12 @@ impl Decoder for GlobalMapDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
                     })?;
                     if value_len != 64 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 64));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 64,
+                            },
+                        ));
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key)
                         .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
@@ -610,7 +625,13 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::ValueWrongLength(5, 4)));
+        assert!(matches!(
+            err,
+            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
+                got: 5,
+                expected: 4,
+            }),
+        ));
     }
 
     #[test]

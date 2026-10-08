@@ -511,7 +511,12 @@ impl Decoder for GlobalDecoder {
                         },
                     })?;
                     if value_len != 4 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 4));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 4,
+                            },
+                        ));
                     }
                     if version != V2 {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
@@ -658,7 +663,12 @@ impl Decoder for GlobalDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
                     })?;
                     if value_len != 33 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 33));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 33,
+                            },
+                        ));
                     }
                     if key.key.is_empty() {
                         return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
@@ -668,8 +678,12 @@ impl Decoder for GlobalDecoder {
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
-                    let share = CompressedPublicKey::from_slice(&bytes)
-                        .map_err(|_| GlobalDecodeError::ValueWrongLength(bytes.len(), 33))?;
+                    let share = CompressedPublicKey::from_slice(&bytes).map_err(|_| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
+                            got: bytes.len(),
+                            expected: 33,
+                        })
+                    })?;
                     match self.sp_ecdh_shares.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(share);
@@ -689,7 +703,12 @@ impl Decoder for GlobalDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
                     })?;
                     if value_len != 64 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 64));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 64,
+                            },
+                        ));
                     }
                     if key.key.is_empty() {
                         return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
@@ -699,8 +718,12 @@ impl Decoder for GlobalDecoder {
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
-                    let proof = DleqProof::try_from(bytes.as_slice())
-                        .map_err(|_| GlobalDecodeError::ValueWrongLength(bytes.len(), 64))?;
+                    let proof = DleqProof::try_from(bytes.as_slice()).map_err(|_| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
+                            got: bytes.len(),
+                            expected: 64,
+                        })
+                    })?;
                     match self.sp_dleq_proofs.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(proof);
