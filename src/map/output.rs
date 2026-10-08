@@ -317,10 +317,12 @@ impl Decoder for OutputDecoder {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
-let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
+                        let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
                         #[cfg(not(feature = "silent-payments"))]
-                        let script_pubkey =
-                            self.script_pubkey.take().ok_or(OutputDecodeError::MissingScriptPubkey)?;
+                        let script_pubkey = self
+                            .script_pubkey
+                            .take()
+                            .ok_or(OutputDecodeError::MissingScriptPubkey)?;
                         #[cfg(feature = "silent-payments")]
                         let script_pubkey = match self.script_pubkey.take() {
                             Some(s) => s,

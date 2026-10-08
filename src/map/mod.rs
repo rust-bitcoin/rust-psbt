@@ -123,7 +123,7 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidProprietaryKeyError`] if `key` does not start with `0xFC`.
+    /// Returns `InvalidProprietaryKeyError` if `key` does not start with `0xFC`.
     fn try_from(key: Key) -> Result<Self, Self::Error> {
         if key.type_value != 0xFC {
             return Err(InvalidProprietaryKeyError);
