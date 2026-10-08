@@ -322,7 +322,7 @@ impl Decoder for PsbtV2Decoder {
                     let sep = bytes[0];
                     *bytes = &bytes[1..];
                     if sep != PSBT_SEPARATOR {
-                        return Err(DeserializeError::InvalidSeparator(Some(sep)));
+                        return Err(DeserializeError::InvalidSeparator(sep));
                     }
                     self.stage = DecoderStage::Global(global::GlobalDecoder::default());
                 }
@@ -463,7 +463,7 @@ impl Decoder for PsbtV0Decoder {
                     let sep = bytes[0];
                     *bytes = &bytes[1..];
                     if sep != PSBT_SEPARATOR {
-                        return Err(DeserializeError::InvalidSeparator(Some(sep)));
+                        return Err(DeserializeError::InvalidSeparator(sep));
                     }
                     self.stage =
                         V0DecoderStage::Global(crate::map::v0::GlobalMapDecoder::default());

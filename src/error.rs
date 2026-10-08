@@ -17,7 +17,7 @@ pub enum DeserializeError {
     /// Invalid magic bytes, expected the ASCII for "psbt" serialized in most significant byte order.
     InvalidMagic([u8; 4]),
     /// The separator for a PSBT must be `0xff`.
-    InvalidSeparator(Option<u8>),
+    InvalidSeparator(u8),
     /// Error decoding the global map (v0 or v2).
     DecodeGlobal(crate::map::error::GlobalDecodeError),
     /// Error decoding the input maps sequence.
@@ -32,10 +32,9 @@ impl fmt::Display for DeserializeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMagic(ref magic) => write!(f, "invalid magic bytes: {:?}", magic),
-            Self::InvalidSeparator(Some(separator)) => {
+            Self::InvalidSeparator(separator) => {
                 write!(f, "invalid separator byte: 0x{:02x}", separator)
             }
-            Self::InvalidSeparator(None) => write!(f, "invalid separator byte: missing"),
             Self::DecodeGlobal(e) => write!(f, "error decoding global map: {}", e),
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
