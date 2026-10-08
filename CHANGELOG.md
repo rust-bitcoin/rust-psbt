@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fix `Psbt::deserialize` rejecting PSBTv2 outputs whose `PSBT_OUT_SCRIPT` value is empty (BIP-370 requires the key's
+  presence, not a non-empty scriptPubKey). Remove `output::ValidationError::MissingScriptPubkey`; missing
+  `PSBT_OUT_SCRIPT` is now detected during decoding via `output::DecodeError::MissingScriptPubkey`.
+
 - Handle multi-byte `keytype`s [#94](https://github.com/rust-bitcoin/rust-psbt/pull/94).
 - Bump miniscript to `v13.0.0`.
 - Insource psbt related changes from `miniscript@13.0.0` [#163](https://git.rust-bitcoin.org/rust-bitcoin/rust-psbt/pulls/163): 

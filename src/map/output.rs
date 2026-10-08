@@ -108,25 +108,14 @@ impl Output {
         TxOut { value: self.amount, script_pubkey: self.script_pubkey.clone() }
     }
 
-    /// Checks this output against the BIP-370 and BIP-375 rules for an output map.
+    /// Checks this output against the BIP-375 rules for an output map.
     ///
-    /// BIP-370 requires `PSBT_OUT_SCRIPT`. BIP-375 relaxes that for a silent payment
-    /// output whose script has not been derived yet, where `PSBT_OUT_SP_V0_INFO` stands
-    /// in for it, and requires the info whenever a label is present.
+    /// BIP-370 requires `PSBT_OUT_SCRIPT` to be present in every output map; its absence is
+    /// caught while decoding. BIP-375 requires the `sp_v0_info` whenever a label is present.
     ///
     /// This is the single definition of that rule. Decoding applies it to every output it
     /// parses, and the Constructor role applies it to every output it is handed.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        #[cfg(not(feature = "silent-payments"))]
-        if self.script_pubkey.is_empty() {
-            return Err(ValidationError::MissingScriptPubkey);
-        }
-
-        #[cfg(feature = "silent-payments")]
-        if self.script_pubkey.is_empty() && self.sp_v0_info.is_none() {
-            return Err(ValidationError::MissingScriptPubkey);
-        }
-
         #[cfg(feature = "silent-payments")]
         if self.sp_v0_label.is_some() && self.sp_v0_info.is_none() {
             return Err(ValidationError::LabelWithoutInfo);
@@ -332,7 +321,15 @@ impl Decoder for OutputDecoder {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
                         let amount = self.amount.take().ok_or(DecodeError::MissingValue)?;
-                        let script_pubkey = self.script_pubkey.take().unwrap_or_default();
+                        #[cfg(not(feature = "silent-payments"))]
+                        let script_pubkey =
+                            self.script_pubkey.take().ok_or(DecodeError::MissingScriptPubkey)?;
+                        #[cfg(feature = "silent-payments")]
+                        let script_pubkey = match self.script_pubkey.take() {
+                            Some(s) => s,
+                            None if self.sp_v0_info.is_some() => ScriptBuf::new(),
+                            None => return Err(DecodeError::MissingScriptPubkey),
+                        };
                         self.stage = DecoderStage::Done(Output {
                             amount,
                             script_pubkey,
@@ -966,8 +963,6 @@ impl OutputBuilder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValidationError {
-    /// Output is missing a script pubkey.
-    MissingScriptPubkey,
     /// Output has a `sp_v0_label` without a `sp_v0_info`.
     LabelWithoutInfo,
 }
@@ -975,7 +970,6 @@ pub enum ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingScriptPubkey => write!(f, "output is missing a script pubkey"),
             Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
         }
     }
@@ -1123,7 +1117,6 @@ impl From<InsertPairError> for DecodeError {
 impl From<ValidationError> for DecodeError {
     fn from(e: ValidationError) -> Self {
         match e {
-            ValidationError::MissingScriptPubkey => Self::MissingScriptPubkey,
             ValidationError::LabelWithoutInfo => Self::LabelWithoutInfo,
         }
     }
