@@ -37,6 +37,7 @@ mod serde_utils;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
+mod v0;
 mod version;
 
 #[cfg(feature = "std")]
@@ -79,16 +80,16 @@ pub use crate::{
         ProprietaryKeyEncoder,
         ProprietaryType,
     },
-    psbt::Degraded,
     psbt::{
-        combine, CombineError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt, PsbtV0,
-        PsbtV0Encoder, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
+        combine, CombineError, GetKey, GetKeyError, KeyRequest, OutputType, Psbt, PsbtV2Decoder,
+        PsbtV2Encoder, SigningAlgorithm, SigningErrors, SigningKeys,
     },
     roles::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
         InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Signer, Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
+    v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
     version::{UnsupportedVersionError, Version},
 };
 

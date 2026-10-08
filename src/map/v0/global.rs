@@ -54,11 +54,11 @@ enum State<'e> {
 }
 
 impl<'e> GlobalMapEncoder<'e> {
-    pub(crate) fn new(v0: &'e crate::psbt::PsbtV0) -> Self {
+    pub(crate) fn new(v0: &'e crate::v0::PsbtV0) -> Self {
         Self { psbt: &v0.psbt, state: Self::unsigned_tx(v0) }
     }
 
-    fn unsigned_tx(v0: &'e crate::psbt::PsbtV0) -> State<'e> {
+    fn unsigned_tx(v0: &'e crate::v0::PsbtV0) -> State<'e> {
         State::UnsignedTx(KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_UNSIGNED_TX),
             UnsignedTxEncoder::from_psbt(v0),

@@ -109,7 +109,7 @@ bitcoin_consensus_encoding::encoder_newtype_exact! {
 }
 
 impl<'e> UnsignedTxEncoder<'e> {
-    pub(crate) fn from_psbt(v0: &'e crate::psbt::PsbtV0) -> Self {
+    pub(crate) fn from_psbt(v0: &'e crate::v0::PsbtV0) -> Self {
         UnsignedTxEncoder::new(Encoder4::new(
             v0.psbt.global.tx_version.psbt_encoder(),
             Inputs::new(
