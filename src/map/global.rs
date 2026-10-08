@@ -34,6 +34,7 @@ use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
+use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
 use crate::{InconsistentKeySourcesError, V2};
 
@@ -937,10 +938,6 @@ impl PsbtEncode for Global {
         GlobalMapEncoder::new(self)
     }
 }
-
-/// Error decoding a global map.
-pub use crate::map::error::GlobalDecodeError;
-pub(crate) use crate::map::error::GlobalValueDecodeError;
 
 /// Error combining two global maps.
 #[derive(Debug, Clone, PartialEq, Eq)]

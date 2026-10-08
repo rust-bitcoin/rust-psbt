@@ -1106,7 +1106,7 @@ mod tests {
         // A decoded Output cannot tell a missing PSBT_OUT_SCRIPT from an empty one, so
         // inspect the encoded key-value pairs directly.
         fn has_script_pair(output: &Output) -> bool {
-            use crate::KeyDecodeError;
+            use crate::map::error::KeyDecodeError;
 
             let encoded = encode_to_vec(output);
             let mut slice = &encoded[..];

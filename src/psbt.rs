@@ -1323,7 +1323,7 @@ pub enum DecodeError {
     /// Signals that there are no more key-value pairs in a key-value map.
     NoMorePairs,
     /// Error decoding global map.
-    Global(global::GlobalDecodeError),
+    Global(crate::map::error::GlobalDecodeError),
     /// Error decoding input map.
     Input(crate::map::error::InputDecodeError),
     /// Error decoding output map.
@@ -1355,8 +1355,8 @@ impl std::error::Error for DecodeError {
     }
 }
 
-impl From<global::GlobalDecodeError> for DecodeError {
-    fn from(e: global::GlobalDecodeError) -> Self { Self::Global(e) }
+impl From<crate::map::error::GlobalDecodeError> for DecodeError {
+    fn from(e: crate::map::error::GlobalDecodeError) -> Self { Self::Global(e) }
 }
 
 impl From<crate::map::error::InputDecodeError> for DecodeError {
@@ -2046,7 +2046,8 @@ mod tests {
         let mut slice = &output_encoded[..];
 
         loop {
-            use crate::map::{KeyDecodeError, KeyDecoder};
+            use crate::map::error::KeyDecodeError;
+            use crate::map::KeyDecoder;
 
             // Decode key.
             let mut key_decoder = KeyDecoder::default();

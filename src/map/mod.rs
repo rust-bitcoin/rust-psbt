@@ -43,6 +43,7 @@ use bitcoin_consensus_encoding::{
 
 use crate::consts::PSBT_GLOBAL_PROPRIETARY;
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
+use crate::map::error::KeyDecodeError;
 
 /// The key of a key-value PSBT pair, in its raw byte form.
 ///
@@ -182,8 +183,6 @@ impl<'e> Iterator for ProprietaryKeyValueIter<'e> {
         ))
     }
 }
-
-pub use crate::map::error::KeyDecodeError;
 
 /// Decoder for raw PSBT keys.
 #[derive(Debug, Default)]
