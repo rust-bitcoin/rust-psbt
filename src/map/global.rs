@@ -32,7 +32,7 @@ use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
-use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
+use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
@@ -288,7 +288,7 @@ impl DecoderStage {
             PSBT_GLOBAL_SP_DLEQ =>
                 Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
             v if v == PSBT_GLOBAL_UNSIGNED_TX =>
-                Err(GlobalDecodeError::ExcludedKey { key_type_value: v }),
+                Err(GlobalDecodeError::KeyDecode(KeyDecodeError::ExcludedKey { key_type_value: v })),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
         }
     }
@@ -661,10 +661,13 @@ impl Decoder for GlobalDecoder {
                         return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 33));
                     }
                     if key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::KeyWrongLength(key.key.len(), 33))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     let share = CompressedPublicKey::from_slice(&bytes)
                         .map_err(|_| GlobalDecodeError::ValueWrongLength(bytes.len(), 33))?;
                     match self.sp_ecdh_shares.entry(scan_key) {
@@ -689,10 +692,13 @@ impl Decoder for GlobalDecoder {
                         return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 64));
                     }
                     if key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::KeyWrongLength(key.key.len(), 33))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     let proof = DleqProof::try_from(bytes.as_slice())
                         .map_err(|_| GlobalDecodeError::ValueWrongLength(bytes.len(), 64))?;
                     match self.sp_dleq_proofs.entry(scan_key) {
@@ -1111,7 +1117,8 @@ mod tests {
         let key = Key { type_value: 0x00, key: vec![] };
         let err = DecoderStage::from_key(key).unwrap_err();
         match err {
-            GlobalDecodeError::ExcludedKey { key_type_value: v } => assert_eq!(v, 0x00),
+            GlobalDecodeError::KeyDecode(KeyDecodeError::ExcludedKey { key_type_value: v }) =>
+                assert_eq!(v, 0x00),
             _ => panic!("expected ExcludedKey, got {:?}", err),
         }
     }

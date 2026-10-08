@@ -28,7 +28,7 @@ use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
-use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
+use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
@@ -397,7 +397,9 @@ impl Decoder for GlobalMapDecoder {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
                     }
                     if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     if self.version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -407,7 +409,9 @@ impl Decoder for GlobalMapDecoder {
                 }
                 Stage::DecodingUnsignedTx { key, decoder } => {
                     if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     if self.tx_version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -628,7 +632,7 @@ mod tests {
                 &[0, 0, 0, 0],
             ))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::InvalidKeyData(_)));
+        assert!(matches!(err, GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))));
     }
 
     #[test]

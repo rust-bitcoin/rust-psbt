@@ -25,8 +25,6 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 pub enum GlobalDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
-    /// Key should contain data, or key should not contain data (unified).
-    InvalidKeyData(Key),
     /// Value was not the correct length (got, want).
     ValueWrongLength(usize, usize),
     /// PSBT_GLOBAL_VERSION: PSBT v2 expects the version to be 2.
@@ -45,13 +43,6 @@ pub enum GlobalDecodeError {
     DuplicateXpub(bitcoin::bip32::KeySource),
     /// PSBT_GLOBAL_PROPRIETARY: Invalid proprietary key.
     InvalidProprietaryKey,
-    /// Key must be excluded from this version of PSBT (see consts.rs for u8 values).
-    ExcludedKey {
-        /// Key type value we found.
-        key_type_value: u64,
-    },
-    /// Key was not the correct length (got, expected).
-    KeyWrongLength(usize, usize),
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -82,7 +73,6 @@ impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidKeyData(ref key) => write!(f, "key should (not) contain data: {}", key),
             Self::ValueWrongLength(got, expected) =>
                 write!(f, "value length {} (expected {})", got, expected),
             Self::WrongVersion(v) =>
@@ -95,10 +85,6 @@ impl fmt::Display for GlobalDecodeError {
             Self::Bip32(ref e) => write_err!(f, "BIP-32"; e),
             Self::DuplicateXpub(ref ks) => write!(f, "duplicate xpub: {:?}", ks),
             Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
-            Self::ExcludedKey { key_type_value } =>
-                write!(f, "excluded key type 0x{:02x}", key_type_value),
-            Self::KeyWrongLength(got, expected) =>
-                write!(f, "key length {} (expected {})", got, expected),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
@@ -128,7 +114,6 @@ impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DuplicateKey(_)
-            | Self::InvalidKeyData(_)
             | Self::ValueWrongLength(..)
             | Self::WrongVersion(_)
             | Self::XpubInvalidFingerprint
@@ -136,9 +121,7 @@ impl std::error::Error for GlobalDecodeError {
             | Self::XpubInvalidPath(_)
             | Self::XpubValueEmpty
             | Self::InvalidProprietaryKey
-            | Self::DuplicateXpub(_)
-            | Self::ExcludedKey { .. }
-            | Self::KeyWrongLength(..) => None,
+            | Self::DuplicateXpub(_) => None,
             Self::Bip32(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
@@ -665,6 +648,14 @@ pub enum KeyDecodeError {
     Empty,
     /// Failed to decode the `keytype` compact size integer from the key body.
     TypeValue(CompactSizeDecoderError),
+    /// Key data is invalid for this key type (e.g., non-empty when empty expected,
+    /// wrong length, malformed content).
+    InvalidKeyData(Key),
+    /// Key type is excluded from this version of PSBT.
+    ExcludedKey {
+        /// Key type value we found.
+        key_type_value: u64,
+    },
 }
 
 impl fmt::Display for KeyDecodeError {
@@ -673,6 +664,9 @@ impl fmt::Display for KeyDecodeError {
             Self::Bytes(e) => write!(f, "failed to decode key body: {}", e),
             Self::Empty => write!(f, "empty key (this is the map separator)"),
             Self::TypeValue(e) => write!(f, "failed to decode keytype: {}", e),
+            Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
+            Self::ExcludedKey { key_type_value } =>
+                write!(f, "excluded key type 0x{:02x}", key_type_value),
         }
     }
 }
