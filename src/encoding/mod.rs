@@ -239,6 +239,10 @@ impl<'e, T: PsbtEncode> Iterator for Encoders<'e, T> {
     }
 }
 
+impl<'e, T: PsbtEncode> Clone for Encoders<'e, T> {
+    fn clone(&self) -> Self { Self { iter: self.iter.clone() } }
+}
+
 /// An encoder for a slice of PSBT-encodable types without a length prefix.
 pub struct SliceEncoder<'e, T: PsbtEncode>(IterEncoder<Encoders<'e, T>>);
 
@@ -257,49 +261,12 @@ impl<'e, T: PsbtEncode> Encoder for SliceEncoder<'e, T> {
     fn advance(&mut self) -> EncoderStatus { self.0.advance() }
 }
 
-/// An encoder for a slice of PSBT-encodable types without a length prefix, whose
-/// overall length is known before encoding begins.
-///
-/// Unlike [`SliceEncoder`], element encoders bound by [`ExactSizeEncoder`]
-/// have known lengths, so the total remaining length can be computed up front.
-/// Hence this type implements [`ExactSizeEncoder`]; use [`SliceEncoder`] for
-/// elements with value-dependent lengths.
-pub struct ExactSliceEncoder<'e, T: PsbtEncode> {
-    inner: IterEncoder<Encoders<'e, T>>,
-    /// Remaining bytes to be yielded. Decremented on each `advance()`.
-    remaining: usize,
-}
-
-impl<'e, T: PsbtEncode> ExactSliceEncoder<'e, T>
+impl<'e, T: PsbtEncode> ExactSizeEncoder for SliceEncoder<'e, T>
 where
     for<'a> T::Encoder<'a>: ExactSizeEncoder,
 {
-    /// Constructs an encoder which encodes the slice without adding a length prefix.
-    ///
-    /// The remaining length is computed eagerly as the sum of
-    /// [`ExactSizeEncoder::len`] of each item's encoder.
-    pub fn without_length_prefix(sl: &'e [T]) -> Self {
-        let remaining = sl.iter().map(|item| item.psbt_encoder().len()).sum();
-        Self { inner: IterEncoder::new(Encoders { iter: sl.iter() }), remaining }
-    }
-}
-
-impl<'e, T: PsbtEncode> Encoder for ExactSliceEncoder<'e, T> {
-    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
-
-    fn advance(&mut self) -> EncoderStatus {
-        let chunk_len = self.inner.current_chunk().len();
-        let status = self.inner.advance();
-        self.remaining = self.remaining.saturating_sub(chunk_len);
-        status
-    }
-}
-
-impl<'e, T: PsbtEncode> ExactSizeEncoder for ExactSliceEncoder<'e, T>
-where
-    for<'a> T::Encoder<'a>: ExactSizeEncoder,
-{
-    fn len(&self) -> usize { self.remaining }
+    #[inline]
+    fn len(&self) -> usize { self.0.len() }
 }
 
 /// An encoder for a slice of PSBT-encodable types with a compact size length prefix.
@@ -322,51 +289,12 @@ impl<'e, T: PsbtEncode> Encoder for PrefixedSliceEncoder<'e, T> {
     fn advance(&mut self) -> EncoderStatus { self.0.advance() }
 }
 
-/// An encoder for a slice of PSBT-encodable types with a compact size length
-/// prefix, whose overall length is known before encoding begins.
-///
-/// Combines [`PrefixedSliceEncoder`] (compact-size prefix) with
-/// [`ExactSliceEncoder`] (statically known total length). Hence this type
-/// implements [`ExactSizeEncoder`]; use [`PrefixedSliceEncoder`] for elements
-/// with value-dependent lengths.
-pub struct ExactPrefixedSliceEncoder<'e, T: PsbtEncode> {
-    inner: Encoder2<CompactSizeEncoder, ExactSliceEncoder<'e, T>>,
-    /// Remaining bytes to be yielded. Decremented on each `advance()`.
-    ///
-    /// Tracked manually: [`CompactSizeEncoder::len`] is static (does not
-    /// decrement), so delegating to [`Encoder2`]'s `len` cannot count down.
-    remaining: usize,
-}
-
-impl<'e, T: PsbtEncode> ExactPrefixedSliceEncoder<'e, T>
+impl<'e, T: PsbtEncode> ExactSizeEncoder for PrefixedSliceEncoder<'e, T>
 where
     for<'a> T::Encoder<'a>: ExactSizeEncoder,
 {
-    /// Constructs an encoder which encodes the slice, adding a compact size length prefix.
-    pub fn new(sl: &'e [T]) -> Self {
-        let compact = CompactSizeEncoder::new(sl.len());
-        let slice = ExactSliceEncoder::without_length_prefix(sl);
-        let remaining = compact.len() + slice.len();
-        Self { inner: Encoder2::new(compact, slice), remaining }
-    }
-}
-
-impl<'e, T: PsbtEncode> Encoder for ExactPrefixedSliceEncoder<'e, T> {
-    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
-
-    fn advance(&mut self) -> EncoderStatus {
-        let chunk_len = self.inner.current_chunk().len();
-        let status = self.inner.advance();
-        self.remaining = self.remaining.saturating_sub(chunk_len);
-        status
-    }
-}
-
-impl<'e, T: PsbtEncode> ExactSizeEncoder for ExactPrefixedSliceEncoder<'e, T>
-where
-    for<'a> T::Encoder<'a>: ExactSizeEncoder,
-{
-    fn len(&self) -> usize { self.remaining }
+    #[inline]
+    fn len(&self) -> usize { self.0.len() }
 }
 
 /// A decoder for a vector of PSBT-decodable types with a compact-size length prefix.
@@ -480,9 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn exact_slice_encoder_len_tracks_remaining() {
+    fn slice_encoder_len_tracks_remaining() {
         let items = [Sequence::ZERO, Sequence::MAX];
-        let mut encoder = <ExactSliceEncoder<'_, Sequence>>::without_length_prefix(&items);
+        let mut encoder = <SliceEncoder<'_, Sequence>>::without_length_prefix(&items);
 
         assert_eq!(encoder.current_chunk(), [0x00; 4], "first sequence bytes");
         assert_eq!(encoder.len(), 8, "two sequences encode to 4 bytes each");
@@ -496,9 +424,9 @@ mod tests {
     }
 
     #[test]
-    fn exact_prefixed_slice_encoder_len_tracks_remaining() {
+    fn prefixed_slice_encoder_len_tracks_remaining() {
         let items = [Sequence::ZERO, Sequence::MAX];
-        let mut encoder = <ExactPrefixedSliceEncoder<'_, Sequence>>::new(&items);
+        let mut encoder = <PrefixedSliceEncoder<'_, Sequence>>::new(&items);
 
         assert_eq!(encoder.current_chunk(), [0x02], "compact-size prefix chunk");
         assert_eq!(encoder.len(), 9, "compact-size prefix plus two 4-byte sequences");

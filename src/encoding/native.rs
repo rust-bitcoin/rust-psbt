@@ -24,9 +24,7 @@ use bitcoin_consensus_encoding::{
     Encoder2, Encoder4, EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
-use super::{
-    BytesValue, ExactPrefixedSliceEncoder, ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode,
-};
+use super::{BytesValue, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder};
 #[cfg(feature = "silent-payments")]
 use crate::consts::{
     PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE,
@@ -164,7 +162,7 @@ impl PsbtEncode for ChildNumber {
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`KeySource`].
-    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, ExactSliceEncoder<'e, ChildNumber>>);
+    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, SliceEncoder<'e, ChildNumber>>);
 }
 
 impl PsbtEncode for KeySource {
@@ -176,7 +174,7 @@ impl PsbtEncode for KeySource {
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         KeySourceEncoder::new(Encoder2::new(
             BytesEncoder::without_length_prefix(self.0.as_bytes()),
-            <ExactSliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
+            <SliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
         ))
     }
 }
@@ -540,7 +538,7 @@ pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEnc
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
     pub struct LeafHashVecKeySourceEncoder<'e>(
-        Encoder2<ExactPrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
+        Encoder2<PrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
     );
 }
 
@@ -552,7 +550,7 @@ impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         LeafHashVecKeySourceEncoder::new(Encoder2::new(
-            <ExactPrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
+            <PrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
             self.1.psbt_encoder(),
         ))
     }
@@ -560,7 +558,7 @@ impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`ControlBlock`] (1 byte parity/version, 32 bytes key, then 32 bytes per merkle node, borrowed without copies).
-    pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, ExactSliceEncoder<'e, TapNodeHash>>);
+    pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, SliceEncoder<'e, TapNodeHash>>);
 }
 
 impl PsbtEncode for ControlBlock {
@@ -576,9 +574,8 @@ impl PsbtEncode for ControlBlock {
             ArrayEncoder::without_length_prefix([first]),
             ArrayEncoder::without_length_prefix(self.internal_key.serialize()),
         );
-        let nodes = <ExactSliceEncoder<'_, TapNodeHash>>::without_length_prefix(
-            self.merkle_branch.as_ref(),
-        );
+        let nodes =
+            <SliceEncoder<'_, TapNodeHash>>::without_length_prefix(self.merkle_branch.as_ref());
         ControlBlockEncoder::new(Encoder2::new(head, nodes))
     }
 }
