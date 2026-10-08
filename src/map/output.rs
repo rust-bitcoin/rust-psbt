@@ -32,7 +32,7 @@ use crate::encoding::native::{
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
-use crate::map::error::{OutputDecodeError, OutputValueDecodeError};
+use crate::map::error::{KeyDecodeError, OutputDecodeError, OutputValueDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::SpV0Info;
 
@@ -317,7 +317,7 @@ impl Decoder for OutputDecoder {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
-                        let amount = self.amount.take().ok_or(OutputDecodeError::MissingValue)?;
+                        let amount = self.amount.take().ok_or(OutputDecodeError::MissingAmount)?;
                         #[cfg(not(feature = "silent-payments"))]
                         let script_pubkey = self
                             .script_pubkey
@@ -515,10 +515,13 @@ impl Decoder for OutputDecoder {
                     if self.tap_internal_key.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key = Some(
-                        XOnlyPublicKey::from_slice(&bytes)
-                            .map_err(|_| OutputDecodeError::ValueWrongLength(32, 32))?,
-                    );
+                    self.tap_internal_key =
+                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: 32,
+                                expected: 32,
+                            })
+                        })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapTree { key, decoder } => {
@@ -623,7 +626,9 @@ impl Decoder for OutputDecoder {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     if !key.key.is_empty() {
-                        return Err(OutputDecodeError::InvalidKeyData(key));
+                        return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     self.sp_v0_info = Some(
                         SpV0Info::from_byte_array(&bytes)
@@ -643,7 +648,9 @@ impl Decoder for OutputDecoder {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
                     if !key.key.is_empty() {
-                        return Err(OutputDecodeError::InvalidKeyData(key));
+                        return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     self.sp_v0_label = Some(u32::from_le_bytes(bytes));
                     self.stage = DecoderStage::DecodingSeparator;
@@ -652,8 +659,9 @@ impl Decoder for OutputDecoder {
                     let value = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = ProprietaryKey::try_from(key.clone())
-                        .map_err(|_| OutputDecodeError::InvalidProprietaryKey)?;
+                    let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
+                        OutputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
