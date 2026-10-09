@@ -47,7 +47,7 @@ use crate::encoding::native::{
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::FundingUtxoError;
-use crate::map::error::{InputDecodeError, InputValueDecodeError};
+use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
@@ -1278,10 +1278,13 @@ impl Decoder for InputDecoder {
                     if self.tap_internal_key.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key = Some(
-                        XOnlyPublicKey::from_slice(&bytes)
-                            .map_err(|_| InputDecodeError::ValueWrongLength(32, 32))?,
-                    );
+                    self.tap_internal_key =
+                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
+                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
+                                got: 32,
+                                expected: 32,
+                            })
+                        })?);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapMerkleRoot { key, decoder } => {
@@ -1405,12 +1408,16 @@ impl Decoder for InputDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapScriptSig(e))
                     })?;
                     if key.key.len() != 64 {
-                        return Err(InputDecodeError::KeyWrongLength(key.key.len(), 64));
+                        return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32])
-                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
-                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64])
-                        .map_err(|_| InputDecodeError::KeyWrongLength(32, 32))?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key[..32]).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
+                    let leaf_hash = TapLeafHash::from_slice(&key.key[32..64]).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     let sig = taproot::Signature::from_slice(&value).map_err(|_e| {
                         InputDecodeError::ValueDecode(
                             InputValueDecodeError::InvalidTaprootSignature,
@@ -1433,7 +1440,9 @@ impl Decoder for InputDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::InvalidControlBlock)
                     })?;
                     if value.is_empty() {
-                        return Err(InputDecodeError::ValueWrongLength(0, 1));
+                        return Err(InputDecodeError::ValueDecode(
+                            InputValueDecodeError::WrongLength { got: 0, expected: 1 },
+                        ));
                     }
                     let last = value.len() - 1;
                     let script = ScriptBuf::from_bytes(value[..last].to_vec());
@@ -1477,8 +1486,9 @@ impl Decoder for InputDecoder {
                         let ks = (fprint, DerivationPath::from(dpath));
                         (leaf_hashes, ks)
                     };
-                    let xonly = XOnlyPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 32))?;
+                    let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(pair);
@@ -1492,8 +1502,9 @@ impl Decoder for InputDecoder {
                     let value = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = ProprietaryKey::try_from(key.clone())
-                        .map_err(|_| InputDecodeError::InvalidProprietaryKey)?;
+                    let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -1525,12 +1536,19 @@ impl Decoder for InputDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)),
                     })?;
                     if key.key.is_empty() {
-                        return Err(InputDecodeError::InvalidKeyData(key));
+                        return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
-                    let share = CompressedPublicKey::from_slice(&bytes)
-                        .map_err(|_| InputDecodeError::ValueWrongLength(33, 33))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
+                    let share = CompressedPublicKey::from_slice(&bytes).map_err(|_| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
+                            got: 33,
+                            expected: 33,
+                        })
+                    })?;
                     match self.sp_ecdh_shares.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(share);
@@ -1549,12 +1567,19 @@ impl Decoder for InputDecoder {
                             InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)),
                     })?;
                     if key.key.is_empty() {
-                        return Err(InputDecodeError::InvalidKeyData(key));
+                        return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| InputDecodeError::KeyWrongLength(key.key.len(), 33))?;
-                    let proof = DleqProof::try_from(bytes.as_slice())
-                        .map_err(|_| InputDecodeError::ValueWrongLength(64, 64))?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
+                    })?;
+                    let proof = DleqProof::try_from(bytes.as_slice()).map_err(|_| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
+                            got: 64,
+                            expected: 64,
+                        })
+                    })?;
                     match self.sp_dleq_proofs.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(proof);

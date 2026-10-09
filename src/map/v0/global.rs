@@ -28,7 +28,7 @@ use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
-use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
+use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
@@ -391,13 +391,20 @@ impl Decoder for GlobalMapDecoder {
                         },
                     })?;
                     if value_len != 4 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 4));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 4,
+                            },
+                        ));
                     }
                     if version != V0 {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
                     }
                     if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     if self.version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -407,7 +414,9 @@ impl Decoder for GlobalMapDecoder {
                 }
                 Stage::DecodingUnsignedTx { key, decoder } => {
                     if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::InvalidKeyData(key));
+                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
+                            key,
+                        )));
                     }
                     if self.tx_version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -464,7 +473,9 @@ impl Decoder for GlobalMapDecoder {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
                     })?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                        .map_err(|_| {
+                            GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                        })?;
                     if self.proprietaries.contains_key(&prop_key) {
                         return Err(GlobalDecodeError::DuplicateKey(prop_key.to_key()));
                     }
@@ -490,12 +501,19 @@ impl Decoder for GlobalMapDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
                     })?;
                     if value_len != 33 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 33));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 33,
+                            },
+                        ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
-                    let share = CompressedPublicKey::from_slice(&arr)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
+                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -511,10 +529,16 @@ impl Decoder for GlobalMapDecoder {
                             GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
                     })?;
                     if value_len != 64 {
-                        return Err(GlobalDecodeError::ValueWrongLength(value_len as usize, 64));
+                        return Err(GlobalDecodeError::ValueDecode(
+                            GlobalValueDecodeError::WrongLength {
+                                got: value_len as usize,
+                                expected: 64,
+                            },
+                        ));
                     }
-                    let scan_key = CompressedPublicKey::from_slice(&key.key)
-                        .map_err(|_| GlobalDecodeError::InvalidProprietaryKey)?;
+                    let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
+                    })?;
                     let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -606,7 +630,13 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::ValueWrongLength(5, 4)));
+        assert!(matches!(
+            err,
+            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
+                got: 5,
+                expected: 4,
+            }),
+        ));
     }
 
     #[test]
@@ -628,7 +658,7 @@ mod tests {
                 &[0, 0, 0, 0],
             ))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::InvalidKeyData(_)));
+        assert!(matches!(err, GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))));
     }
 
     #[test]
