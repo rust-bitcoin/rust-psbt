@@ -77,3 +77,13 @@ jobs:
       - uses: ./.forgejo/actions/setup-rbmt
       - name: "Check mutants"
         run: git diff ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }} | cargo +$(cargo rbmt toolchains --nightly) mutants --in-diff /dev/stdin -- -- -Z unstable-options --fail-fast --nocapture
+
+  Prerelease:
+    runs-on: debian-trixie
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          fetch-depth: 0 # History required to diff against the baseline.
+      - uses: ./.forgejo/actions/setup-rbmt
+      - name: "Run prerelease checks"
+        run: cargo rbmt prerelease --baseline ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }}
