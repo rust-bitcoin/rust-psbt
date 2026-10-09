@@ -63,6 +63,18 @@ fn deserialize_v0_rejects_v2_psbt() {
     assert!(PsbtV0::deserialize(&v2_psbt.serialize()).is_err());
 }
 
+#[test]
+fn deserialize_v0_rejects_trailing_bytes() {
+    let mut bytes = Vec::from_hex(LOCKTIME_VECTOR_HEX).unwrap();
+    bytes.push(0x00);
+    let err = PsbtV0::deserialize(&bytes).unwrap_err();
+    assert!(
+        matches!(err, psbt_v2::DeserializeError::Unconsumed),
+        "expected Unconsumed, got {:?}",
+        err
+    );
+}
+
 /// A nonzero v0 unsigned-transaction lock time becomes the v2 global fallback
 /// lock time (a zero lock time is omitted, since v2 defaults an absent fallback
 /// to zero).

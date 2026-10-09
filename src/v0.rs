@@ -83,14 +83,43 @@ impl PsbtV0 {
     }
 
     /// Deserializes a PSBT v0 (BIP-174) from raw bytes.
+    ///
+    /// Returns an error if the input contains trailing bytes after the PSBT.
+    ///
+    /// If you need to parse a v0 PSBT from a buffer that may contain additional
+    /// data, use the lower-level
+    /// [`decode_from_slice_unbounded_with_decoder`](bitcoin_consensus_encoding::decode_from_slice_unbounded_with_decoder)
+    /// directly with [`PsbtV0Decoder`]:
+    ///
+    /// ```
+    /// # use psbt_v2::Psbt;
+    /// # use psbt_v2::PsbtV0;
+    /// # use psbt_v2::PsbtV0Decoder;
+    /// # use psbt_v2::{Global, Input, DeserializeError};
+    /// # use psbt_v2::bitcoin::hashes::Hash as _;
+    /// # use psbt_v2::bitcoin::{OutPoint, Txid};
+    /// # use bitcoin_consensus_encoding::decode_from_slice_unbounded_with_decoder;
+    /// # let psbt = Psbt {
+    /// #     global: Global { input_count: 1, output_count: 0, ..Global::default() },
+    /// #     inputs: vec![Input::new(&OutPoint { txid: Txid::hash(b"x"), vout: 0 })],
+    /// #     outputs: vec![],
+    /// # };
+    /// # let bytes = PsbtV0::from_psbt(psbt).unwrap().serialize();
+    /// let mut remaining = &bytes[..];
+    /// let _psbt_v0 = decode_from_slice_unbounded_with_decoder::<PsbtV0Decoder>(
+    ///     &mut remaining,
+    /// )?;
+    /// // `remaining` now points to whatever followed the PSBT
+    /// # Ok::<(), DeserializeError>(())
+    /// ```
     pub fn deserialize(bytes: &[u8]) -> Result<Self, crate::error::DeserializeError> {
-        let psbt =
-            bitcoin_consensus_encoding::decode_from_slice_with_decoder::<PsbtV0Decoder>(bytes)
-                .map_err(|e| match e {
-                    bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
-                    _ => DeserializeError::EarlyEnd("v0 framing"),
-                })?;
-        Ok(Self::from_psbt(psbt).expect("lock time determinable after successful decode"))
+        bitcoin_consensus_encoding::decode_from_slice_with_decoder::<PsbtV0Decoder>(bytes).map_err(
+            |e| match e {
+                bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
+                bitcoin_consensus_encoding::DecodeError::Unconsumed(_) =>
+                    DeserializeError::Unconsumed,
+            },
+        )
     }
 
     /// Deserializes a PSBT v0 (BIP-174) from a base64-encoded string.
@@ -190,7 +219,7 @@ pub struct PsbtV0Decoder {
 }
 
 impl Decoder for PsbtV0Decoder {
-    type Output = Psbt;
+    type Output = PsbtV0;
     type Error = DeserializeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
@@ -308,9 +337,10 @@ impl Decoder for PsbtV0Decoder {
         }
     }
 
-    fn end(self) -> Result<Psbt, Self::Error> {
+    fn end(self) -> Result<PsbtV0, Self::Error> {
         match self.stage {
-            V0DecoderStage::Done(psbt) => Ok(psbt),
+            V0DecoderStage::Done(psbt) =>
+                Ok(PsbtV0::from_psbt(psbt).expect("lock time determinable after successful decode")),
             V0DecoderStage::Magic(_) => Err(DeserializeError::EarlyEnd("magic")),
             V0DecoderStage::Separator => Err(DeserializeError::EarlyEnd("separator")),
             V0DecoderStage::Global(_) => Err(DeserializeError::EarlyEnd("global")),

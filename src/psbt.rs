@@ -337,9 +337,30 @@ impl Psbt {
     pub fn serialize(&self) -> Vec<u8> { encode_to_vec(self) }
 
     /// Deserializes a value from raw binary data.
+    ///
+    /// Returns an error if the input contains trailing bytes after the PSBT.
+    ///
+    /// If you need to parse a PSBT from a buffer that may contain additional data
+    /// (e.g., reading from a stream or container format), use the lower-level
+    /// [`decode_from_slice_unbounded`](crate::encoding::decode_from_slice_unbounded)
+    /// directly, which returns the remaining bytes to the caller:
+    ///
+    /// ```
+    /// # use psbt_v2::Psbt;
+    /// # use psbt_v2::decode_from_slice_unbounded;
+    /// # use psbt_v2::{Global, DeserializeError};
+    /// # let psbt = Psbt { global: Global::default(), inputs: vec![], outputs: vec![] };
+    /// # let bytes = psbt.serialize();
+    /// let mut remaining = &bytes[..];
+    /// let _psbt = decode_from_slice_unbounded::<Psbt>(&mut remaining)?;
+    /// // `remaining` now points to whatever followed the PSBT
+    /// # Ok::<(), DeserializeError>(())
+    /// ```
     pub fn deserialize(bytes: &[u8]) -> Result<Self, DeserializeError> {
-        let mut remaining = bytes;
-        crate::encoding::decode_from_slice_unbounded::<Self>(&mut remaining)
+        crate::encoding::decode_from_slice::<Self>(bytes).map_err(|e| match e {
+            bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
+            bitcoin_consensus_encoding::DecodeError::Unconsumed(_) => DeserializeError::Unconsumed,
+        })
     }
 
     /// Returns an iterator for the funding UTXOs of the psbt
@@ -725,6 +746,15 @@ mod tests {
         let decoded = Psbt::deserialize(&bytes).expect("failed to decode PSBT with 1 input");
         let reencoded = decoded.serialize();
         assert_eq!(bytes, reencoded);
+    }
+
+    #[test]
+    fn deserialize_rejects_trailing_bytes() {
+        let psbt = valid_psbt();
+        let mut bytes = psbt.serialize();
+        bytes.push(0x00);
+        let err = Psbt::deserialize(&bytes).unwrap_err();
+        assert!(matches!(err, DeserializeError::Unconsumed), "expected Unconsumed, got {:?}", err);
     }
 
     #[test]

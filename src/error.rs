@@ -26,6 +26,8 @@ pub enum DeserializeError {
     DecodeOutputs(VecDecoderError<crate::map::error::OutputDecodeError>),
     /// Called `end()` before decoding finished (truncated or incomplete input).
     EarlyEnd(&'static str),
+    /// Bytes remained unconsumed after completing decoding.
+    Unconsumed,
 }
 
 impl fmt::Display for DeserializeError {
@@ -39,6 +41,7 @@ impl fmt::Display for DeserializeError {
             Self::DecodeInputs(e) => write!(f, "error decoding input maps: {}", e),
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
+            Self::Unconsumed => write!(f, "unconsumed bytes after PSBT"),
         }
     }
 }
@@ -50,7 +53,10 @@ impl std::error::Error for DeserializeError {
             Self::DecodeGlobal(e) => Some(e),
             Self::DecodeInputs(e) => Some(e),
             Self::DecodeOutputs(e) => Some(e),
-            Self::InvalidMagic(_) | Self::InvalidSeparator(_) | Self::EarlyEnd(_) => None,
+            Self::InvalidMagic(_)
+            | Self::InvalidSeparator(_)
+            | Self::EarlyEnd(_)
+            | Self::Unconsumed => None,
         }
     }
 }
