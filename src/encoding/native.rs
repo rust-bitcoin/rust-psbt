@@ -25,7 +25,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::{
-    BytesValue, ExactPrefixedSliceEncoder, ExactSliceEncoder, KeyValueIter, PsbtDecode, PsbtEncode,
+    BytesKeyValueIter, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder,
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{
@@ -35,36 +35,12 @@ use crate::consts::{
     PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
     PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
     PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
-    PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_SEPARATOR,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
 };
 use crate::encoding::KeyValueEncoder;
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{DleqProof, SpV0Info};
-
-/// Encoder for the PSBT record separator.
-pub struct SeparatorEncoder(ArrayEncoder<1>);
-
-impl Default for SeparatorEncoder {
-    fn default() -> Self { Self::new() }
-}
-
-impl SeparatorEncoder {
-    /// Encoder for the key-value separator
-    pub fn new() -> Self { Self(ArrayEncoder::without_length_prefix([PSBT_SEPARATOR])) }
-}
-
-impl Encoder for SeparatorEncoder {
-    fn current_chunk(&self) -> &[u8] { self.0.current_chunk() }
-
-    fn advance(&mut self) -> EncoderStatus { self.0.advance() }
-}
-
-impl ExactSizeEncoder for SeparatorEncoder {
-    // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
-    // former does not
-    fn len(&self) -> usize { 1 }
-}
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -164,7 +140,7 @@ impl PsbtEncode for ChildNumber {
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`KeySource`].
-    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, ExactSliceEncoder<'e, ChildNumber>>);
+    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, SliceEncoder<'e, ChildNumber>>);
 }
 
 impl PsbtEncode for KeySource {
@@ -176,7 +152,7 @@ impl PsbtEncode for KeySource {
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         KeySourceEncoder::new(Encoder2::new(
             BytesEncoder::without_length_prefix(self.0.as_bytes()),
-            <ExactSliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
+            <SliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
         ))
     }
 }
@@ -208,17 +184,6 @@ impl PsbtEncode for absolute::Height {
 
 pub(crate) type MinHeightPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
-
-impl PsbtEncode for PsbtSighashType {
-    type Encoder<'e>
-        = ArrayEncoder<4>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
-    }
-}
 
 pub(crate) type SighashPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
@@ -260,22 +225,22 @@ pub(crate) type PreviousTxidPair<'e> =
 impl_hash_encoder!(ripemd160::Hash, 20);
 
 pub(crate) type Ripemd160Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
 
 impl_hash_encoder!(hash160::Hash, 20);
 
 pub(crate) type Hash160Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
 
 impl_hash_encoder!(sha256::Hash, 32);
 
 pub(crate) type Sha256Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
 
 impl_hash_encoder!(sha256d::Hash, 32);
 
 pub(crate) type Hash256Iter<'e> =
-    KeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256, BytesValue>;
+    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
 
 impl_hash_encoder!(TapLeafHash, 32);
 impl_hash_encoder!(TapNodeHash, 32);
@@ -540,7 +505,7 @@ pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEnc
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
     pub struct LeafHashVecKeySourceEncoder<'e>(
-        Encoder2<ExactPrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
+        Encoder2<PrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
     );
 }
 
@@ -552,7 +517,7 @@ impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         LeafHashVecKeySourceEncoder::new(Encoder2::new(
-            <ExactPrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
+            <PrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
             self.1.psbt_encoder(),
         ))
     }
@@ -560,7 +525,7 @@ impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`ControlBlock`] (1 byte parity/version, 32 bytes key, then 32 bytes per merkle node, borrowed without copies).
-    pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, ExactSliceEncoder<'e, TapNodeHash>>);
+    pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, SliceEncoder<'e, TapNodeHash>>);
 }
 
 impl PsbtEncode for ControlBlock {
@@ -576,9 +541,8 @@ impl PsbtEncode for ControlBlock {
             ArrayEncoder::without_length_prefix([first]),
             ArrayEncoder::without_length_prefix(self.internal_key.serialize()),
         );
-        let nodes = <ExactSliceEncoder<'_, TapNodeHash>>::without_length_prefix(
-            self.merkle_branch.as_ref(),
-        );
+        let nodes =
+            <SliceEncoder<'_, TapNodeHash>>::without_length_prefix(self.merkle_branch.as_ref());
         ControlBlockEncoder::new(Encoder2::new(head, nodes))
     }
 }
@@ -621,39 +585,6 @@ pub(crate) type EcdhPairIter<'e> = KeyValueIter<
 >;
 
 #[cfg(feature = "silent-payments")]
-impl PsbtEncode for DleqProof {
-    type Encoder<'e>
-        = BytesEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        BytesEncoder::without_length_prefix(self.as_bytes())
-    }
-}
-
-#[cfg(feature = "silent-payments")]
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a [`SpV0Info`]: the scan key followed by the spend key (33 byte + 33 byte).
-    pub struct SpV0InfoEncoder<'e>(Encoder2<ArrayEncoder<33>, ArrayEncoder<33>>);
-}
-
-#[cfg(feature = "silent-payments")]
-impl PsbtEncode for SpV0Info {
-    type Encoder<'e>
-        = SpV0InfoEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        SpV0InfoEncoder::new(Encoder2::new(
-            self.scan_key().psbt_encoder(),
-            self.spend_key().psbt_encoder(),
-        ))
-    }
-}
-
-#[cfg(feature = "silent-payments")]
 pub(crate) type SpV0InfoPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
 
@@ -685,6 +616,7 @@ mod tests {
 
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
+    use crate::map::SeparatorEncoder;
 
     fn sample_xpub() -> Xpub {
         use core::str::FromStr;

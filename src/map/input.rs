@@ -22,7 +22,9 @@ use bitcoin_consensus_encoding::{
     DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
-use super::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter};
+use super::{
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBT_IN_HASH160, PSBT_IN_HASH256, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_OUTPUT_INDEX,
@@ -39,9 +41,8 @@ use crate::encoding::delegates::{
 };
 use crate::encoding::native::{
     Bip32DerivationIter, Hash160Iter, Hash256Iter, MinHeightPair, MinTimePair, PartialSigIter,
-    PreviousTxidPair, Ripemd160Iter, ScriptPair, SeparatorEncoder, Sha256Iter, SighashPair,
-    TapInternalKeyPair, TapKeyOriginIter, TapKeySigPair, TapMerkleRootPair, TapScriptIter,
-    TapScriptSigIter,
+    PreviousTxidPair, Ripemd160Iter, ScriptPair, Sha256Iter, SighashPair, TapInternalKeyPair,
+    TapKeyOriginIter, TapKeySigPair, TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
@@ -1888,25 +1889,25 @@ impl<'e> InputMapEncoder<'e> {
     }
 
     fn ripemd160_state(&self) -> EncoderState<'e> {
-        EncoderState::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new_bytes(
+        EncoderState::Ripemd160Preimages(IterEncoder::new(Ripemd160Iter::new(
             self.input.ripemd160_preimages.iter(),
         )))
     }
 
     fn sha256_state(&self) -> EncoderState<'e> {
-        EncoderState::Sha256Preimages(IterEncoder::new(Sha256Iter::new_bytes(
+        EncoderState::Sha256Preimages(IterEncoder::new(Sha256Iter::new(
             self.input.sha256_preimages.iter(),
         )))
     }
 
     fn hash160_state(&self) -> EncoderState<'e> {
-        EncoderState::Hash160Preimages(IterEncoder::new(Hash160Iter::new_bytes(
+        EncoderState::Hash160Preimages(IterEncoder::new(Hash160Iter::new(
             self.input.hash160_preimages.iter(),
         )))
     }
 
     fn hash256_state(&self) -> EncoderState<'e> {
-        EncoderState::Hash256Preimages(IterEncoder::new(Hash256Iter::new_bytes(
+        EncoderState::Hash256Preimages(IterEncoder::new(Hash256Iter::new(
             self.input.hash256_preimages.iter(),
         )))
     }

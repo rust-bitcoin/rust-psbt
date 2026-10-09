@@ -59,8 +59,7 @@ pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
 pub use crate::{
     encoding::{
         decode_from_slice, decode_from_slice_unbounded, encode_to_hex, encode_to_vec,
-        ExactPrefixedSliceEncoder, ExactSliceEncoder, PrefixedSliceEncoder, PsbtDecode, PsbtEncode,
-        SliceEncoder, VecDecoder,
+        PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder, VecDecoder,
     },
     error::{
         DeserializeError, DetermineLockTimeError, FeeError, FundingUtxoError,

@@ -15,7 +15,9 @@ use bitcoin_consensus_encoding::{
     Decoder2Error, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
 };
 
-use super::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter};
+use super::{
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_TX_MODIFIABLE, PSBT_GLOBAL_TX_VERSION,
@@ -27,9 +29,9 @@ use crate::encoding::delegates::{
     FallbackLockTimeKeyValueEncoder, FallbackLockTimeValueDecoder, TxVersionKeyValueEncoder,
     TxVersionValueDecoder,
 };
+use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
-use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
