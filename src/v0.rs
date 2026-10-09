@@ -9,6 +9,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use bitcoin::locktime::absolute;
 use bitcoin::{Amount, ScriptBuf, Sequence, Txid};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder4, IterEncoder,
@@ -28,18 +29,28 @@ use crate::psbt::{MagicEncoder, Psbt, PSBT_MAGIC, PSBT_MAGIC_BYTES, PSBT_SEPARAT
 #[derive(Debug)]
 pub struct PsbtV0 {
     pub(crate) psbt: Psbt,
-    // Lock time is resolved at construction.
+    // Lock time resolved at construction since construction is implicitely assumed to be over
+    // due to the generation of the unsigned transaction.
     pub(crate) lock_time: bitcoin::locktime::absolute::LockTime,
 }
 
 impl PsbtV0 {
     /// Wrap an existing [`Psbt`] by taking ownership and resolving lock time.
+    ///
+    /// V0 serialization is the implicite end of construction, the transaction structure
+    /// is set. At this point the effective lock time must be determinable.
+    /// Per-input lock time requirements are resolved into the single unsigned
+    /// transaction lock time. Conflicting requirements produce an error.
     pub fn from_psbt(psbt: Psbt) -> Result<Self, crate::error::DetermineLockTimeError> {
         let lock_time = psbt.determine_lock_time()?;
         Ok(Self { psbt, lock_time })
     }
 
     /// Encode this PSBT as v0 (BIP-174) binary.
+    ///
+    /// The v0 format has no per-input lock time fields. But the per-input requirements can be
+    /// resolved into a single lock time and preserved in the unsigned tx (conflicting
+    /// requirements are rejected), but the input granularity is lost in a v2-v0-v2 roundtrip.
     pub fn serialize(&self) -> Vec<u8> { encode_to_vec(self) }
 
     /// Encode this PSBT as a v0 (BIP-174) base64 string.
@@ -104,7 +115,7 @@ impl PsbtV0 {
     /// #     inputs: vec![Input::new(&OutPoint { txid: Txid::hash(b"x"), vout: 0 })],
     /// #     outputs: vec![],
     /// # };
-    /// # let bytes = PsbtV0::from_psbt(psbt).unwrap().serialize();
+    /// # let bytes = PsbtV0::from_psbt(psbt).expect("lock time").serialize();
     /// let mut remaining = &bytes[..];
     /// let _psbt_v0 = decode_from_slice_unbounded_with_decoder::<PsbtV0Decoder>(
     ///     &mut remaining,
@@ -339,8 +350,12 @@ impl Decoder for PsbtV0Decoder {
 
     fn end(self) -> Result<PsbtV0, Self::Error> {
         match self.stage {
-            V0DecoderStage::Done(psbt) =>
-                Ok(PsbtV0::from_psbt(psbt).expect("lock time determinable after successful decode")),
+            // The v0 format has no per-input lock time fields (min_time/min_height
+            // are v2-only), so no need to derive (and possibly fail on) a lock time.
+            V0DecoderStage::Done(psbt) => {
+                let lock_time = psbt.global.fallback_lock_time.unwrap_or(absolute::LockTime::ZERO);
+                Ok(PsbtV0 { psbt, lock_time })
+            }
             V0DecoderStage::Magic(_) => Err(DeserializeError::EarlyEnd("magic")),
             V0DecoderStage::Separator => Err(DeserializeError::EarlyEnd("separator")),
             V0DecoderStage::Global(_) => Err(DeserializeError::EarlyEnd("global")),

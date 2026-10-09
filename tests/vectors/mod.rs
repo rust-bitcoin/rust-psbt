@@ -283,7 +283,9 @@ impl TestCase {
                 let expected_bytes =
                     Vec::from_hex(expected_hex).expect("expected PSBT must be valid hex");
                 assert_eq!(
-                    PsbtV0::from_psbt(psbt).expect("v0 encoding").serialize(),
+                    PsbtV0::from_psbt(psbt)
+                        .expect("BIP-174 test vector PSBT must have resolvable lock time")
+                        .serialize(),
                     expected_bytes
                 );
             }
