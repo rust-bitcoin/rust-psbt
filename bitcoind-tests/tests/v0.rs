@@ -75,12 +75,11 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
 
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
@@ -160,12 +159,11 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
@@ -267,12 +265,11 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
@@ -354,12 +351,11 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
@@ -435,12 +431,11 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
@@ -541,12 +536,11 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
     // Sign and finalize the PSBT.
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> =
             (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
     let finalized = Finalizer::new(signed)?.finalize(&secp)?;
 
