@@ -20,7 +20,9 @@ use bitcoin_consensus_encoding::{
     Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
-use super::super::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter};
+use super::super::{
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBT_IN_HASH160, PSBT_IN_HASH256, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_PARTIAL_SIG,
@@ -34,7 +36,7 @@ use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 use crate::encoding::delegates::{FinalScriptWitnessPair, WitnessUtxoPair};
 use crate::encoding::native::{
     Bip32DerivationIter, Hash160Iter, Hash256Iter, PartialSigIter, Ripemd160Iter, ScriptPair,
-    SeparatorEncoder, Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginIter, TapKeySigPair,
+    Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginIter, TapKeySigPair,
     TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
 };
 #[cfg(feature = "silent-payments")]

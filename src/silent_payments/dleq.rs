@@ -9,6 +9,10 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
 
+use bitcoin_consensus_encoding::BytesEncoder;
+
+use crate::PsbtEncode;
+
 /// A 64-byte DLEQ proof (BIP-374).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DleqProof(pub [u8; 64]);
@@ -123,6 +127,17 @@ impl fmt::Display for InvalidLengthError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for InvalidLengthError {}
+
+impl PsbtEncode for DleqProof {
+    type Encoder<'e>
+        = BytesEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        BytesEncoder::without_length_prefix(self.as_bytes())
+    }
+}
 
 #[cfg(test)]
 mod tests {

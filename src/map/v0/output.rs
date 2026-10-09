@@ -17,7 +17,9 @@ use bitcoin_consensus_encoding::{
     DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
-use super::super::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, UnknownKeyValueIter};
+use super::super::{
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+};
 use crate::consts::{
     PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
     PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_OUT_TAP_INTERNAL_KEY, PSBT_OUT_TAP_TREE,
@@ -26,8 +28,7 @@ use crate::consts::{
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
 use crate::encoding::native::{
-    OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, SeparatorEncoder, TapInternalKeyPair,
-    TapTreePair,
+    OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair, TapTreePair,
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};

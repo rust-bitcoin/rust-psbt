@@ -6,8 +6,10 @@ use core::fmt;
 use core::str::FromStr;
 
 use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError, TapSighashType};
+use bitcoin_consensus_encoding::ArrayEncoder;
 
 use crate::error::write_err;
+use crate::PsbtEncode;
 
 const SIGHASH_ANYONECANPAY: u32 = 0x80;
 
@@ -201,6 +203,17 @@ impl std::error::Error for InvalidSighashTypeError {
 
 impl From<sighash::InvalidSighashTypeError> for InvalidSighashTypeError {
     fn from(e: sighash::InvalidSighashTypeError) -> Self { Self::Bitcoin(e) }
+}
+
+impl PsbtEncode for PsbtSighashType {
+    type Encoder<'e>
+        = ArrayEncoder<4>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
+    }
 }
 
 #[cfg(test)]

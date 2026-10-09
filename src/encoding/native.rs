@@ -35,36 +35,12 @@ use crate::consts::{
     PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
     PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
     PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
-    PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_SEPARATOR,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
 };
 use crate::encoding::KeyValueEncoder;
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{DleqProof, SpV0Info};
-
-/// Encoder for the PSBT record separator.
-pub struct SeparatorEncoder(ArrayEncoder<1>);
-
-impl Default for SeparatorEncoder {
-    fn default() -> Self { Self::new() }
-}
-
-impl SeparatorEncoder {
-    /// Encoder for the key-value separator
-    pub fn new() -> Self { Self(ArrayEncoder::without_length_prefix([PSBT_SEPARATOR])) }
-}
-
-impl Encoder for SeparatorEncoder {
-    fn current_chunk(&self) -> &[u8] { self.0.current_chunk() }
-
-    fn advance(&mut self) -> EncoderStatus { self.0.advance() }
-}
-
-impl ExactSizeEncoder for SeparatorEncoder {
-    // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
-    // former does not
-    fn len(&self) -> usize { 1 }
-}
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -208,17 +184,6 @@ impl PsbtEncode for absolute::Height {
 
 pub(crate) type MinHeightPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
-
-impl PsbtEncode for PsbtSighashType {
-    type Encoder<'e>
-        = ArrayEncoder<4>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
-    }
-}
 
 pub(crate) type SighashPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
@@ -620,39 +585,6 @@ pub(crate) type EcdhPairIter<'e> = KeyValueIter<
 >;
 
 #[cfg(feature = "silent-payments")]
-impl PsbtEncode for DleqProof {
-    type Encoder<'e>
-        = BytesEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        BytesEncoder::without_length_prefix(self.as_bytes())
-    }
-}
-
-#[cfg(feature = "silent-payments")]
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a [`SpV0Info`]: the scan key followed by the spend key (33 byte + 33 byte).
-    pub struct SpV0InfoEncoder<'e>(Encoder2<ArrayEncoder<33>, ArrayEncoder<33>>);
-}
-
-#[cfg(feature = "silent-payments")]
-impl PsbtEncode for SpV0Info {
-    type Encoder<'e>
-        = SpV0InfoEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        SpV0InfoEncoder::new(Encoder2::new(
-            self.scan_key().psbt_encoder(),
-            self.spend_key().psbt_encoder(),
-        ))
-    }
-}
-
-#[cfg(feature = "silent-payments")]
 pub(crate) type SpV0InfoPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
 
@@ -684,6 +616,7 @@ mod tests {
 
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
+    use crate::map::SeparatorEncoder;
 
     fn sample_xpub() -> Xpub {
         use core::str::FromStr;

@@ -37,13 +37,41 @@ use core::fmt;
 
 use bitcoin::hex::DisplayHex;
 use bitcoin_consensus_encoding::{
-    ByteVecDecoder, BytesEncoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2,
-    DecoderStatus, Encoder2, Encoder3, ExactSizeEncoder, PrefixedBytesEncoder,
+    ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder,
+    Decoder2, DecoderStatus, Encoder, Encoder2, Encoder3, EncoderStatus, ExactSizeEncoder,
+    PrefixedBytesEncoder,
 };
 
-use crate::consts::PSBT_GLOBAL_PROPRIETARY;
+use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};
 use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
 use crate::map::error::KeyDecodeError;
+
+/// Encoder for the PSBT record separator (`0x00`).
+///
+/// Each PSBT map (global, input, output) is terminated by a single `0x00` byte
+/// separating the key-value pairs from the next map or end-of-file.
+pub struct SeparatorEncoder(ArrayEncoder<1>);
+
+impl Default for SeparatorEncoder {
+    fn default() -> Self { Self::new() }
+}
+
+impl SeparatorEncoder {
+    /// Constructs an encoder that yields the single separator byte.
+    pub fn new() -> Self { Self(ArrayEncoder::without_length_prefix([PSBT_SEPARATOR])) }
+}
+
+impl Encoder for SeparatorEncoder {
+    fn current_chunk(&self) -> &[u8] { self.0.current_chunk() }
+
+    fn advance(&mut self) -> EncoderStatus { self.0.advance() }
+}
+
+impl ExactSizeEncoder for SeparatorEncoder {
+    // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
+    // former does not
+    fn len(&self) -> usize { 1 }
+}
 
 /// The key of a key-value PSBT pair, in its raw byte form.
 ///

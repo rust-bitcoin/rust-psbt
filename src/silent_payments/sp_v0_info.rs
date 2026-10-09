@@ -6,6 +6,9 @@
 
 use bitcoin::key::CompressedPublicKey;
 use bitcoin::secp256k1;
+use bitcoin_consensus_encoding::{ArrayEncoder, Encoder2};
+
+use crate::PsbtEncode;
 
 /// A silent payment v0 address, as carried by `PSBT_OUT_SP_V0_INFO` (BIP-375).
 ///
@@ -36,4 +39,23 @@ impl SpV0Info {
 
     /// Returns the recipient's spend key.
     pub fn spend_key(&self) -> CompressedPublicKey { self.spend_key }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a [`SpV0Info`]: the scan key followed by the spend key (33 byte + 33 byte).
+    pub struct SpV0InfoEncoder<'e>(Encoder2<ArrayEncoder<33>, ArrayEncoder<33>>);
+}
+
+impl PsbtEncode for SpV0Info {
+    type Encoder<'e>
+        = SpV0InfoEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        SpV0InfoEncoder::new(Encoder2::new(
+            self.scan_key().psbt_encoder(),
+            self.spend_key().psbt_encoder(),
+        ))
+    }
 }

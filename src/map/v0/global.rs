@@ -17,6 +17,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, IterEncoder,
 };
 
+use super::super::SeparatorEncoder;
 use super::unsigned_tx::{UnsignedTxDecoder, UnsignedTxEncoder};
 use crate::consts::{
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
@@ -24,9 +25,9 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
+use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
-use crate::encoding::native::{SeparatorEncoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder};
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
