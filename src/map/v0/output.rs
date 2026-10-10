@@ -13,8 +13,8 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{LeafVersion, TapLeafHash, TapTree, TaprootBuilder};
 use bitcoin::{Amount, ScriptBuf};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder, Decoder2Error,
-    DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
+    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder, DecoderStatus,
+    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
 use super::super::{
@@ -32,7 +32,7 @@ use crate::encoding::native::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError};
 use crate::map::error::{KeyDecodeError, OutputDecodeError, OutputValueDecodeError};
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
@@ -443,11 +443,16 @@ impl Decoder for OutputMapDecoder {
                     })?,
                 OutputStage::DecodingTapInternalKey { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) => OutputDecodeError::ValueDecode(
+                        ValueDecoderError::Inner(e) => OutputDecodeError::ValueDecode(
                             OutputValueDecodeError::TapInternalKey(e),
                         ),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?,
                 OutputStage::DecodingTapTree { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -470,22 +475,33 @@ impl Decoder for OutputMapDecoder {
                 #[cfg(feature = "silent-payments")]
                 OutputStage::DecodingSpV0Info { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
+                        ValueDecoderError::Inner(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?,
                 #[cfg(feature = "silent-payments")]
                 OutputStage::DecodingSpV0Label { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
+                        ValueDecoderError::Inner(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?,
                 OutputStage::Done(_) => return Ok(DecoderStatus::Ready),
-                OutputStage::DecodingSeparator | OutputStage::Errored =>
-                    panic!("push_bytes in unexpected stage"),
+                OutputStage::DecodingSeparator | OutputStage::Errored => {
+                    panic!("push_bytes in unexpected stage")
+                }
             };
 
             if status.needs_more() {
@@ -544,12 +560,17 @@ impl Decoder for OutputMapDecoder {
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingTapInternalKey { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                    let bytes = decoder.end().map_err(|e| match e {
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) => OutputDecodeError::ValueDecode(
+                        ValueDecoderError::Inner(e) => OutputDecodeError::ValueDecode(
                             OutputValueDecodeError::TapInternalKey(e),
                         ),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?;
                     if self.tap_internal_key.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
@@ -664,20 +685,17 @@ impl Decoder for OutputMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 OutputStage::DecodingSpV0Info { key, decoder } => {
-                    let (value_len, arr) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                    let arr = decoder.end().map_err(|e| match e {
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
+                        ValueDecoderError::Inner(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?;
-                    if value_len != 66 {
-                        return Err(OutputDecodeError::ValueDecode(
-                            OutputValueDecodeError::WrongLength {
-                                got: value_len as usize,
-                                expected: 66,
-                            },
-                        ));
-                    }
                     if self.sp_v0_info.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -691,20 +709,17 @@ impl Decoder for OutputMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 OutputStage::DecodingSpV0Label { key, decoder } => {
-                    let (value_len, arr) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
+                    let arr = decoder.end().map_err(|e| match e {
+                        ValueDecoderError::LengthPrefix(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
+                        ValueDecoderError::Inner(e) =>
                             OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
+                        ValueDecoderError::WrongLength { declared, consumed } =>
+                            OutputDecodeError::ValueDecode(OutputValueDecodeError::WrongLength {
+                                got: declared,
+                                expected: consumed,
+                            }),
                     })?;
-                    if value_len != 4 {
-                        return Err(OutputDecodeError::ValueDecode(
-                            OutputValueDecodeError::WrongLength {
-                                got: value_len as usize,
-                                expected: 4,
-                            },
-                        ));
-                    }
                     if self.sp_v0_label.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
