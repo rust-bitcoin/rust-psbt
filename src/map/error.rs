@@ -5,6 +5,7 @@
 
 use core::fmt;
 
+use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
 use bitcoin::{bip32, ecdsa, hashes, key};
@@ -283,11 +284,11 @@ pub enum OutputValueDecodeError {
     /// Error decoding the amount value.
     Amount(UnexpectedEofError),
     /// Error decoding the script pubkey.
-    Script(ByteVecDecoderError),
+    Script(ScriptBufDecoderError),
     /// Error decoding the redeem script.
-    RedeemScript(ByteVecDecoderError),
+    RedeemScript(ScriptBufDecoderError),
     /// Error decoding the witness script.
-    WitnessScript(ByteVecDecoderError),
+    WitnessScript(ScriptBufDecoderError),
     /// Error decoding the BIP32 derivation value.
     Bip32Derivation(ByteVecDecoderError),
     /// Error decoding the taproot internal key.
@@ -484,11 +485,11 @@ pub enum InputValueDecodeError {
     /// Error decoding the final script witness (witness stack).
     FinalScriptWitness(WitnessDecoderError),
     /// Error decoding the redeem script.
-    RedeemScript(ByteVecDecoderError),
+    RedeemScript(ScriptBufDecoderError),
     /// Error decoding the witness script.
-    WitnessScript(ByteVecDecoderError),
+    WitnessScript(ScriptBufDecoderError),
     /// Error decoding the final scriptSig.
-    FinalScriptSig(ByteVecDecoderError),
+    FinalScriptSig(ScriptBufDecoderError),
     /// Error decoding the taproot key signature.
     TapKeySig(ByteVecDecoderError),
     /// Error decoding an ECDSA partial signature.

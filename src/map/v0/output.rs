@@ -13,8 +13,8 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{LeafVersion, TapLeafHash, TapTree, TaprootBuilder};
 use bitcoin::{Amount, ScriptBuf};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder, DecoderStatus,
-    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
+    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decode, Decoder,
+    DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
 use super::super::{
@@ -251,11 +251,11 @@ enum OutputStage {
     DecodingKey(KeyDecoder),
     DecodingRedeemScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     DecodingWitnessScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     DecodingBip32Derivation {
         key: Key,
@@ -299,9 +299,9 @@ impl OutputStage {
     fn from_key(key: Key) -> Result<Self, OutputDecodeError> {
         match key.type_value {
             PSBT_OUT_REDEEM_SCRIPT if key.key.is_empty() =>
-                Ok(Self::DecodingRedeemScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() }),
             PSBT_OUT_WITNESS_SCRIPT if key.key.is_empty() =>
-                Ok(Self::DecodingWitnessScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() }),
             PSBT_OUT_TAP_INTERNAL_KEY if key.key.is_empty() =>
                 Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() }),
             PSBT_OUT_TAP_TREE if key.key.is_empty() =>
@@ -515,23 +515,23 @@ impl Decoder for OutputMapDecoder {
                     self.stage = OutputStage::from_key(key)?;
                 }
                 OutputStage::DecodingRedeemScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.redeem_script = Some(ScriptBuf::from(value));
+                    self.redeem_script = Some(script);
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingWitnessScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.witness_script = Some(ScriptBuf::from(value));
+                    self.witness_script = Some(script);
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingBip32Derivation { key, decoder } => {
@@ -741,8 +741,8 @@ impl Decoder for OutputMapDecoder {
             #[cfg(feature = "silent-payments")]
             OutputStage::DecodingSpV0Label { ref decoder, .. } => decoder.read_limit(),
             OutputStage::DecodingRedeemScript { ref decoder, .. }
-            | OutputStage::DecodingWitnessScript { ref decoder, .. }
-            | OutputStage::DecodingBip32Derivation { ref decoder, .. }
+            | OutputStage::DecodingWitnessScript { ref decoder, .. } => decoder.read_limit(),
+            OutputStage::DecodingBip32Derivation { ref decoder, .. }
             | OutputStage::DecodingTapTree { ref decoder, .. }
             | OutputStage::DecodingTapBip32Derivation { ref decoder, .. }
             | OutputStage::DecodingProprietary { ref decoder, .. }

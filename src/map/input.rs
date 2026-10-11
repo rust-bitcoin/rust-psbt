@@ -18,7 +18,7 @@ use bitcoin::{
     ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus,
+    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus,
     Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
@@ -640,17 +640,17 @@ enum DecoderStage {
     /// Decoding a redeem script.
     DecodingRedeemScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     /// Decoding a witness script.
     DecodingWitnessScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     /// Decoding a final scriptSig.
     DecodingFinalScriptSig {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     /// Decoding a final scriptWitness.
     DecodingFinalScriptWitness {
@@ -766,11 +766,11 @@ impl DecoderStage {
             PSBT_IN_SIGHASH_TYPE =>
                 Ok(Self::DecodingSighashType { key, decoder: ValueDecoder::default() }),
             PSBT_IN_REDEEM_SCRIPT =>
-                Ok(Self::DecodingRedeemScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() }),
             PSBT_IN_WITNESS_SCRIPT =>
-                Ok(Self::DecodingWitnessScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() }),
             PSBT_IN_FINAL_SCRIPTSIG =>
-                Ok(Self::DecodingFinalScriptSig { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingFinalScriptSig { key, decoder: Default::default() }),
             PSBT_IN_FINAL_SCRIPTWITNESS =>
                 Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() }),
             PSBT_IN_TAP_KEY_SIG =>
@@ -1319,33 +1319,33 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingRedeemScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.redeem_script = Some(ScriptBuf::from(value));
+                    self.redeem_script = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingWitnessScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.witness_script = Some(ScriptBuf::from(value));
+                    self.witness_script = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingFinalScriptSig { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::FinalScriptSig(e))
                     })?;
                     if self.final_script_sig.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.final_script_sig = Some(ScriptBuf::from(value));
+                    self.final_script_sig = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingFinalScriptWitness { key, decoder } => {
@@ -1768,8 +1768,8 @@ impl Decoder for InputDecoder {
             DecoderStage::DecodingFinalScriptWitness { decoder, .. } => decoder.read_limit(),
             DecoderStage::DecodingRedeemScript { decoder, .. }
             | DecoderStage::DecodingWitnessScript { decoder, .. }
-            | DecoderStage::DecodingFinalScriptSig { decoder, .. }
-            | DecoderStage::DecodingTapKeySig { decoder, .. }
+            | DecoderStage::DecodingFinalScriptSig { decoder, .. } => decoder.read_limit(),
+            DecoderStage::DecodingTapKeySig { decoder, .. }
             | DecoderStage::DecodingPartialSig { decoder, .. }
             | DecoderStage::DecodingBip32Derivation { decoder, .. }
             | DecoderStage::DecodingTapBip32Derivation { decoder, .. }
