@@ -12,7 +12,7 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{self, LeafVersion, TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder, Decoder2Error,
+    ArrayDecoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decode, Decoder,
     DecoderStatus, Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
@@ -199,15 +199,15 @@ enum DecoderStage {
     },
     DecodingScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     DecodingRedeemScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     DecodingWitnessScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: <ScriptBuf as Decode>::Decoder,
     },
     DecodingBip32Derivation {
         key: Key,
@@ -251,11 +251,11 @@ impl DecoderStage {
     fn from_key(key: Key) -> Result<Self, OutputDecodeError> {
         match key.type_value {
             PSBT_OUT_AMOUNT => Ok(Self::DecodingAmount { key, decoder: ValueDecoder::default() }),
-            PSBT_OUT_SCRIPT => Ok(Self::DecodingScript { key, decoder: ByteVecDecoder::new() }),
+            PSBT_OUT_SCRIPT => Ok(Self::DecodingScript { key, decoder: Default::default() }),
             PSBT_OUT_REDEEM_SCRIPT =>
-                Ok(Self::DecodingRedeemScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() }),
             PSBT_OUT_WITNESS_SCRIPT =>
-                Ok(Self::DecodingWitnessScript { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() }),
             PSBT_OUT_BIP32_DERIVATION =>
                 Ok(Self::DecodingBip32Derivation { key, decoder: ByteVecDecoder::new() }),
             PSBT_OUT_TAP_INTERNAL_KEY =>
@@ -359,35 +359,22 @@ impl Decoder for OutputDecoder {
                 DecoderStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(OutputDecodeError::KeyDecode)?,
                 DecoderStage::DecodingAmount { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::Amount(e)),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::Amount(e))
                     })?,
                 DecoderStage::DecodingTapInternalKey { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) => OutputDecodeError::ValueDecode(
-                            OutputValueDecodeError::TapInternalKey(e),
-                        ),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::TapInternalKey(e))
                     })?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Info { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e))
                     })?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Label { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e))
                     })?,
                 DecoderStage::DecodingScript { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -424,8 +411,9 @@ impl Decoder for OutputDecoder {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::UnknownValue(e))
                     })?,
                 DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
-                DecoderStage::DecodingSeparator | DecoderStage::Errored =>
-                    panic!("push_bytes in unexpected stage"),
+                DecoderStage::DecodingSeparator | DecoderStage::Errored => {
+                    panic!("push_bytes in unexpected stage")
+                }
             };
 
             if status.needs_more() {
@@ -439,11 +427,8 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::from_key(key)?;
                 }
                 DecoderStage::DecodingAmount { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::Amount(e)),
+                    let bytes = decoder.end().map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::Amount(e))
                     })?;
                     if self.amount.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
@@ -452,33 +437,33 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::Script(e))
                     })?;
                     if self.script_pubkey.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.script_pubkey = Some(ScriptBuf::from(value));
+                    self.script_pubkey = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingRedeemScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::RedeemScript(e))
                     })?;
                     if self.redeem_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.redeem_script = Some(ScriptBuf::from(value));
+                    self.redeem_script = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingWitnessScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let script = decoder.end().map_err(|e| {
                         OutputDecodeError::ValueDecode(OutputValueDecodeError::WitnessScript(e))
                     })?;
                     if self.witness_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.witness_script = Some(ScriptBuf::from(value));
+                    self.witness_script = Some(script);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingBip32Derivation { key, decoder } => {
@@ -506,12 +491,8 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapInternalKey { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) => OutputDecodeError::ValueDecode(
-                            OutputValueDecodeError::TapInternalKey(e),
-                        ),
+                    let bytes = decoder.end().map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::TapInternalKey(e))
                     })?;
                     if self.tap_internal_key.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
@@ -617,11 +598,8 @@ impl Decoder for OutputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Info { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e)),
+                    let bytes = decoder.end().map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Info(e))
                     })?;
                     if self.sp_v0_info.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
@@ -639,11 +617,8 @@ impl Decoder for OutputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Label { key, decoder } => {
-                    let (_, bytes) = decoder.end().map_err(|e| match e {
-                        Decoder2Error::First(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::LengthPrefix(e)),
-                        Decoder2Error::Second(e) =>
-                            OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e)),
+                    let bytes = decoder.end().map_err(|e| {
+                        OutputDecodeError::ValueDecode(OutputValueDecodeError::SpV0Label(e))
                     })?;
                     if self.sp_v0_label.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
@@ -717,8 +692,8 @@ impl Decoder for OutputDecoder {
             DecoderStage::DecodingSpV0Label { decoder, .. } => decoder.read_limit(),
             DecoderStage::DecodingScript { decoder, .. }
             | DecoderStage::DecodingRedeemScript { decoder, .. }
-            | DecoderStage::DecodingWitnessScript { decoder, .. }
-            | DecoderStage::DecodingBip32Derivation { decoder, .. }
+            | DecoderStage::DecodingWitnessScript { decoder, .. } => decoder.read_limit(),
+            DecoderStage::DecodingBip32Derivation { decoder, .. }
             | DecoderStage::DecodingTapTree { decoder, .. }
             | DecoderStage::DecodingTapBip32Derivation { decoder, .. }
             | DecoderStage::DecodingProprietary { decoder, .. }

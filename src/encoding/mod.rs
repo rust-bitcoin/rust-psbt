@@ -13,9 +13,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use bitcoin_consensus_encoding::{
-    BytesEncoder, CompactSizeDecoderError, CompactSizeEncoder, CompactSizeU64Decoder, DecodeError,
-    Decoder, Decoder2, Decoder2Error, DecoderStatus, Encode, Encoder, Encoder2, Encoder4,
-    EncoderStatus, ExactSizeEncoder, IterEncoder, VecDecoderError, VecDecoderWith,
+    BytesEncoder, CompactSizeDecoder, CompactSizeDecoderError, CompactSizeEncoder, DecodeError,
+    Decoder, DecoderStatus, Encode, Encoder, Encoder2, Encoder4, EncoderStatus, ExactSizeEncoder,
+    IterEncoder, VecDecoderError, VecDecoderWith,
 };
 
 /// Types that can be PSBT-decoded.
@@ -121,34 +121,143 @@ impl<K: ExactSizeEncoder, V: ExactSizeEncoder> KeyValueEncoder<K, V> {
     }
 }
 
+/// Error returned by [`ValueDecoder`].
+#[derive(Debug)]
+pub enum ValueDecoderError<E> {
+    /// Error decoding the value's length prefix.
+    LengthPrefix(CompactSizeDecoderError),
+    /// The inner decoder consumed a different number of bytes than the length
+    /// prefix declared.
+    WrongLength {
+        /// The length the value prefix declared.
+        declared: usize,
+        /// The number of bytes the inner decoder actually consumed.
+        consumed: usize,
+    },
+    /// Error from the inner decoder.
+    Inner(E),
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for ValueDecoderError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LengthPrefix(e) => write!(f, "error decoding value length prefix: {e}"),
+            Self::WrongLength { declared, consumed } =>
+                write!(f, "value length {declared} does not match consumed {consumed}"),
+            Self::Inner(e) => write!(f, "value decode error: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E: std::error::Error + 'static> std::error::Error for ValueDecoderError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LengthPrefix(e) => Some(e),
+            Self::WrongLength { .. } => None,
+            Self::Inner(e) => Some(e),
+        }
+    }
+}
+
+/// The decoding state of a [`ValueDecoder`].
+#[derive(Debug)]
+enum ValueDecoderState {
+    /// Reading the value's compact-size length prefix.
+    ReadingPrefix(CompactSizeDecoder),
+    /// Reading the value body, whose length the prefix declared.
+    ReadingValue { declared: usize },
+    /// A previous [`Decoder::push_bytes`] call errored; the decoder is unusable.
+    Errored,
+}
+
 /// Generic decoder (counterpart to [`KeyValueEncoder`]) for a PSBT key/value value.
 ///
-/// - `<value> := <valuelen> <value body>`
+/// Decodes `<valuelen> <value body>` where the inner decoder `D` does not need the length prefix
+/// to determine where the value ends (it is fixed-size or structurally self-delimiting). The
+/// prefix is therefore only validated: `D` must consume exactly `valuelen` bytes, otherwise
+/// [`ValueDecoderError::WrongLength`] is returned.
 ///
-/// The length prefix is decoded, but not used to constrain the value since
-/// the given decoder controls how many bytes it takes. A dynamically sized value may
-/// want to use a [`bitcoin_consensus_encoding::ByteVecDecoder`] instead.
-///
-/// The error type is a pass-through [`Decoder2Error`]; callers are responsible
-/// for mapping based on the concrete inner decoder type.
+/// If a field's value is a length-prefixed blob (a "raw" decoder, such as the consensus decoder for
+/// [`bitcoin::ScriptBuf`]), use that decoder directly instead of wrapping it here.
 #[derive(Debug)]
-pub(crate) struct ValueDecoder<D: Decoder>(Decoder2<CompactSizeU64Decoder, D>);
+pub(crate) struct ValueDecoder<D: Decoder> {
+    inner: D,
+    state: ValueDecoderState,
+    consumed: usize,
+}
 
 impl<D: Decoder + Default> Default for ValueDecoder<D> {
-    fn default() -> Self { Self(Decoder2::default()) }
+    fn default() -> Self {
+        Self {
+            inner: D::default(),
+            state: ValueDecoderState::ReadingPrefix(CompactSizeDecoder::new()),
+            consumed: 0,
+        }
+    }
 }
 
 impl<D: Decoder + Default> Decoder for ValueDecoder<D> {
-    type Output = (u64, D::Output);
-    type Error = Decoder2Error<CompactSizeDecoderError, D::Error>;
+    type Output = D::Output;
+    type Error = ValueDecoderError<D::Error>;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.0.push_bytes(bytes)
+        if matches!(self.state, ValueDecoderState::ReadingPrefix(_)) {
+            let ValueDecoderState::ReadingPrefix(mut prefix) =
+                core::mem::replace(&mut self.state, ValueDecoderState::Errored)
+            else {
+                panic!("use of failed decoder");
+            };
+
+            if prefix.push_bytes(bytes).map_err(ValueDecoderError::LengthPrefix)?.needs_more() {
+                self.state = ValueDecoderState::ReadingPrefix(prefix);
+                return Ok(DecoderStatus::NeedsMore);
+            }
+            let declared = prefix.end().map_err(ValueDecoderError::LengthPrefix)?;
+            self.state = ValueDecoderState::ReadingValue { declared };
+        }
+
+        let before = bytes.len();
+        let status = self.inner.push_bytes(bytes).map_err(|e| {
+            self.state = ValueDecoderState::Errored;
+            ValueDecoderError::Inner(e)
+        })?;
+        self.consumed += before - bytes.len();
+        Ok(status)
     }
 
-    fn end(self) -> Result<Self::Output, Self::Error> { self.0.end() }
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let Self { inner, state, consumed } = self;
 
-    fn read_limit(&self) -> usize { self.0.read_limit() }
+        let declared = match state {
+            ValueDecoderState::ReadingValue { declared } => declared,
+            // Insufficient data, the prefix was never fully read.
+            ValueDecoderState::ReadingPrefix(prefix) => {
+                return match prefix.end() {
+                    Err(e) => Err(ValueDecoderError::LengthPrefix(e)),
+                    Ok(declared) =>
+                        unreachable!("prefix complete in ReadingPrefix state: {declared}"),
+                };
+            }
+            ValueDecoderState::Errored => panic!("use of failed decoder"),
+        };
+
+        let out = inner.end().map_err(ValueDecoderError::Inner)?;
+
+        if consumed != declared {
+            return Err(ValueDecoderError::WrongLength { declared, consumed });
+        }
+        Ok(out)
+    }
+
+    fn read_limit(&self) -> usize {
+        match &self.state {
+            ValueDecoderState::ReadingPrefix(prefix) =>
+                prefix.read_limit() + self.inner.read_limit(),
+            ValueDecoderState::ReadingValue { .. } => self.inner.read_limit(),
+            ValueDecoderState::Errored => 0,
+        }
+    }
 }
 
 /// Iterator yielding [`KeyValueEncoder`]s for a map, prefixing each key's

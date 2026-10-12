@@ -5,6 +5,7 @@
 
 use core::fmt;
 
+use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
 use bitcoin::{bip32, ecdsa, hashes, key};
@@ -13,6 +14,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::Key;
+use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 
@@ -55,8 +57,6 @@ pub enum GlobalDecodeError {
     FieldMismatch,
     /// v0 global map is missing the unsigned transaction (v0 only).
     MissingUnsignedTx,
-    /// Error decoding the unsigned transaction from a v0 global map (v0 only).
-    UnsignedTx(UnsignedTxDecodeError),
 }
 
 impl fmt::Display for GlobalDecodeError {
@@ -88,7 +88,6 @@ impl fmt::Display for GlobalDecodeError {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
             Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
-            Self::UnsignedTx(ref e) => write_err!(f, "unsigned tx"; e),
         }
     }
 }
@@ -104,7 +103,6 @@ impl std::error::Error for GlobalDecodeError {
             Self::Bip32(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
-            Self::UnsignedTx(ref e) => Some(e),
             Self::MissingVersion
             | Self::MissingTxVersion
             | Self::MissingInputCount
@@ -129,18 +127,18 @@ pub enum GlobalValueDecodeError {
         /// The expected value length.
         expected: usize,
     },
-    /// Error decoding the value's length prefix.
-    LengthPrefix(CompactSizeDecoderError),
     /// Error decoding the PSBT version value.
-    Version(UnexpectedEofError),
+    Version(ValueDecoderError<crate::version::VersionDecoderError>),
     /// Error decoding the transaction modifiable flags value.
-    ModifiableFlags(UnexpectedEofError),
+    ModifiableFlags(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding a count value.
-    Count(CompactSizeDecoderError),
+    Count(ValueDecoderError<CompactSizeDecoderError>),
     /// Error decoding a transaction version value.
-    TxVersion(bitcoin::transaction::VersionDecoderError),
+    TxVersion(ValueDecoderError<bitcoin::transaction::VersionDecoderError>),
     /// Error decoding a lock time value.
-    LockTime(bitcoin::locktime::absolute::LockTimeDecoderError),
+    LockTime(ValueDecoderError<bitcoin::locktime::absolute::LockTimeDecoderError>),
+    /// Error decoding a v0 unsigned transaction value.
+    UnsignedTx(ValueDecoderError<UnsignedTxDecodeError>),
     /// Error decoding an xpub value.
     XpubValue(ByteVecDecoderError),
     /// Error decoding a proprietary value.
@@ -149,10 +147,10 @@ pub enum GlobalValueDecodeError {
     UnknownValue(ByteVecDecoderError),
     /// Error decoding a silent payments ECDH share value.
     #[cfg(feature = "silent-payments")]
-    SpEcdh(UnexpectedEofError),
+    SpEcdh(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding a silent payments DLEQ proof value.
     #[cfg(feature = "silent-payments")]
-    SpDleq(UnexpectedEofError),
+    SpDleq(ValueDecoderError<UnexpectedEofError>),
 }
 
 impl fmt::Display for GlobalValueDecodeError {
@@ -160,12 +158,12 @@ impl fmt::Display for GlobalValueDecodeError {
         match self {
             Self::WrongLength { got, expected } =>
                 write!(f, "value length {} (expected {})", got, expected),
-            Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
             Self::Version(ref e) => write_err!(f, "error decoding PSBT version"; e),
             Self::ModifiableFlags(ref e) => write_err!(f, "error decoding modifiable flags"; e),
             Self::Count(ref e) => write_err!(f, "error decoding count"; e),
             Self::TxVersion(ref e) => write_err!(f, "error decoding transaction version"; e),
             Self::LockTime(ref e) => write_err!(f, "error decoding lock time"; e),
+            Self::UnsignedTx(ref e) => write_err!(f, "error decoding unsigned tx"; e),
             Self::XpubValue(ref e) => write_err!(f, "error decoding xpub value"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
@@ -182,12 +180,12 @@ impl std::error::Error for GlobalValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::WrongLength { .. } => None,
-            Self::LengthPrefix(ref e) => Some(e),
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),
             Self::Count(ref e) => Some(e),
             Self::TxVersion(ref e) => Some(e),
             Self::LockTime(ref e) => Some(e),
+            Self::UnsignedTx(ref e) => Some(e),
             Self::XpubValue(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
@@ -278,20 +276,18 @@ pub enum OutputValueDecodeError {
         /// The expected value length.
         expected: usize,
     },
-    /// Error decoding the value's compact-size length prefix.
-    LengthPrefix(CompactSizeDecoderError),
     /// Error decoding the amount value.
-    Amount(UnexpectedEofError),
+    Amount(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the script pubkey.
-    Script(ByteVecDecoderError),
+    Script(ScriptBufDecoderError),
     /// Error decoding the redeem script.
-    RedeemScript(ByteVecDecoderError),
+    RedeemScript(ScriptBufDecoderError),
     /// Error decoding the witness script.
-    WitnessScript(ByteVecDecoderError),
+    WitnessScript(ScriptBufDecoderError),
     /// Error decoding the BIP32 derivation value.
     Bip32Derivation(ByteVecDecoderError),
     /// Error decoding the taproot internal key.
-    TapInternalKey(UnexpectedEofError),
+    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot tree.
     TapTree(ByteVecDecoderError),
     /// The decoded value is not a valid taproot tree.
@@ -304,10 +300,10 @@ pub enum OutputValueDecodeError {
     UnknownValue(ByteVecDecoderError),
     /// Error decoding a silent payments v0 info.
     #[cfg(feature = "silent-payments")]
-    SpV0Info(UnexpectedEofError),
+    SpV0Info(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding a silent payments v0 label.
     #[cfg(feature = "silent-payments")]
-    SpV0Label(UnexpectedEofError),
+    SpV0Label(ValueDecoderError<UnexpectedEofError>),
 }
 
 impl fmt::Display for OutputValueDecodeError {
@@ -315,7 +311,6 @@ impl fmt::Display for OutputValueDecodeError {
         match self {
             Self::WrongLength { got, expected } =>
                 write!(f, "value length {} (expected {})", got, expected),
-            Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -341,7 +336,6 @@ impl std::error::Error for OutputValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::WrongLength { .. } => None,
-            Self::LengthPrefix(ref e) => Some(e),
             Self::Amount(ref e) => Some(e),
             Self::Script(ref e) => Some(e),
             Self::RedeemScript(ref e) => Some(e),
@@ -459,36 +453,34 @@ pub enum InputValueDecodeError {
         /// The expected value length.
         expected: usize,
     },
-    /// Error decoding the value's compact-size length prefix.
-    LengthPrefix(CompactSizeDecoderError),
     /// Error decoding the previous transaction ID.
-    PreviousTxid(UnexpectedEofError),
+    PreviousTxid(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the output index.
-    OutputIndex(UnexpectedEofError),
+    OutputIndex(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the sequence number).
-    Sequence(UnexpectedEofError),
+    Sequence(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the minimum lock time.
-    MinTime(UnexpectedEofError),
+    MinTime(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the minimum lock height.
-    MinHeight(UnexpectedEofError),
+    MinHeight(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the sighash type.
-    SighashType(UnexpectedEofError),
+    SighashType(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot internal key.
-    TapInternalKey(UnexpectedEofError),
+    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot merkle root.
-    TapMerkleRoot(UnexpectedEofError),
+    TapMerkleRoot(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the non-witness UTXO (full transaction).
-    NonWitnessUtxo(TransactionDecoderError),
+    NonWitnessUtxo(ValueDecoderError<TransactionDecoderError>),
     /// Error decoding the witness UTXO (transaction output).
-    WitnessUtxo(TxOutDecoderError),
+    WitnessUtxo(ValueDecoderError<TxOutDecoderError>),
     /// Error decoding the final script witness (witness stack).
-    FinalScriptWitness(WitnessDecoderError),
+    FinalScriptWitness(ValueDecoderError<WitnessDecoderError>),
     /// Error decoding the redeem script.
-    RedeemScript(ByteVecDecoderError),
+    RedeemScript(ScriptBufDecoderError),
     /// Error decoding the witness script.
-    WitnessScript(ByteVecDecoderError),
+    WitnessScript(ScriptBufDecoderError),
     /// Error decoding the final scriptSig.
-    FinalScriptSig(ByteVecDecoderError),
+    FinalScriptSig(ScriptBufDecoderError),
     /// Error decoding the taproot key signature.
     TapKeySig(ByteVecDecoderError),
     /// Error decoding an ECDSA partial signature.
@@ -525,10 +517,10 @@ pub enum InputValueDecodeError {
     InvalidLeafVersion,
     /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
-    SpEcdh(UnexpectedEofError),
+    SpEcdh(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding a silent payments DLEQ proof).
     #[cfg(feature = "silent-payments")]
-    SpDleq(UnexpectedEofError),
+    SpDleq(ValueDecoderError<UnexpectedEofError>),
 }
 
 impl fmt::Display for InputValueDecodeError {
@@ -536,7 +528,6 @@ impl fmt::Display for InputValueDecodeError {
         match self {
             Self::WrongLength { got, expected } =>
                 write!(f, "value length {} (expected {})", got, expected),
-            Self::LengthPrefix(ref e) => write_err!(f, "error decoding value length prefix"; e),
             Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
             Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
             Self::Sequence(ref e) => write_err!(f, "error decoding sequence"; e),
@@ -583,7 +574,6 @@ impl std::error::Error for InputValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::WrongLength { .. } => None,
-            Self::LengthPrefix(ref e) => Some(e),
             Self::PreviousTxid(ref e) => Some(e),
             Self::OutputIndex(ref e) => Some(e),
             Self::Sequence(ref e) => Some(e),
