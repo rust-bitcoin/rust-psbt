@@ -34,7 +34,9 @@ fn make_tx_out(sats: u64) -> TxOut {
 
 /// Serializes `psbt` as a v0 PSBT then deserializes the bytes back into a v2 PSBT.
 fn round_trip_v0(psbt: &Psbt) -> Psbt {
-    let bytes = PsbtV0::from_psbt(psbt.clone()).expect("into_psbt_v0").serialize();
+    let bytes = PsbtV0::from_psbt(psbt.clone())
+        .expect("lock time must be resolvable for round-trip")
+        .serialize();
     PsbtV0::deserialize(&bytes).expect("deserialize_v0").into_psbt()
 }
 
@@ -125,8 +127,9 @@ fn strict_encode_round_trips_v0_decoded_psbt() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let psbt = PsbtV0::deserialize(&bytes).unwrap().into_psbt();
 
-    let encoded =
-        PsbtV0::from_psbt(psbt).expect("v0-decoded PSBT must strictly encode").serialize();
+    let encoded = PsbtV0::from_psbt(psbt)
+        .expect("v0-decoded PSBT must have resolvable lock time")
+        .serialize();
     assert_eq!(encoded, bytes);
 }
 
@@ -143,7 +146,7 @@ fn v2_only_fields_in_v0_encoding() {
         .unwrap();
     assert_eq!(psbt.global.tx_modifiable_flags & 0b11, 0b11);
 
-    let v0 = PsbtV0::from_psbt(psbt).expect("into_psbt_v0");
+    let v0 = PsbtV0::from_psbt(psbt).expect("well-formed v2 PSBT must have resolvable lock time");
     let v0_bytes = v0.serialize();
     let degraded = v0.degraded();
     assert!(degraded.is_empty()); // no SP fields set, and tx_modifiable isn't tracked.
@@ -175,7 +178,9 @@ fn v2_only_fields_in_v0_encoding() {
         sp_psbt.inputs[0].sp_dleq_proofs.insert(pk, DleqProof([0x42; 64]));
         sp_psbt.outputs[0].sp_v0_info = Some(SpV0Info::new(pk, pk));
 
-        let degraded = PsbtV0::from_psbt(sp_psbt.clone()).expect("lock_time").degraded();
+        let degraded = PsbtV0::from_psbt(sp_psbt.clone())
+            .expect("SP PSBT must have resolvable lock time")
+            .degraded();
         assert_eq!(degraded.sp_ecdh_shares, 1);
         assert_eq!(degraded.sp_dleq_proofs, 1);
         assert_eq!(degraded.sp_dropped_inputs, 1);
@@ -183,7 +188,8 @@ fn v2_only_fields_in_v0_encoding() {
         assert!(!degraded.is_empty());
 
         // Round-trip: SP fields survive v0 encoding.
-        let v0_bytes = PsbtV0::from_psbt(sp_psbt).expect("into_psbt_v0 with SP").serialize();
+        let v0_bytes =
+            PsbtV0::from_psbt(sp_psbt).expect("SP PSBT must have resolvable lock time").serialize();
         let decoded = PsbtV0::deserialize(&v0_bytes).unwrap().into_psbt();
         assert_eq!(decoded.global.sp_ecdh_shares.len(), 1);
         assert_eq!(decoded.global.sp_dleq_proofs.len(), 1);
@@ -273,7 +279,7 @@ fn base64_encode_then_decode_round_trips() {
     let bytes = Vec::from_hex(CREATE_VECTOR_HEX).unwrap();
     let psbt = PsbtV0::deserialize(&bytes).unwrap().into_psbt();
 
-    let v0 = PsbtV0::from_psbt(psbt).expect("into_psbt_v0");
+    let v0 = PsbtV0::from_psbt(psbt).expect("base64-decoded PSBT must have resolvable lock time");
     let b64 = v0.serialize_base64();
     let psbt = v0.into_psbt();
     let decoded = PsbtV0::deserialize_base64(&b64).expect("v0").into_psbt();
