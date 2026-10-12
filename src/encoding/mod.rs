@@ -138,6 +138,29 @@ pub(crate) enum ValueDecoderError<E> {
     Inner(E),
 }
 
+impl<E: core::fmt::Display> core::fmt::Display for ValueDecoderError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ValueDecoderError::LengthPrefix(e) =>
+                write!(f, "error decoding value length prefix: {e}"),
+            ValueDecoderError::WrongLength { declared, consumed } =>
+                write!(f, "value length {declared} does not match consumed {consumed}"),
+            ValueDecoderError::Inner(e) => write!(f, "value decode error: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E: std::error::Error + 'static> std::error::Error for ValueDecoderError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ValueDecoderError::LengthPrefix(e) => Some(e),
+            ValueDecoderError::WrongLength { .. } => None,
+            ValueDecoderError::Inner(e) => Some(e),
+        }
+    }
+}
+
 /// The decoding state of a [`ValueDecoder`].
 #[derive(Debug)]
 enum ValueDecoderState {
