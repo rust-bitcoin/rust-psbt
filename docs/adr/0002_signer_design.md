@@ -29,11 +29,10 @@ failing upfront if the lock time cannot be determined. Writing signatures needs
 
 ```rust
 let mut signer = Signer::new(psbt)?;
-let sigs = {
-    let mut session = signer.session();      // lends Psbt + cache
+let sigs = signer.session(|mut session| {    // lends Psbt + cache
     let inputs = session.signable_inputs()?; // verify every input
     session.get_all(&inputs, &keys, &secp)   // signatures, detached
-};                                           // session dropped, Psbt unfrozen
+});                                          // session dropped, Psbt unfrozen
 let psbt = signer.apply(sigs)?;              // writes, clears TX_MODIFIABLE
 ```
 
@@ -43,6 +42,31 @@ prevout, script code, sighash type, taproot spent outputs - so remaining live re
 are shape-only (key lookup). `SigningSession` holds `&'a Psbt` and
 `&'a mut SighashCache` under one lifetime, letting the cache be reused while the
 `Psbt` stays frozen.
+
+## Unique Sessions via an Invariant Higher-Ranked Lifetime
+
+Each `Signer::session` call gives its session an unforgeable id: a fresh higher-ranked
+lifetime `'id` (`for<'a, 'id>`); every `SignableInput` the session creates contains
+that session id. Stored as `PhantomData<fn(&'id ()) -> &'id ()>`, the id is invariant:
+`'id` unifies only with itself, so a `SignableInput` created by one session can never
+be coerced to another session's id. The check is type-level and compiles to nothing.
+
+Without invariance, nested sessions of two signers would let evidence verified against
+one PSBT be signed by a session of another:
+
+```rust
+signer_a.session(|mut sa| {                                 // session id 'id1
+    signer_b.session(|mut sb| {                             // session id 'id2
+        let input = sa.signable_input(0).unwrap();          // verified against psbt A
+        let sigs = sb.get_input_sigs(&input, &keys, &secp); // rejected: SignableInput<'_, 'id1> is not SignableInput<'_, 'id2>
+    })
+})
+```
+
+A covariant id (`PhantomData<&'id ()>`) would let this compile: `'id1` outlives `'id2`
+(the outer closure body contains the inner call), so the input's id could shrink to
+`'id2` - and `sb` would sign with its own cache and PSBT while trusting a snapshot
+verified against someone else's.
 
 ## Two Verification Paths, One Explicit Trust Boundary
 
