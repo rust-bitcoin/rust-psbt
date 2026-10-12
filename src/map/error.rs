@@ -14,6 +14,8 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::Key;
+#[cfg(feature = "silent-payments")]
+use crate::encoding::native::CompressedPublicKeyDecodeError;
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
@@ -147,7 +149,7 @@ pub enum GlobalValueDecodeError {
     UnknownValue(ByteVecDecoderError),
     /// Error decoding a silent payments ECDH share value.
     #[cfg(feature = "silent-payments")]
-    SpEcdh(ValueDecoderError<UnexpectedEofError>),
+    SpEcdh(ValueDecoderError<CompressedPublicKeyDecodeError>),
     /// Error decoding a silent payments DLEQ proof value.
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),
@@ -517,7 +519,7 @@ pub enum InputValueDecodeError {
     InvalidLeafVersion,
     /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
-    SpEcdh(ValueDecoderError<UnexpectedEofError>),
+    SpEcdh(ValueDecoderError<CompressedPublicKeyDecodeError>),
     /// Error decoding a silent payments DLEQ proof).
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),

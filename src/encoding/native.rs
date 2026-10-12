@@ -16,9 +16,7 @@ use bitcoin::locktime::absolute;
 use bitcoin::taproot::{
     self, ControlBlock, LeafVersion, ScriptLeaves, TapLeafHash, TapNodeHash, TapTree,
 };
-#[cfg(feature = "silent-payments")]
-use bitcoin::CompressedPublicKey;
-use bitcoin::{ecdsa, ScriptBuf, Txid, VarInt};
+use bitcoin::{ecdsa, CompressedPublicKey, ScriptBuf, Txid, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, BytesEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder,
     Encoder2, Encoder4, EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
@@ -560,7 +558,6 @@ pub(crate) type TapKeyOriginIter<'e> = KeyValueIter<
     PSBT_IN_TAP_BIP32_DERIVATION,
 >;
 
-#[cfg(feature = "silent-payments")]
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
         = ArrayEncoder<33>
@@ -569,6 +566,61 @@ impl PsbtEncode for CompressedPublicKey {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         ArrayEncoder::without_length_prefix(self.to_bytes())
+    }
+}
+
+/// Decoder for a [`CompressedPublicKey`].
+#[derive(Debug, Default)]
+pub struct CompressedPublicKeyDecoder {
+    inner: ArrayDecoder<33>,
+}
+
+impl Decoder for CompressedPublicKeyDecoder {
+    type Output = CompressedPublicKey;
+    type Error = CompressedPublicKeyDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(CompressedPublicKeyDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(CompressedPublicKeyDecodeError::UnexpectedEof)?;
+        CompressedPublicKey::from_slice(&bytes).map_err(CompressedPublicKeyDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for CompressedPublicKey {
+    type Decoder = CompressedPublicKeyDecoder;
+}
+
+/// Error decoding a [`CompressedPublicKey`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompressedPublicKeyDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The 33 bytes did not form a valid compressed public key.
+    Invalid(bitcoin::secp256k1::Error),
+}
+
+impl fmt::Display for CompressedPublicKeyDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) =>
+                write!(f, "unexpected EOF decoding compressed public key: {e}"),
+            Self::Invalid(e) => write!(f, "invalid compressed public key: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for CompressedPublicKeyDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::Invalid(e) => Some(e),
+        }
     }
 }
 
