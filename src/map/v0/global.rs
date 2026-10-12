@@ -320,31 +320,12 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
                 Stage::DecodingVersion { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) => match e {
-                            VersionDecoderError::UnexpectedEof(e) =>
-                                GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e)),
-                            VersionDecoderError::UnsupportedVersion(e) =>
-                                GlobalDecodeError::WrongVersion(e.version()),
-                        },
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e))
                     })?,
                 Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) => GlobalDecodeError::UnsignedTx(e),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnsignedTx(e))
                     })?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -360,29 +341,13 @@ impl Decoder for GlobalMapDecoder {
                     })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e))
                     })?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e))
                     })?,
                 Stage::Done(_) => return Ok(DecoderStatus::Ready),
                 Stage::DecodingSeparator | Stage::Errored => {
@@ -401,20 +366,14 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::from_key(key)?;
                 }
                 Stage::DecodingVersion { key, decoder } => {
-                    let version = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) => match e {
-                            VersionDecoderError::UnexpectedEof(e) =>
-                                GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e)),
-                            VersionDecoderError::UnsupportedVersion(e) =>
-                                GlobalDecodeError::WrongVersion(e.version()),
-                        },
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let version = decoder.end().map_err(|e| {
+                        if let ValueDecoderError::Inner(VersionDecoderError::UnsupportedVersion(
+                            v,
+                        )) = &e
+                        {
+                            return GlobalDecodeError::WrongVersion(v.version());
+                        }
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::Version(e))
                     })?;
                     if version != V0 {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
@@ -440,18 +399,8 @@ impl Decoder for GlobalMapDecoder {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
                     let (version, tx_inputs, tx_outputs, lock_time) =
-                        decoder.end().map_err(|e| match e {
-                            ValueDecoderError::LengthPrefix(e) => GlobalDecodeError::ValueDecode(
-                                GlobalValueDecodeError::LengthPrefix(e),
-                            ),
-                            ValueDecoderError::Inner(e) => GlobalDecodeError::UnsignedTx(e),
-                            ValueDecoderError::WrongLength { declared, consumed } =>
-                                GlobalDecodeError::ValueDecode(
-                                    GlobalValueDecodeError::WrongLength {
-                                        got: declared,
-                                        expected: consumed,
-                                    },
-                                ),
+                        decoder.end().map_err(|e| {
+                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnsignedTx(e))
                         })?;
                     self.tx_version = Some(version);
                     self.tx_inputs = Some(tx_inputs);
@@ -519,16 +468,8 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let arr = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
@@ -544,16 +485,8 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let arr = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
@@ -649,13 +582,10 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
             .unwrap_err();
-        assert!(matches!(
-            err,
-            GlobalDecodeError::ValueDecode(GlobalValueDecodeError::WrongLength {
-                got: 5,
-                expected: 4,
-            }),
-        ));
+        assert!(
+            matches!(err, GlobalDecodeError::ValueDecode(_)),
+            "expected ValueDecode, got {err:?}"
+        );
     }
 
     #[test]

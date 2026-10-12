@@ -46,9 +46,7 @@ use crate::encoding::native::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{DleqPairIter, EcdhPairIter};
-use crate::encoding::{
-    ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError,
-};
+use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
@@ -927,137 +925,48 @@ impl Decoder for InputDecoder {
                 DecoderStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(InputDecodeError::KeyDecode)?,
                 DecoderStage::DecodingPreviousTxid { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::PreviousTxid(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::PreviousTxid(e))
                     })?,
                 DecoderStage::DecodingTapInternalKey { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e))
                     })?,
                 DecoderStage::DecodingTapMerkleRoot { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e))
                     })?,
                 DecoderStage::DecodingOutputIndex { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::OutputIndex(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::OutputIndex(e))
                     })?,
                 DecoderStage::DecodingSighashType { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e))
                     })?,
                 DecoderStage::DecodingSequence { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::Sequence(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::Sequence(e))
                     })?,
                 DecoderStage::DecodingMinTime { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::MinTime(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::MinTime(e))
                     })?,
                 DecoderStage::DecodingMinHeight { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::MinHeight(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::MinHeight(e))
                     })?,
                 DecoderStage::DecodingNonWitnessUtxo { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::NonWitnessUtxo(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::NonWitnessUtxo(e))
                     })?,
                 DecoderStage::DecodingWitnessUtxo { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WitnessUtxo(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::WitnessUtxo(e))
                     })?,
                 DecoderStage::DecodingFinalScriptWitness { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) => InputDecodeError::ValueDecode(
-                            InputValueDecodeError::FinalScriptWitness(e),
-                        ),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    decoder.push_bytes(bytes).map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::FinalScriptWitness(e))
                     })?,
                 DecoderStage::DecodingRedeemScript { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -1120,31 +1029,13 @@ impl Decoder for InputDecoder {
                         InputDecodeError::ValueDecode(InputValueDecodeError::UnknownValue(e))
                     })?,
                 #[cfg(feature = "silent-payments")]
-                DecoderStage::DecodingSpEcdhShare { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
-                    })?,
+                DecoderStage::DecodingSpEcdhShare { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)))?,
                 #[cfg(feature = "silent-payments")]
-                DecoderStage::DecodingSpDleqProof { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
-                    })?,
+                DecoderStage::DecodingSpDleqProof { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)))?,
                 DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
                 DecoderStage::DecodingSeparator | DecoderStage::Errored => {
                     panic!("push_bytes in unexpected stage")
@@ -1162,16 +1053,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::from_key(key)?;
                 }
                 DecoderStage::DecodingPreviousTxid { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::PreviousTxid(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::PreviousTxid(e))
                     })?;
                     if self.previous_txid.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1181,16 +1064,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingOutputIndex { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::OutputIndex(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::OutputIndex(e))
                     })?;
                     if self.spent_output_index.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1199,16 +1074,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingSequence { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::Sequence(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::Sequence(e))
                     })?;
                     if self.sequence.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1217,16 +1084,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingMinTime { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::MinTime(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::MinTime(e))
                     })?;
                     if self.min_time.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1240,16 +1099,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingMinHeight { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::MinHeight(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::MinHeight(e))
                     })?;
                     if self.min_height.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1265,16 +1116,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingNonWitnessUtxo { key, decoder } => {
-                    let tx = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::NonWitnessUtxo(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let tx = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::NonWitnessUtxo(e))
                     })?;
                     if self.non_witness_utxo.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1283,16 +1126,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingWitnessUtxo { key, decoder } => {
-                    let txout = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WitnessUtxo(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let txout = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::WitnessUtxo(e))
                     })?;
                     if self.witness_utxo.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1301,16 +1136,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingSighashType { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e))
                     })?;
                     if self.sighash_type.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1349,17 +1176,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingFinalScriptWitness { key, decoder } => {
-                    let witness = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) => InputDecodeError::ValueDecode(
-                            InputValueDecodeError::FinalScriptWitness(e),
-                        ),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let witness = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::FinalScriptWitness(e))
                     })?;
                     if self.final_script_witness.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1383,16 +1201,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapInternalKey { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e))
                     })?;
                     if self.tap_internal_key.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1407,16 +1217,8 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapMerkleRoot { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e))
                     })?;
                     if self.tap_merkle_root.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1653,16 +1455,8 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpEcdhShare { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e))
                     })?;
                     if key.key.is_empty() {
                         return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
@@ -1689,16 +1483,8 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpDleqProof { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| match e {
-                        ValueDecoderError::LengthPrefix(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::LengthPrefix(e)),
-                        ValueDecoderError::Inner(e) =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e)),
-                        ValueDecoderError::WrongLength { declared, consumed } =>
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: declared,
-                                expected: consumed,
-                            }),
+                    let bytes = decoder.end().map_err(|e| {
+                        InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e))
                     })?;
                     if key.key.is_empty() {
                         return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(

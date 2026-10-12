@@ -123,7 +123,7 @@ impl<K: ExactSizeEncoder, V: ExactSizeEncoder> KeyValueEncoder<K, V> {
 
 /// Error returned by [`ValueDecoder`].
 #[derive(Debug)]
-pub(crate) enum ValueDecoderError<E> {
+pub enum ValueDecoderError<E> {
     /// Error decoding the value's length prefix.
     LengthPrefix(CompactSizeDecoderError),
     /// The inner decoder consumed a different number of bytes than the length
@@ -141,11 +141,10 @@ pub(crate) enum ValueDecoderError<E> {
 impl<E: core::fmt::Display> core::fmt::Display for ValueDecoderError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ValueDecoderError::LengthPrefix(e) =>
-                write!(f, "error decoding value length prefix: {e}"),
-            ValueDecoderError::WrongLength { declared, consumed } =>
+            Self::LengthPrefix(e) => write!(f, "error decoding value length prefix: {e}"),
+            Self::WrongLength { declared, consumed } =>
                 write!(f, "value length {declared} does not match consumed {consumed}"),
-            ValueDecoderError::Inner(e) => write!(f, "value decode error: {e}"),
+            Self::Inner(e) => write!(f, "value decode error: {e}"),
         }
     }
 }
@@ -154,9 +153,9 @@ impl<E: core::fmt::Display> core::fmt::Display for ValueDecoderError<E> {
 impl<E: std::error::Error + 'static> std::error::Error for ValueDecoderError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ValueDecoderError::LengthPrefix(e) => Some(e),
-            ValueDecoderError::WrongLength { .. } => None,
-            ValueDecoderError::Inner(e) => Some(e),
+            Self::LengthPrefix(e) => Some(e),
+            Self::WrongLength { .. } => None,
+            Self::Inner(e) => Some(e),
         }
     }
 }
