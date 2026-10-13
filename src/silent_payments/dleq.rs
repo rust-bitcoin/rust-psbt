@@ -9,9 +9,11 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
 
-use bitcoin_consensus_encoding::BytesEncoder;
+use bitcoin_consensus_encoding::{
+    ArrayDecoder, BytesEncoder, Decoder, DecoderStatus, UnexpectedEofError,
+};
 
-use crate::PsbtEncode;
+use crate::{PsbtDecode, PsbtEncode};
 
 /// A 64-byte DLEQ proof (BIP-374).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -137,6 +139,29 @@ impl PsbtEncode for DleqProof {
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
+}
+
+/// Decoder for a [`DleqProof`].
+#[derive(Debug, Default)]
+pub struct DleqProofDecoder {
+    inner: ArrayDecoder<64>,
+}
+
+impl Decoder for DleqProofDecoder {
+    type Output = DleqProof;
+    type Error = UnexpectedEofError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> { self.inner.end().map(DleqProof::from) }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for DleqProof {
+    type Decoder = DleqProofDecoder;
 }
 
 #[cfg(test)]

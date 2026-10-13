@@ -40,13 +40,13 @@ use crate::encoding::native::{
     TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
 };
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqPairIter, EcdhPairIter};
+use crate::encoding::native::{CompressedPublicKeyDecoder, DleqPairIter, EcdhPairIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::DleqProof;
+use crate::silent_payments::{DleqProof, DleqProofDecoder};
 
 pub struct InputMapEncoder<'e> {
     input: &'e Input,
@@ -542,12 +542,12 @@ enum InputStage {
     #[cfg(feature = "silent-payments")]
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<33>>,
+        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<64>>,
+        decoder: ValueDecoder<DleqProofDecoder>,
     },
     Done(Input),
     Errored,
@@ -1176,17 +1176,11 @@ impl Decoder for InputMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 InputStage::DecodingSpEcdhShare { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| {
+                    let share = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
-                    })?;
-                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
-                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                            got: 33,
-                            expected: 33,
-                        })
                     })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
                         return Err(InputDecodeError::DuplicateKey(key));
@@ -1196,13 +1190,12 @@ impl Decoder for InputMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 InputStage::DecodingSpDleqProof { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| {
+                    let proof = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
-                    let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }

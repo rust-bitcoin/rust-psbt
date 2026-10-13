@@ -26,12 +26,12 @@ use crate::consts::{
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::DleqProof;
+use crate::silent_payments::{DleqProof, DleqProofDecoder};
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
 
@@ -202,12 +202,12 @@ enum Stage {
     #[cfg(feature = "silent-payments")]
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<bitcoin_consensus_encoding::ArrayDecoder<33>>,
+        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<bitcoin_consensus_encoding::ArrayDecoder<64>>,
+        decoder: ValueDecoder<DleqProofDecoder>,
     },
     Done(V0GlobalInfo),
     Errored,
@@ -468,13 +468,10 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| {
+                    let share = decoder.end().map_err(|e| {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpEcdh(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
-                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
-                    })?;
-                    let share = CompressedPublicKey::from_slice(&arr).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
                     if self.sp_ecdh_shares.contains_key(&scan_key) {
@@ -485,13 +482,12 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { key, decoder } => {
-                    let arr = decoder.end().map_err(|e| {
+                    let proof = decoder.end().map_err(|e| {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::SpDleq(e))
                     })?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
-                    let proof = DleqProof::from(arr);
                     if self.sp_dleq_proofs.contains_key(&scan_key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }

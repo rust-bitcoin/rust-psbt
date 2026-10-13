@@ -45,14 +45,14 @@ use crate::encoding::native::{
     TapKeyOriginIter, TapKeySigPair, TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
 };
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqPairIter, EcdhPairIter};
+use crate::encoding::native::{CompressedPublicKeyDecoder, DleqPairIter, EcdhPairIter};
 use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::DleqProof;
+use crate::silent_payments::{DleqProof, DleqProofDecoder};
 use crate::SignError;
 
 /// A key-value map for an input of the corresponding index in the unsigned
@@ -729,13 +729,13 @@ enum DecoderStage {
     /// Decoding an ECDH share for silent payments.
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<33>>,
+        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
     },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<64>>,
+        decoder: ValueDecoder<DleqProofDecoder>,
     },
     /// The end-of-map separator has been reached.
     Done(Input),
@@ -1455,7 +1455,7 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpEcdhShare { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let share = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::SpEcdh(e))
                     })?;
                     if key.key.is_empty() {
@@ -1465,12 +1465,6 @@ impl Decoder for InputDecoder {
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
-                    })?;
-                    let share = CompressedPublicKey::from_slice(&bytes).map_err(|_| {
-                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                            got: 33,
-                            expected: 33,
-                        })
                     })?;
                     match self.sp_ecdh_shares.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
@@ -1483,7 +1477,7 @@ impl Decoder for InputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpDleqProof { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let proof = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::SpDleq(e))
                     })?;
                     if key.key.is_empty() {
@@ -1493,12 +1487,6 @@ impl Decoder for InputDecoder {
                     }
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
-                    })?;
-                    let proof = DleqProof::try_from(bytes.as_slice()).map_err(|_| {
-                        InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                            got: 64,
-                            expected: 64,
-                        })
                     })?;
                     match self.sp_dleq_proofs.entry(scan_key) {
                         btree_map::Entry::Vacant(e) => {
