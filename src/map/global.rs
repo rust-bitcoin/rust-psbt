@@ -227,9 +227,10 @@ type CountValueDecoder = ValueDecoder<CompactSizeU64Decoder>;
 type FlagsValueDecoder = ValueDecoder<ArrayDecoder<1>>;
 
 /// The internal state of the global map push decoder.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum DecoderStage {
     /// Checking the next byte for the map separator.
+    #[default]
     DecodingSeparator,
     /// Reading the next key from the stream. The caller has already confirmed the
     /// stream does not start with a separator, so this decoder only sees real key data.
@@ -301,7 +302,7 @@ impl DecoderStage {
 /// Uses a push-based state machine. After each key is decoded, a type-specific composite
 /// decoder (handling both the compact-size length prefix and the value) is selected based
 /// on the key type.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GlobalDecoder {
     stage: DecoderStage,
     /// Required fields.
@@ -319,27 +320,6 @@ pub struct GlobalDecoder {
     sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     unknowns: BTreeMap<Key, Vec<u8>>,
-}
-
-impl Default for GlobalDecoder {
-    fn default() -> Self {
-        Self {
-            stage: DecoderStage::DecodingSeparator,
-            version: None,
-            tx_version: None,
-            input_count: None,
-            output_count: None,
-            fallback_lock_time: None,
-            tx_modifiable_flags: None,
-            xpubs: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-        }
-    }
 }
 
 impl Decoder for GlobalDecoder {
