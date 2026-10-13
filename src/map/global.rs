@@ -11,8 +11,8 @@ use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder,
-    DecoderStatus, Encoder, EncoderStatus, IterEncoder,
+    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder,
+    DecoderStatus, Encoder, EncoderStatus, IterEncoder, UnexpectedEofError,
 };
 
 use super::{
@@ -223,8 +223,31 @@ impl Default for Global {
     fn default() -> Self { Self::new() }
 }
 
-type CountValueDecoder = ValueDecoder<CompactSizeU64Decoder>;
-type FlagsValueDecoder = ValueDecoder<ArrayDecoder<1>>;
+type CountValueDecoder = ValueDecoder<CompactSizeDecoder>;
+
+/// Decoder for the single-byte modifiable-flags value.
+#[derive(Debug, Default)]
+struct TxModifiableFlagsDecoder {
+    inner: ArrayDecoder<1>,
+}
+
+impl Decoder for TxModifiableFlagsDecoder {
+    type Output = u8;
+    type Error = UnexpectedEofError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let [byte] = self.inner.end()?;
+        Ok(byte)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+type FlagsValueDecoder = ValueDecoder<TxModifiableFlagsDecoder>;
 
 /// The internal state of the global map push decoder.
 #[derive(Debug, Default)]
@@ -308,8 +331,8 @@ pub struct GlobalDecoder {
     /// Required fields.
     version: Option<Version>,
     tx_version: Option<transaction::Version>,
-    input_count: Option<u64>,
-    output_count: Option<u64>,
+    input_count: Option<usize>,
+    output_count: Option<usize>,
     /// Optional / accumulating fields.
     fallback_lock_time: Option<absolute::LockTime>,
     tx_modifiable_flags: Option<u8>,
@@ -344,17 +367,13 @@ impl Decoder for GlobalDecoder {
                             self.tx_version.take().ok_or(GlobalDecodeError::MissingTxVersion)?;
                         let tx_modifiable_flags = self.tx_modifiable_flags.take().unwrap_or(0_u8);
 
-                        let ic =
+                        let input_count =
                             self.input_count.take().ok_or(GlobalDecodeError::MissingInputCount)?;
-                        let input_count = usize::try_from(ic)
-                            .map_err(|_| GlobalDecodeError::InputCountOverflow(ic))?;
 
-                        let oc = self
+                        let output_count = self
                             .output_count
                             .take()
                             .ok_or(GlobalDecodeError::MissingOutputCount)?;
-                        let output_count = usize::try_from(oc)
-                            .map_err(|_| GlobalDecodeError::OutputCountOverflow(oc))?;
 
                         #[cfg(feature = "silent-payments")]
                         {
@@ -516,13 +535,13 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTxModifiable { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let flags = decoder.end().map_err(|e| {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::ModifiableFlags(e))
                     })?;
                     if self.tx_modifiable_flags.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.tx_modifiable_flags = Some(bytes[0]);
+                    self.tx_modifiable_flags = Some(flags);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
@@ -1036,9 +1055,9 @@ mod tests {
 
     #[test]
     fn read_limit_expands_for_newtype_decoders() {
-        // ValueDecoder always wraps a CompactSizeU64Decoder so read_limit > 1.
+        // ValueDecoder wraps a decoder with non-trivial read_limit.
         assert!(ValueDecoder::<ArrayDecoder<4>>::default().read_limit() > 1);
-        assert!(ValueDecoder::<ArrayDecoder<1>>::default().read_limit() > 1);
+        assert!(FlagsValueDecoder::default().read_limit() > 1);
         assert!(CountValueDecoder::default().read_limit() > 1);
     }
 
