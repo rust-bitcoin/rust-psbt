@@ -101,13 +101,6 @@ impl std::error::Error for GlobalDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GlobalValueDecodeError {
-    /// Value length does not match the expected fixed size for this key type (got, expected).
-    WrongLength {
-        /// The decoded value length.
-        got: usize,
-        /// The expected value length.
-        expected: usize,
-    },
     /// Error decoding the PSBT version value.
     Version(ValueDecoderError<crate::version::VersionDecoderError>),
     /// Error decoding the transaction modifiable flags value.
@@ -137,8 +130,6 @@ pub enum GlobalValueDecodeError {
 impl fmt::Display for GlobalValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongLength { got, expected } =>
-                write!(f, "value length {} (expected {})", got, expected),
             Self::Version(ref e) => write_err!(f, "error decoding PSBT version"; e),
             Self::ModifiableFlags(ref e) => write_err!(f, "error decoding modifiable flags"; e),
             Self::Count(ref e) => write_err!(f, "error decoding count"; e),
@@ -160,7 +151,6 @@ impl fmt::Display for GlobalValueDecodeError {
 impl std::error::Error for GlobalValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WrongLength { .. } => None,
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),
             Self::Count(ref e) => Some(e),
