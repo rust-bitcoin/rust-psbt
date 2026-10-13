@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
+use bitcoin::bip32::{DerivationPath, Fingerprint, KeySource, Xpub};
 use bitcoin::locktime::absolute;
 use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
@@ -29,9 +29,9 @@ use crate::encoding::delegates::{
     FallbackLockTimeKeyValueEncoder, FallbackLockTimeValueDecoder, TxVersionKeyValueEncoder,
     TxVersionValueDecoder,
 };
-use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError};
 use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
@@ -271,7 +271,7 @@ enum DecoderStage {
     /// Decoding a single-byte modifiable-flags value.
     DecodingTxModifiable { key: Key, decoder: FlagsValueDecoder },
     /// Decoding an xpub value (fingerprint + path).
-    DecodingXpub { key: Key, decoder: ByteVecDecoder },
+    DecodingXpub { key: Key, decoder: KeySourceDecoder },
     /// Decoding a proprietary value.
     DecodingProprietary { key: Key, decoder: ByteVecDecoder },
     /// Decoding an unknown value.
@@ -304,7 +304,8 @@ impl DecoderStage {
                 Ok(Self::DecodingOutputCount { key, decoder: CountValueDecoder::default() }),
             PSBT_GLOBAL_TX_MODIFIABLE =>
                 Ok(Self::DecodingTxModifiable { key, decoder: FlagsValueDecoder::default() }),
-            PSBT_GLOBAL_XPUB => Ok(Self::DecodingXpub { key, decoder: ByteVecDecoder::new() }),
+            PSBT_GLOBAL_XPUB =>
+                Ok(Self::DecodingXpub { key, decoder: KeySourceDecoder::default() }),
             PSBT_GLOBAL_PROPRIETARY =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             #[cfg(feature = "silent-payments")]
@@ -436,7 +437,7 @@ impl Decoder for GlobalDecoder {
                     })?,
                 DecoderStage::DecodingXpub { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubKeySource(e))
                     })?,
                 DecoderStage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -545,29 +546,11 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubValue(e))
+                    let key_source = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubKeySource(e))
                     })?;
-                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Bip32)?;
-                    if value.len() < 4 {
-                        return Err(GlobalDecodeError::XpubValueTooShort(value.len()));
-                    }
-                    if value.len() % 4 != 0 {
-                        return Err(GlobalDecodeError::XpubInvalidPath(value.len()));
-                    }
-                    let fingerprint = Fingerprint::from(
-                        <[u8; 4]>::try_from(&value[..4]).expect("4 bytes checked above"),
-                    );
-                    let path = value[4..]
-                        .chunks_exact(4)
-                        .map(|c| {
-                            ChildNumber::from(u32::from_le_bytes(
-                                c.try_into().expect("4-byte chunks"),
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    let derivation = DerivationPath::from(path);
-                    if self.xpubs.insert(xpub, (fingerprint, derivation)).is_some() {
+                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
+                    if self.xpubs.insert(xpub, key_source).is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
                     self.stage = DecoderStage::DecodingSeparator;
@@ -676,8 +659,8 @@ impl Decoder for GlobalDecoder {
             DecoderStage::DecodingInputCount { decoder, .. }
             | DecoderStage::DecodingOutputCount { decoder, .. } => decoder.read_limit(),
             DecoderStage::DecodingTxModifiable { decoder, .. } => decoder.read_limit(),
-            DecoderStage::DecodingXpub { decoder, .. }
-            | DecoderStage::DecodingProprietary { decoder, .. }
+            DecoderStage::DecodingXpub { decoder, .. } => decoder.read_limit(),
+            DecoderStage::DecodingProprietary { decoder, .. }
             | DecoderStage::DecodingUnknown { decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
             DecoderStage::DecodingSpEcdhShare { decoder, .. } => decoder.read_limit(),
@@ -1082,8 +1065,8 @@ mod tests {
         data.push(PSBT_SEPARATOR);
         let res = decoder.push_bytes(&mut data.as_slice());
         assert!(
-            matches!(res, Err(GlobalDecodeError::XpubValueTooShort(3))),
-            "expected XpubValueTooShort(3), got {:?}",
+            matches!(res, Err(GlobalDecodeError::ValueDecode(_))),
+            "expected ValueDecode error for xpub value too short, got {:?}",
             res,
         );
     }

@@ -16,6 +16,7 @@ use bitcoin_consensus_encoding::{
 use super::Key;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::CompressedPublicKeyDecodeError;
+use crate::encoding::native::KeySourceDecodeError;
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
@@ -29,12 +30,6 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 pub enum GlobalDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
-    /// PSBT_GLOBAL_XPUB: value must contain at least 4 bytes for the xpub fingerprint.
-    XpubValueTooShort(usize),
-    /// PSBT_GLOBAL_XPUB: derivation path must be a list of 32 byte varints.
-    XpubInvalidPath(usize),
-    /// PSBT_GLOBAL_XPUB: Failed to decode a BIP-32 type.
-    Bip32(bip32::Error),
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
     /// Error decoding a value.
@@ -55,6 +50,8 @@ pub enum GlobalDecodeError {
     FieldMismatch,
     /// v0 global map is missing the unsigned transaction (v0 only).
     MissingUnsignedTx,
+    /// PSBT_GLOBAL_XPUB: Failed to decode the extended public key from key data.
+    Xpub(bip32::Error),
 }
 
 impl fmt::Display for GlobalDecodeError {
@@ -63,10 +60,7 @@ impl fmt::Display for GlobalDecodeError {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
             Self::WrongVersion(v) =>
                 write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
-            Self::XpubValueTooShort(len) => write!(f, "xpub value too short: {} bytes", len),
-            Self::XpubInvalidPath(len) =>
-                write!(f, "xpub derivation path invalid at index {}", len),
-            Self::Bip32(ref e) => write_err!(f, "BIP-32"; e),
+            Self::Xpub(ref e) => write_err!(f, "xpub"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
@@ -88,11 +82,8 @@ impl fmt::Display for GlobalDecodeError {
 impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::DuplicateKey(_)
-            | Self::WrongVersion(_)
-            | Self::XpubValueTooShort(_)
-            | Self::XpubInvalidPath(_) => None,
-            Self::Bip32(ref e) => Some(e),
+            Self::DuplicateKey(_) | Self::WrongVersion(_) => None,
+            Self::Xpub(ref e) => Some(e),
             Self::KeyDecode(ref e) => Some(e),
             Self::ValueDecode(ref e) => Some(e),
             Self::MissingVersion
@@ -129,8 +120,8 @@ pub enum GlobalValueDecodeError {
     LockTime(ValueDecoderError<bitcoin::locktime::absolute::LockTimeDecoderError>),
     /// Error decoding a v0 unsigned transaction value.
     UnsignedTx(ValueDecoderError<UnsignedTxDecodeError>),
-    /// Error decoding an xpub value.
-    XpubValue(ByteVecDecoderError),
+    /// Error decoding a keysource of an xpub (fingerprint + derivation path).
+    XpubKeySource(KeySourceDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
@@ -154,7 +145,7 @@ impl fmt::Display for GlobalValueDecodeError {
             Self::TxVersion(ref e) => write_err!(f, "error decoding transaction version"; e),
             Self::LockTime(ref e) => write_err!(f, "error decoding lock time"; e),
             Self::UnsignedTx(ref e) => write_err!(f, "error decoding unsigned tx"; e),
-            Self::XpubValue(ref e) => write_err!(f, "error decoding xpub value"; e),
+            Self::XpubKeySource(ref e) => write_err!(f, "error decoding xpub key source"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
             #[cfg(feature = "silent-payments")]
@@ -176,7 +167,7 @@ impl std::error::Error for GlobalValueDecodeError {
             Self::TxVersion(ref e) => Some(e),
             Self::LockTime(ref e) => Some(e),
             Self::UnsignedTx(ref e) => Some(e),
-            Self::XpubValue(ref e) => Some(e),
+            Self::XpubKeySource(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
