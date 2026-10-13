@@ -47,12 +47,8 @@ pub enum GlobalDecodeError {
     MissingTxVersion,
     /// Serialized PSBT is missing the input count (v2 only).
     MissingInputCount,
-    /// Input count overflows word size for current architecture (v2 only).
-    InputCountOverflow(u64),
     /// Serialized PSBT is missing the output count (v2 only).
     MissingOutputCount,
-    /// Output count overflows word size for current architecture (v2 only).
-    OutputCountOverflow(u64),
     /// ECDH shares and DLEQ proofs must both be present or both absent.
     FieldMismatch,
     /// v0 global map is missing the unsigned transaction (v0 only).
@@ -77,13 +73,7 @@ impl fmt::Display for GlobalDecodeError {
                 write!(f, "serialized PSBT is missing the transaction version number")
             }
             Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
-            Self::InputCountOverflow(count) => {
-                write!(f, "input count overflows word size for current architecture: {}", count)
-            }
             Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
-            Self::OutputCountOverflow(count) => {
-                write!(f, "output count overflows word size for current architecture: {}", count)
-            }
             Self::FieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
@@ -106,9 +96,7 @@ impl std::error::Error for GlobalDecodeError {
             Self::MissingVersion
             | Self::MissingTxVersion
             | Self::MissingInputCount
-            | Self::InputCountOverflow(_)
             | Self::MissingOutputCount
-            | Self::OutputCountOverflow(_)
             | Self::FieldMismatch
             | Self::MissingUnsignedTx
             | Self::EarlyEnd => None,
