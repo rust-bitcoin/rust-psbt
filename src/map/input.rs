@@ -877,7 +877,7 @@ impl Decoder for InputDecoder {
                             let has_ecdh = !self.sp_ecdh_shares.is_empty();
                             let has_dleq = !self.sp_dleq_proofs.is_empty();
                             if has_ecdh != has_dleq {
-                                return Err(InputDecodeError::FieldMismatch);
+                                return Err(InputDecodeError::SpFieldMismatch);
                             }
                         }
                         self.stage = DecoderStage::Done(Input {

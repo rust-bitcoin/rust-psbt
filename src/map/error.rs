@@ -32,9 +32,7 @@ pub enum GlobalDecodeError {
     DuplicateKey(Key),
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(GlobalValueDecodeError),
-    /// End before the end-of-map separator was reached.
+    /// Finished decoding before the end-of-map separator was reached.
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
     MissingVersion,
@@ -46,61 +44,10 @@ pub enum GlobalDecodeError {
     MissingInputCount,
     /// Serialized PSBT is missing the output count (v2 only).
     MissingOutputCount,
-    /// ECDH shares and DLEQ proofs must both be present or both absent.
-    FieldMismatch,
     /// v0 global map is missing the unsigned transaction (v0 only).
     MissingUnsignedTx,
-    /// PSBT_GLOBAL_XPUB: Failed to decode the extended public key from key data.
-    Xpub(bip32::Error),
-}
-
-impl fmt::Display for GlobalDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::WrongVersion(v) =>
-                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
-            Self::Xpub(ref e) => write_err!(f, "xpub"; e),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
-            Self::MissingVersion => write!(f, "serialized PSBT is missing the version number"),
-            Self::MissingTxVersion => {
-                write!(f, "serialized PSBT is missing the transaction version number")
-            }
-            Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
-            Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
-            Self::FieldMismatch => {
-                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
-            }
-            Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for GlobalDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DuplicateKey(_) | Self::WrongVersion(_) => None,
-            Self::Xpub(ref e) => Some(e),
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::MissingVersion
-            | Self::MissingTxVersion
-            | Self::MissingInputCount
-            | Self::MissingOutputCount
-            | Self::FieldMismatch
-            | Self::MissingUnsignedTx
-            | Self::EarlyEnd => None,
-        }
-    }
-}
-
-/// Error decoding a global value.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum GlobalValueDecodeError {
+    /// Failed to decode an extended public key.
+    Xpub(XpubDecodeError),
     /// Error decoding the PSBT version value.
     Version(ValueDecoderError<crate::version::VersionDecoderError>),
     /// Error decoding the transaction modifiable flags value.
@@ -113,8 +60,6 @@ pub enum GlobalValueDecodeError {
     LockTime(ValueDecoderError<bitcoin::locktime::absolute::LockTimeDecoderError>),
     /// Error decoding a v0 unsigned transaction value.
     UnsignedTx(ValueDecoderError<UnsignedTxDecodeError>),
-    /// Error decoding a keysource of an xpub (fingerprint + derivation path).
-    XpubKeySource(KeySourceDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
@@ -125,18 +70,37 @@ pub enum GlobalValueDecodeError {
     /// Error decoding a silent payments DLEQ proof value.
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),
+    /// ECDH shares and DLEQ proofs must both be present or both absent.
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
 }
 
-impl fmt::Display for GlobalValueDecodeError {
+impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::WrongVersion(v) =>
+                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
+            Self::Xpub(ref e) => write_err!(f, "xpub"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
+            Self::MissingVersion => write!(f, "serialized PSBT is missing the version number"),
+            Self::MissingTxVersion => {
+                write!(f, "serialized PSBT is missing the transaction version number")
+            }
+            Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
+            Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
+                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
+            }
+            Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
             Self::Version(ref e) => write_err!(f, "error decoding PSBT version"; e),
             Self::ModifiableFlags(ref e) => write_err!(f, "error decoding modifiable flags"; e),
             Self::Count(ref e) => write_err!(f, "error decoding count"; e),
             Self::TxVersion(ref e) => write_err!(f, "error decoding transaction version"; e),
             Self::LockTime(ref e) => write_err!(f, "error decoding lock time"; e),
             Self::UnsignedTx(ref e) => write_err!(f, "error decoding unsigned tx"; e),
-            Self::XpubKeySource(ref e) => write_err!(f, "error decoding xpub key source"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
             #[cfg(feature = "silent-payments")]
@@ -148,22 +112,61 @@ impl fmt::Display for GlobalValueDecodeError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for GlobalValueDecodeError {
+impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::DuplicateKey(_) | Self::WrongVersion(_) => None,
+            Self::Xpub(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
+            Self::MissingVersion
+            | Self::MissingTxVersion
+            | Self::MissingInputCount
+            | Self::MissingOutputCount
+            | Self::MissingUnsignedTx
+            | Self::EarlyEnd => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),
             Self::Count(ref e) => Some(e),
             Self::TxVersion(ref e) => Some(e),
             Self::LockTime(ref e) => Some(e),
             Self::UnsignedTx(ref e) => Some(e),
-            Self::XpubKeySource(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+        }
+    }
+}
+
+/// Error decoding a PSBT_GLOBAL_XPUB key-value pair.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum XpubDecodeError {
+    /// Error parsing the extended public key from the key data.
+    Key(bip32::Error),
+    /// Error decoding the key source (fingerprint + derivation path) from the value.
+    KeySource(KeySourceDecodeError),
+}
+
+impl fmt::Display for XpubDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Key(ref e) => write_err!(f, "invalid xpub"; e),
+            Self::KeySource(ref e) => write_err!(f, "error decoding xpub key source"; e),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for XpubDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Key(ref e) => Some(e),
+            Self::KeySource(ref e) => Some(e),
         }
     }
 }
@@ -351,7 +354,8 @@ pub enum InputDecodeError {
     /// End before fully decoding the input map.
     EarlyEnd,
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
-    FieldMismatch,
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
     /// Non-witness UTXO txid does not match the input's previous txid.
     IncorrectNonWitnessUtxo {
         /// The txid of the input being spent.
@@ -377,7 +381,8 @@ impl fmt::Display for InputDecodeError {
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
             Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
             Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
-            Self::FieldMismatch => {
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
             Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
@@ -405,10 +410,11 @@ impl std::error::Error for InputDecodeError {
             Self::MissingPreviousTxid
             | Self::MissingSpentOutputIndex
             | Self::EarlyEnd
-            | Self::FieldMismatch
             | Self::IncorrectNonWitnessUtxo { .. }
             | Self::MissingXpubFingerprint
             | Self::MissingTapBip32Fingerprint => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
         }
     }
 }
