@@ -12,7 +12,7 @@ use psbt::bitcoin::opcodes::all::OP_CHECKMULTISIG;
 use psbt::bitcoin::secp256k1::Secp256k1;
 use psbt::bitcoin::{Address, Amount, OutPoint, PublicKey, ScriptBuf, TxOut};
 use psbt::{Creator, Extractor, Finalizer, InputBuilder, OutputBuilder, PsbtV0, Signer};
-use psbt_v2::{self as psbt, SignableInput};
+use psbt_v2::{self as psbt};
 
 const TEST_XPRIV: &str =
     "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
@@ -73,11 +73,9 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
@@ -157,11 +155,9 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
@@ -263,11 +259,9 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
@@ -349,11 +343,9 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
@@ -429,11 +421,9 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
@@ -534,11 +524,9 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
         .psbt()?;
 
     // Sign and finalize the PSBT.
-    let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt)?;
     let sigs = signer.session(|mut session| {
-        let inputs: Vec<SignableInput> =
-            (0..inputs_len).map(|x| session.assume_checked_input(x).expect("inputs are well formed")).collect();
+        let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();

@@ -154,6 +154,8 @@ pub enum SignError {
     SighashMismatch,
     /// `SIGHASH_SINGLE` used on an input with no output at the same index.
     SighashSingleMissingOutput,
+    /// Pay-to-taproot non-ANYONECANPAY input requires all prevout for sighash.
+    AllPrevoutsRequired,
 }
 
 impl fmt::Display for SignError {
@@ -189,6 +191,8 @@ impl fmt::Display for SignError {
                 write!(f, "the signature sighash did not match the sighash provided in the input"),
             Self::SighashSingleMissingOutput =>
                 write!(f, "sighash single input has no output at the same index"),
+            Self::AllPrevoutsRequired =>
+                write!(f, "non-ANYONECANPAY taproot input, it requires all prevouts"),
         }
     }
 }
@@ -219,7 +223,8 @@ impl std::error::Error for SignError {
             | Self::WitnessScriptMismatchWsh
             | Self::WitnessScriptMismatchShWsh
             | Self::SighashMismatch
-            | Self::SighashSingleMissingOutput => None,
+            | Self::SighashSingleMissingOutput
+            | Self::AllPrevoutsRequired => None,
         }
     }
 }

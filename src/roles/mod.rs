@@ -19,7 +19,8 @@ pub use finalizer::{
     InterpreterCheckInputError,
 };
 pub use signer::{
-    sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, GetKey, GetKeyError, InputSigs,
-    KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
+    sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs, GetKey,
+    GetKeyError, InputSigs, KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys,
+    SigningSession,
 };
 pub use updater::Updater;

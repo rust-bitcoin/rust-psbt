@@ -20,8 +20,7 @@ use psbt_v2::bitcoin::{
     Sequence, TxOut, Txid,
 };
 use psbt_v2::{
-    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, SignableInput,
-    Signer, Updater,
+    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, Signer, Updater,
 };
 
 const DUMMY_UTXO_AMOUNT: Amount = Amount::from_sat(20_000_000);
@@ -237,12 +236,12 @@ impl Bob {
 
         let mut signer = Signer::new(psbt)?;
         let sigs = signer.session(|mut session| {
-            let inputs: SignableInput = session
+            let input = session
                 .signable_input(1)
                 .expect("owned input with full tx prevout should be verifiable");
-            session.get_all(&[inputs], &xpriv, &self.0.secp)
+            session.get_input_sigs(&input, &xpriv, &self.0.secp)
         });
-        let psbt = signer.apply(sigs).unwrap();
+        let psbt = signer.apply([sigs]).unwrap();
         Ok(psbt)
     }
 
@@ -323,16 +322,10 @@ impl Entity {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;
 
-        let inputs_len = psbt.inputs.len();
         let mut signer = Signer::new(psbt)?;
         let sigs = signer.session(|mut session| {
-            let mut inputs: Vec<SignableInput> = vec![];
-            for index in 0..inputs_len {
-                match session.assume_checked_input(index) {
-                    Ok(signable_input) => inputs.push(signable_input),
-                    Err(e) => panic!("Malformed input, cannot be signed: {}", e),
-                }
-            }
+            let inputs =
+                session.assume_checked_inputs().expect("Malformed input, cannot be signed");
             session.get_all(&inputs, &xpriv, &self.secp)
         });
         let psbt = signer.apply(sigs).unwrap();

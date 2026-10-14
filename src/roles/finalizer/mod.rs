@@ -233,7 +233,7 @@ mod tests {
 
     use super::*;
     use crate::roles::{Creator, Signer};
-    use crate::{Input, Output, SignableInput};
+    use crate::{Input, Output};
 
     const TEST_XPRIV: &str =
         "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu";
@@ -242,17 +242,10 @@ mod tests {
     fn sign(psbt: Psbt) -> Psbt {
         let secp = Secp256k1::new();
         let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
-        let inputs_len = psbt.inputs.len();
         let mut signer = Signer::new(psbt).expect("test env, psbt should be well formed");
         let sigs = signer.session(|mut session| {
-            let inputs: Vec<SignableInput> = (0..inputs_len)
-                .map(|x| {
-                    session.assume_checked_input(x).expect(
-                        "test env, input
-                        should be well formed",
-                    )
-                })
-                .collect();
+            let inputs =
+                session.assume_checked_inputs().expect("test env, inputs should be well formed");
             session.get_all(&inputs, &xpriv, &secp)
         });
         signer
