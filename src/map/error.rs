@@ -8,18 +8,25 @@ use core::fmt;
 use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
-use bitcoin::{bip32, ecdsa, hashes, key};
+use bitcoin::{bip32, hashes, key, Amount, Sequence};
 use bitcoin_consensus_encoding::{
-    ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
+    ByteVecDecoderError, CompactSizeDecoderError, Decode, UnexpectedEofError,
 };
 
 use super::Key;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::CompressedPublicKeyDecodeError;
-use crate::encoding::native::KeySourceDecodeError;
+use crate::encoding::native::{
+    EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapKeyOriginDecodeError,
+    TapLeafScriptDecodeError, TapNodeHashDecodeError, TapTreeDecodeError,
+    TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError, XOnlyPublicKeyDecodeError,
+};
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
+use crate::map::output::ValidationError;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::SpV0InfoDecodeError;
 
 /// An error while decoding a global map.
 ///
@@ -177,28 +184,50 @@ impl std::error::Error for XpubDecodeError {
 pub enum OutputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
+    /// Error decoding a raw PSBT key.
+    KeyDecode(KeyDecodeError),
+    /// Decoding finished before fully decoding the output map.
+    EarlyEnd,
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
     /// Invalid xonly public key when parsing key data.
     InvalidXOnlyPublicKey,
-    /// Error decoding a raw PSBT key.
-    KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(OutputValueDecodeError),
-    /// End before fully decoding the output map.
-    EarlyEnd,
     /// Encoded output is missing an amount value.
     MissingAmount,
     /// Encoded output is missing a script pubkey.
     MissingScriptPubkey,
-    /// Encoded output is missing a sp_v0_info.
-    LabelWithoutInfo,
-    /// Invalid leaf version.
-    InvalidLeafVersion,
-    /// Encoded xpub key derivation is missing a fingerprint.
-    MissingXpubFingerprint,
-    /// Encoded taproot BIP32 derivation is missing a fingerprint.
-    MissingTapBip32Fingerprint,
+    /// Error decoding the amount value.
+    Amount(
+        ValueDecoderError<
+            <<Amount as Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+        >,
+    ),
+    /// Error decoding the script pubkey.
+    Script(ScriptBufDecoderError),
+    /// Error decoding the redeem script.
+    RedeemScript(ScriptBufDecoderError),
+    /// Error decoding the witness script.
+    WitnessScript(ScriptBufDecoderError),
+    /// Error decoding the BIP32 derivation value.
+    Bip32Derivation(KeySourceDecodeError),
+    /// Error decoding the taproot internal key.
+    TapInternalKey(ValueDecoderError<XOnlyPublicKeyDecodeError>),
+    /// Error decoding the taproot tree.
+    TapTree(TapTreeDecodeError),
+    /// Error decoding the taproot BIP32 derivation value.
+    TapBip32Derivation(TapKeyOriginDecodeError),
+    /// Error decoding a proprietary value.
+    ProprietaryValue(ByteVecDecoderError),
+    /// Error decoding an unknown value.
+    UnknownValue(ByteVecDecoderError),
+    /// Error validating the decoded output.
+    Validation(ValidationError),
+    /// Error decoding a silent payments v0 info.
+    #[cfg(feature = "silent-payments")]
+    SpV0Info(ValueDecoderError<SpV0InfoDecodeError>),
+    /// Error decoding a silent payments v0 label.
+    #[cfg(feature = "silent-payments")]
+    SpV0Label(ValueDecoderError<UnexpectedEofError>),
 }
 
 impl fmt::Display for OutputDecodeError {
@@ -208,83 +237,10 @@ impl fmt::Display for OutputDecodeError {
             Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
             Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
             Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
             Self::MissingAmount => write!(f, "encoded output is missing an amount"),
             Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
-            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
-            Self::MissingXpubFingerprint => write!(f, "xpub derivation missing fingerprint"),
-            Self::MissingTapBip32Fingerprint =>
-                write!(f, "tap BIP32 derivation missing fingerprint"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for OutputDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::DuplicateKey(_) | Self::InvalidXOnlyPublicKey => None,
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::EarlyEnd
-            | Self::MissingAmount
-            | Self::MissingScriptPubkey
-            | Self::LabelWithoutInfo
-            | Self::InvalidLeafVersion
-            | Self::MissingXpubFingerprint
-            | Self::MissingTapBip32Fingerprint => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum OutputValueDecodeError {
-    /// Value length does not match the expected fixed size for this key type (got, expected).
-    WrongLength {
-        /// The decoded value length.
-        got: usize,
-        /// The expected value length.
-        expected: usize,
-    },
-    /// Error decoding the amount value.
-    Amount(ValueDecoderError<UnexpectedEofError>),
-    /// Error decoding the script pubkey.
-    Script(ScriptBufDecoderError),
-    /// Error decoding the redeem script.
-    RedeemScript(ScriptBufDecoderError),
-    /// Error decoding the witness script.
-    WitnessScript(ScriptBufDecoderError),
-    /// Error decoding the BIP32 derivation value.
-    Bip32Derivation(ByteVecDecoderError),
-    /// Error decoding the taproot internal key.
-    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
-    /// Error decoding the taproot tree.
-    TapTree(ByteVecDecoderError),
-    /// The decoded value is not a valid taproot tree.
-    InvalidTapTree,
-    /// Error decoding the taproot BIP32 derivation value.
-    TapBip32Derivation(ByteVecDecoderError),
-    /// Error decoding a proprietary value.
-    ProprietaryValue(ByteVecDecoderError),
-    /// Error decoding an unknown value.
-    UnknownValue(ByteVecDecoderError),
-    /// Error decoding a silent payments v0 info.
-    #[cfg(feature = "silent-payments")]
-    SpV0Info(ValueDecoderError<UnexpectedEofError>),
-    /// Error decoding a silent payments v0 label.
-    #[cfg(feature = "silent-payments")]
-    SpV0Label(ValueDecoderError<UnexpectedEofError>),
-}
-
-impl fmt::Display for OutputValueDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::WrongLength { got, expected } =>
-                write!(f, "value length {} (expected {})", got, expected),
+            Self::Validation(ref e) => write_err!(f, "output validation error"; e),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -292,7 +248,6 @@ impl fmt::Display for OutputValueDecodeError {
             Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
             Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
             Self::TapTree(ref e) => write_err!(f, "error decoding tap tree"; e),
-            Self::InvalidTapTree => write!(f, "invalid tap tree"),
             Self::TapBip32Derivation(ref e) =>
                 write_err!(f, "error decoding tap BIP32 derivation"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
@@ -306,10 +261,11 @@ impl fmt::Display for OutputValueDecodeError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for OutputValueDecodeError {
+impl std::error::Error for OutputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WrongLength { .. } => None,
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
             Self::Amount(ref e) => Some(e),
             Self::Script(ref e) => Some(e),
             Self::RedeemScript(ref e) => Some(e),
@@ -324,7 +280,12 @@ impl std::error::Error for OutputValueDecodeError {
             Self::SpV0Info(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpV0Label(ref e) => Some(e),
-            Self::InvalidTapTree => None,
+            Self::DuplicateKey(_)
+            | Self::InvalidXOnlyPublicKey
+            | Self::EarlyEnd
+            | Self::MissingAmount
+            | Self::MissingScriptPubkey => None,
+            Self::Validation(ref e) => Some(e),
         }
     }
 }
@@ -337,115 +298,34 @@ impl std::error::Error for OutputValueDecodeError {
 pub enum InputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
+    /// Error decoding key.
+    KeyDecode(KeyDecodeError),
+    /// Finished decoding before fully decoding the input map.
+    EarlyEnd,
     /// Invalid hash when parsing key or value data.
     InvalidHash(hashes::FromSliceError),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
-    /// Invalid ECDSA signature when parsing value data.
-    InvalidEcdsaSignature(ecdsa::Error),
-    /// Error decoding key.
-    KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(InputValueDecodeError),
-    /// Input must contain a previous txid.
-    MissingPreviousTxid,
-    /// Input must contain a spent output index.
-    MissingSpentOutputIndex,
-    /// End before fully decoding the input map.
-    EarlyEnd,
-    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
-    #[cfg(feature = "silent-payments")]
-    SpFieldMismatch,
-    /// Non-witness UTXO txid does not match the input's previous txid.
-    IncorrectNonWitnessUtxo {
-        /// The txid of the input being spent.
-        previous_txid: bitcoin::Txid,
-        /// The txid of the non-witness UTXO.
-        non_witness_utxo_txid: bitcoin::Txid,
-    },
-    /// Encoded xpub key derivation is missing a fingerprint.
-    MissingXpubFingerprint,
-    /// Encoded taproot BIP32 derivation is missing a fingerprint.
-    MissingTapBip32Fingerprint,
-}
-
-impl fmt::Display for InputDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
-            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
-            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
-            #[cfg(feature = "silent-payments")]
-            Self::SpFieldMismatch => {
-                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
-            }
-            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
-                f,
-                "non-witness utxo txid {} does not match previous txid {}",
-                non_witness_utxo_txid, previous_txid
-            ),
-            Self::MissingXpubFingerprint => write!(f, "xpub derivation missing fingerprint"),
-            Self::MissingTapBip32Fingerprint =>
-                write!(f, "tap BIP32 derivation missing fingerprint"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InputDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidHash(ref e) => Some(e),
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::DuplicateKey(_) => None,
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::MissingPreviousTxid
-            | Self::MissingSpentOutputIndex
-            | Self::EarlyEnd
-            | Self::IncorrectNonWitnessUtxo { .. }
-            | Self::MissingXpubFingerprint
-            | Self::MissingTapBip32Fingerprint => None,
-            #[cfg(feature = "silent-payments")]
-            Self::SpFieldMismatch => None,
-        }
-    }
-}
-
-/// Error decoding the body of a value from an input map.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum InputValueDecodeError {
-    /// Value length does not match the expected fixed size for this key type (got, expected).
-    WrongLength {
-        /// The decoded value length.
-        got: usize,
-        /// The expected value length.
-        expected: usize,
-    },
     /// Error decoding the previous transaction ID.
-    PreviousTxid(ValueDecoderError<UnexpectedEofError>),
+    PreviousTxid(ValueDecoderError<TxidDecodeError>),
     /// Error decoding the output index.
     OutputIndex(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the sequence number).
-    Sequence(ValueDecoderError<UnexpectedEofError>),
+    Sequence(
+        ValueDecoderError<
+            <<Sequence as bitcoin_consensus_encoding::Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+        >,
+    ),
     /// Error decoding the minimum lock time.
-    MinTime(ValueDecoderError<UnexpectedEofError>),
+    MinTime(ValueDecoderError<TimeDecodeError>),
     /// Error decoding the minimum lock height.
-    MinHeight(ValueDecoderError<UnexpectedEofError>),
+    MinHeight(ValueDecoderError<HeightDecodeError>),
     /// Error decoding the sighash type.
     SighashType(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot internal key.
-    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
+    TapInternalKey(ValueDecoderError<XOnlyPublicKeyDecodeError>),
     /// Error decoding the taproot merkle root.
-    TapMerkleRoot(ValueDecoderError<UnexpectedEofError>),
+    TapMerkleRoot(ValueDecoderError<TapNodeHashDecodeError>),
     /// Error decoding the non-witness UTXO (full transaction).
     NonWitnessUtxo(ValueDecoderError<TransactionDecoderError>),
     /// Error decoding the witness UTXO (transaction output).
@@ -459,13 +339,13 @@ pub enum InputValueDecodeError {
     /// Error decoding the final scriptSig.
     FinalScriptSig(ScriptBufDecoderError),
     /// Error decoding the taproot key signature.
-    TapKeySig(ByteVecDecoderError),
+    TapKeySig(TaprootSignatureDecodeError),
     /// Error decoding an ECDSA partial signature.
-    PartialSig(ByteVecDecoderError),
+    PartialSig(EcdsaSignatureDecodeError),
     /// Error decoding the BIP32 derivation key source.
-    Bip32Derivation(ByteVecDecoderError),
+    Bip32Derivation(KeySourceDecodeError),
     /// Error decoding the taproot BIP32 derivation key source.
-    TapBip32Derivation(ByteVecDecoderError),
+    TapBip32Derivation(TapKeyOriginDecodeError),
     /// Error decoding a RIPEMD160 preimage.
     Ripemd160Preimage(ByteVecDecoderError),
     /// Error decoding a SHA256 preimage.
@@ -475,36 +355,44 @@ pub enum InputValueDecodeError {
     /// Error decoding a HASH256 preimage.
     Hash256Preimage(ByteVecDecoderError),
     /// Error decoding a taproot script signature.
-    TapScriptSig(ByteVecDecoderError),
+    TapScriptSig(TaprootSignatureDecodeError),
     /// Error decoding a tap leaf script.
-    TapLeafScript(ByteVecDecoderError),
+    TapLeafScript(TapLeafScriptDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
     UnknownValue(ByteVecDecoderError),
-    /// The decoded value is not a valid minimum lock time.
-    InvalidMinTime,
-    /// The decoded value is not a valid minimum lock height.
-    InvalidMinHeight,
-    /// The decoded value is not a valid taproot signature.
-    InvalidTaprootSignature,
     /// The decoded value is not a valid taproot control block.
     InvalidControlBlock,
-    /// The decoded value is not a valid taproot leaf version.
-    InvalidLeafVersion,
+    /// Input must contain a previous txid.
+    MissingPreviousTxid,
+    /// Input must contain a spent output index.
+    MissingSpentOutputIndex,
+    /// Non-witness UTXO txid does not match the input's previous txid.
+    IncorrectNonWitnessUtxo {
+        /// The txid of the input being spent.
+        previous_txid: bitcoin::Txid,
+        /// The txid of the non-witness UTXO.
+        non_witness_utxo_txid: bitcoin::Txid,
+    },
     /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
     SpEcdh(ValueDecoderError<CompressedPublicKeyDecodeError>),
     /// Error decoding a silent payments DLEQ proof).
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),
+    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
 }
 
-impl fmt::Display for InputValueDecodeError {
+impl fmt::Display for InputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongLength { got, expected } =>
-                write!(f, "value length {} (expected {})", got, expected),
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
             Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
             Self::Sequence(ref e) => write_err!(f, "error decoding sequence"; e),
@@ -533,24 +421,35 @@ impl fmt::Display for InputValueDecodeError {
             Self::TapLeafScript(ref e) => write_err!(f, "error decoding tap leaf script"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
-            Self::InvalidMinTime => write!(f, "invalid minimum lock time"),
-            Self::InvalidMinHeight => write!(f, "invalid minimum lock height"),
-            Self::InvalidTaprootSignature => write!(f, "invalid taproot signature"),
             Self::InvalidControlBlock => write!(f, "invalid control block"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => write_err!(f, "error decoding SP DLEQ proof"; e),
+            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
+            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
+            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
+                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
+            }
+            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
+                f,
+                "non-witness utxo txid {} does not match previous txid {}",
+                non_witness_utxo_txid, previous_txid
+            ),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for InputValueDecodeError {
+impl std::error::Error for InputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WrongLength { .. } => None,
+            Self::InvalidHash(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::DuplicateKey(_) => None,
+            Self::KeyDecode(ref e) => Some(e),
             Self::PreviousTxid(ref e) => Some(e),
             Self::OutputIndex(ref e) => Some(e),
             Self::Sequence(ref e) => Some(e),
@@ -577,15 +476,17 @@ impl std::error::Error for InputValueDecodeError {
             Self::TapLeafScript(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
-            Self::InvalidMinTime
-            | Self::InvalidMinHeight
-            | Self::InvalidTaprootSignature
-            | Self::InvalidControlBlock
-            | Self::InvalidLeafVersion => None,
+            Self::InvalidControlBlock => None,
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+            Self::MissingPreviousTxid
+            | Self::MissingSpentOutputIndex
+            | Self::EarlyEnd
+            | Self::IncorrectNonWitnessUtxo { .. } => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
         }
     }
 }

@@ -4,11 +4,15 @@
 //!
 //! This module provides a type-safe wrapper for the BIP-375 `PSBT_OUT_SP_V0_INFO` field.
 
+use core::fmt;
+
 use bitcoin::key::CompressedPublicKey;
 use bitcoin::secp256k1;
-use bitcoin_consensus_encoding::{ArrayEncoder, Encoder2};
+use bitcoin_consensus_encoding::{
+    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, Encoder2, UnexpectedEofError,
+};
 
-use crate::PsbtEncode;
+use crate::{PsbtDecode, PsbtEncode};
 
 /// A silent payment v0 address, as carried by `PSBT_OUT_SP_V0_INFO` (BIP-375).
 ///
@@ -58,4 +62,80 @@ impl PsbtEncode for SpV0Info {
             self.spend_key().psbt_encoder(),
         ))
     }
+}
+
+/// Decoder for a [`SpV0Info`] value (66 bytes: scan key + spend key).
+#[derive(Debug, Default)]
+pub struct SpV0InfoDecoder {
+    inner: ArrayDecoder<66>,
+}
+
+impl Decoder for SpV0InfoDecoder {
+    type Output = SpV0Info;
+    type Error = SpV0InfoDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(SpV0InfoDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(SpV0InfoDecodeError::UnexpectedEof)?;
+        SpV0Info::from_byte_array(&bytes).map_err(SpV0InfoDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for SpV0Info {
+    type Decoder = SpV0InfoDecoder;
+}
+
+/// Error decoding a [`SpV0Info`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpV0InfoDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The bytes did not form valid compressed public keys.
+    Invalid(secp256k1::Error),
+}
+
+impl fmt::Display for SpV0InfoDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding SP v0 info: {e}"),
+            Self::Invalid(e) => write!(f, "invalid SP v0 info: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SpV0InfoDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::Invalid(e) => Some(e),
+        }
+    }
+}
+
+/// Decoder for a silent-payments v0 label value (4-byte little-endian u32).
+#[derive(Debug, Default)]
+pub struct SpV0LabelDecoder {
+    inner: ArrayDecoder<4>,
+}
+
+impl Decoder for SpV0LabelDecoder {
+    type Output = u32;
+    type Error = UnexpectedEofError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end()?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
 }

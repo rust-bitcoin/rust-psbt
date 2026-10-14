@@ -19,8 +19,8 @@ use bitcoin::taproot::{
 use bitcoin::{ecdsa, CompressedPublicKey, ScriptBuf, Txid, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, BytesEncoder,
-    CompactSizeEncoder, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4, EncoderStatus,
-    ExactSizeEncoder, IterEncoder, UnexpectedEofError,
+    CompactSizeDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4,
+    EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
 use super::{
@@ -272,6 +272,260 @@ impl PsbtEncode for XOnlyPublicKey {
 
 pub(crate) type TapInternalKeyPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <XOnlyPublicKey as PsbtEncode>::Encoder<'e>>;
+
+/// Decoder for an [`XOnlyPublicKey`] value (32 bytes).
+#[derive(Debug, Default)]
+pub struct XOnlyPublicKeyDecoder {
+    inner: ArrayDecoder<32>,
+}
+
+impl Decoder for XOnlyPublicKeyDecoder {
+    type Output = XOnlyPublicKey;
+    type Error = XOnlyPublicKeyDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(XOnlyPublicKeyDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(XOnlyPublicKeyDecodeError::UnexpectedEof)?;
+        XOnlyPublicKey::from_slice(&bytes).map_err(XOnlyPublicKeyDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for XOnlyPublicKey {
+    type Decoder = XOnlyPublicKeyDecoder;
+}
+
+/// Error decoding an [`XOnlyPublicKey`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum XOnlyPublicKeyDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The 32 bytes did not form a valid x-only public key.
+    Invalid(bitcoin::secp256k1::Error),
+}
+
+impl fmt::Display for XOnlyPublicKeyDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding x-only public key: {e}"),
+            Self::Invalid(e) => write!(f, "invalid x-only public key: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for XOnlyPublicKeyDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::Invalid(e) => Some(e),
+        }
+    }
+}
+
+/// Decoder for a [`Txid`] value (32 bytes).
+#[derive(Debug, Default)]
+pub struct TxidDecoder {
+    inner: ArrayDecoder<32>,
+}
+
+impl Decoder for TxidDecoder {
+    type Output = Txid;
+    type Error = TxidDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TxidDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(TxidDecodeError::UnexpectedEof)?;
+        Txid::from_slice(&bytes).map_err(TxidDecodeError::InvalidHash)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a [`Txid`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxidDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The 32 bytes did not form a valid txid.
+    InvalidHash(bitcoin::hashes::FromSliceError),
+}
+
+impl fmt::Display for TxidDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding txid: {e}"),
+            Self::InvalidHash(e) => write!(f, "invalid txid: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TxidDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::InvalidHash(e) => Some(e),
+        }
+    }
+}
+
+/// Decoder for a [`TapNodeHash`] value (32 bytes).
+#[derive(Debug, Default)]
+pub struct TapNodeHashDecoder {
+    inner: ArrayDecoder<32>,
+}
+
+impl Decoder for TapNodeHashDecoder {
+    type Output = TapNodeHash;
+    type Error = TapNodeHashDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TapNodeHashDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(TapNodeHashDecodeError::UnexpectedEof)?;
+        TapNodeHash::from_slice(&bytes).map_err(TapNodeHashDecodeError::InvalidHash)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a [`TapNodeHash`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TapNodeHashDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The 32 bytes did not form a valid tap node hash.
+    InvalidHash(bitcoin::hashes::FromSliceError),
+}
+
+impl fmt::Display for TapNodeHashDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding tap node hash: {e}"),
+            Self::InvalidHash(e) => write!(f, "invalid tap node hash: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TapNodeHashDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::InvalidHash(e) => Some(e),
+        }
+    }
+}
+#[derive(Debug, Default)]
+pub struct TimeDecoder {
+    inner: ArrayDecoder<4>,
+}
+
+impl Decoder for TimeDecoder {
+    type Output = absolute::Time;
+    type Error = TimeDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TimeDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(TimeDecodeError::UnexpectedEof)?;
+        absolute::Time::from_consensus(u32::from_le_bytes(bytes))
+            .map_err(|_| TimeDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a minimum lock time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimeDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The value is not a valid lock time.
+    Invalid,
+}
+
+impl fmt::Display for TimeDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding lock time: {e}"),
+            Self::Invalid => write!(f, "invalid lock time value"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TimeDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::Invalid => None,
+        }
+    }
+}
+
+/// Decoder for a minimum lock height value (4 bytes, u32 LE).
+#[derive(Debug, Default)]
+pub struct HeightDecoder {
+    inner: ArrayDecoder<4>,
+}
+
+impl Decoder for HeightDecoder {
+    type Output = absolute::Height;
+    type Error = HeightDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(HeightDecodeError::UnexpectedEof)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end().map_err(HeightDecodeError::UnexpectedEof)?;
+        absolute::Height::from_consensus(u32::from_le_bytes(bytes))
+            .map_err(|_| HeightDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a minimum lock height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeightDecodeError {
+    /// Not enough bytes were provided.
+    UnexpectedEof(UnexpectedEofError),
+    /// The value is not a valid block height.
+    Invalid,
+}
+
+impl fmt::Display for HeightDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding lock height: {e}"),
+            Self::Invalid => write!(f, "invalid lock height value"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for HeightDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedEof(e) => Some(e),
+            Self::Invalid => None,
+        }
+    }
+}
 
 macro_rules! impl_hash_encoder {
     ($ty:ty, $len:expr) => {
@@ -573,6 +827,76 @@ impl PsbtEncode for TapTree {
 
 pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
 
+/// Decoder for a [`TapTree`] value.
+#[derive(Debug, Default)]
+pub struct TapTreeDecoder {
+    inner: ByteVecDecoder,
+}
+
+impl Decoder for TapTreeDecoder {
+    type Output = TapTree;
+    type Error = TapTreeDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TapTreeDecodeError::ByteVec)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let value = self.inner.end().map_err(TapTreeDecodeError::ByteVec)?;
+        let mut builder = taproot::TaprootBuilder::new();
+        let mut slice = &value[..];
+        while let Some((&depth, rest)) = slice.split_first() {
+            let (&version, rest) = rest.split_first().ok_or(TapTreeDecodeError::InvalidTree)?;
+            let mut cs = CompactSizeDecoder::new();
+            let mut remaining = rest;
+            cs.push_bytes(&mut remaining).map_err(|_| TapTreeDecodeError::InvalidTree)?;
+            let script_len = cs.end().map_err(|_| TapTreeDecodeError::InvalidTree)?;
+            let script = ScriptBuf::from_bytes(remaining[..script_len].to_vec());
+            let leaf_version = LeafVersion::from_consensus(version)
+                .map_err(|_| TapTreeDecodeError::InvalidTree)?;
+            builder = builder
+                .add_leaf_with_ver(depth, script, leaf_version)
+                .map_err(|_| TapTreeDecodeError::InvalidTree)?;
+            slice = &remaining[script_len..];
+        }
+        TapTree::try_from(builder).map_err(|_| TapTreeDecodeError::InvalidTree)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for TapTree {
+    type Decoder = TapTreeDecoder;
+}
+
+/// Error decoding a [`TapTree`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TapTreeDecodeError {
+    /// The inner byte-vector decoder encountered an error.
+    ByteVec(ByteVecDecoderError),
+    /// The value is not a valid tap tree.
+    InvalidTree,
+}
+
+impl fmt::Display for TapTreeDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteVec(e) => write!(f, "error decoding tap tree: {e}"),
+            Self::InvalidTree => write!(f, "invalid tap tree encoding"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TapTreeDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ByteVec(e) => Some(e),
+            Self::InvalidTree => None,
+        }
+    }
+}
+
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
     pub struct LeafHashVecKeySourceEncoder<'e>(
@@ -723,6 +1047,243 @@ pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
     btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     PSBT_OUT_TAP_BIP32_DERIVATION,
 >;
+
+/// Decoder for a [`taproot::Signature`] value.
+#[derive(Debug, Default)]
+pub struct TaprootSignatureDecoder {
+    inner: ByteVecDecoder,
+}
+
+impl Decoder for TaprootSignatureDecoder {
+    type Output = taproot::Signature;
+    type Error = TaprootSignatureDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TaprootSignatureDecodeError::ByteVec)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let value = self.inner.end().map_err(TaprootSignatureDecodeError::ByteVec)?;
+        taproot::Signature::from_slice(&value).map_err(TaprootSignatureDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a [`taproot::Signature`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaprootSignatureDecodeError {
+    /// The inner byte-vector decoder encountered an error.
+    ByteVec(ByteVecDecoderError),
+    /// The value is not a valid taproot signature.
+    Invalid(bitcoin::taproot::SigFromSliceError),
+}
+
+impl fmt::Display for TaprootSignatureDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteVec(e) => write!(f, "error decoding taproot signature: {e}"),
+            Self::Invalid(e) => write!(f, "invalid taproot signature: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TaprootSignatureDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ByteVec(e) => Some(e),
+            Self::Invalid(e) => Some(e),
+        }
+    }
+}
+
+/// Decoder for an [`ecdsa::Signature`] value.
+#[derive(Debug, Default)]
+pub struct EcdsaSignatureDecoder {
+    inner: ByteVecDecoder,
+}
+
+impl Decoder for EcdsaSignatureDecoder {
+    type Output = ecdsa::Signature;
+    type Error = EcdsaSignatureDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(EcdsaSignatureDecodeError::ByteVec)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let value = self.inner.end().map_err(EcdsaSignatureDecodeError::ByteVec)?;
+        ecdsa::Signature::from_slice(&value).map_err(EcdsaSignatureDecodeError::Invalid)
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding an [`ecdsa::Signature`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EcdsaSignatureDecodeError {
+    /// The inner byte-vector decoder encountered an error.
+    ByteVec(ByteVecDecoderError),
+    /// The value is not a valid ECDSA signature.
+    Invalid(ecdsa::Error),
+}
+
+impl fmt::Display for EcdsaSignatureDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteVec(e) => write!(f, "error decoding ECDSA signature: {e}"),
+            Self::Invalid(e) => write!(f, "invalid ECDSA signature: {e}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for EcdsaSignatureDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ByteVec(e) => Some(e),
+            Self::Invalid(e) => Some(e),
+        }
+    }
+}
+
+/// Decoder for a tap leaf script value: `(ScriptBuf, LeafVersion)`.
+#[derive(Debug, Default)]
+pub struct TapLeafScriptDecoder {
+    inner: ByteVecDecoder,
+}
+
+impl Decoder for TapLeafScriptDecoder {
+    type Output = (ScriptBuf, LeafVersion);
+    type Error = TapLeafScriptDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TapLeafScriptDecodeError::ByteVec)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let value = self.inner.end().map_err(TapLeafScriptDecodeError::ByteVec)?;
+        if value.is_empty() {
+            return Err(TapLeafScriptDecodeError::Empty);
+        }
+        let last = value.len() - 1;
+        let script = ScriptBuf::from_bytes(value[..last].to_vec());
+        let ver = LeafVersion::from_consensus(value[last])
+            .map_err(|_| TapLeafScriptDecodeError::InvalidLeafVersion)?;
+        Ok((script, ver))
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding a tap leaf script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TapLeafScriptDecodeError {
+    /// The inner byte-vector decoder encountered an error.
+    ByteVec(ByteVecDecoderError),
+    /// The value is empty (needs at least a leaf version byte).
+    Empty,
+    /// The last byte is not a valid leaf version.
+    InvalidLeafVersion,
+}
+
+impl fmt::Display for TapLeafScriptDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteVec(e) => write!(f, "error decoding tap leaf script: {e}"),
+            Self::Empty => write!(f, "tap leaf script value is empty"),
+            Self::InvalidLeafVersion => write!(f, "invalid leaf version in tap leaf script"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TapLeafScriptDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ByteVec(e) => Some(e),
+            Self::Empty | Self::InvalidLeafVersion => None,
+        }
+    }
+}
+
+/// Decoder for an output tap key origin value: `(Vec<TapLeafHash>, KeySource)`.
+#[derive(Debug, Default)]
+pub struct TapKeyOriginDecoder {
+    inner: ByteVecDecoder,
+}
+
+impl Decoder for TapKeyOriginDecoder {
+    type Output = (Vec<TapLeafHash>, KeySource);
+    type Error = TapKeyOriginDecodeError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes).map_err(TapKeyOriginDecodeError::ByteVec)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let value = self.inner.end().map_err(TapKeyOriginDecodeError::ByteVec)?;
+
+        if value.is_empty() {
+            return Err(TapKeyOriginDecodeError::MissingFingerprint);
+        }
+
+        let count = value[0] as usize;
+        let hash_end = 1 + count * 32;
+        let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
+            .chunks_exact(32)
+            .map(|chunk| TapLeafHash::from_slice(chunk).expect("32 bytes"))
+            .collect();
+
+        if value.len() < hash_end + 4 {
+            return Err(TapKeyOriginDecodeError::MissingFingerprint);
+        }
+
+        let fprint = bip32::Fingerprint::from(
+            <[u8; 4]>::try_from(&value[hash_end..hash_end + 4]).expect("4 bytes"),
+        );
+
+        let mut dpath: Vec<ChildNumber> = Default::default();
+        for chunk in value[hash_end + 4..].chunks_exact(4) {
+            let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
+            dpath.push(ChildNumber::from(index));
+        }
+
+        let ks = (fprint, bip32::DerivationPath::from(dpath));
+        Ok((leaf_hashes, ks))
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+/// Error decoding an output tap key origin value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TapKeyOriginDecodeError {
+    /// The inner byte-vector decoder encountered an error.
+    ByteVec(ByteVecDecoderError),
+    /// The value does not contain a valid fingerprint.
+    MissingFingerprint,
+}
+
+impl fmt::Display for TapKeyOriginDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByteVec(e) => write!(f, "error decoding tap key origin: {e}"),
+            Self::MissingFingerprint => write!(f, "tap key origin missing fingerprint"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TapKeyOriginDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ByteVec(e) => Some(e),
+            Self::MissingFingerprint => None,
+        }
+    }
+}
 
 #[cfg(feature = "silent-payments")]
 pub(crate) type DleqKeyValueIter<'e> =

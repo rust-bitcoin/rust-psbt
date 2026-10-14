@@ -966,7 +966,7 @@ mod tests {
 
         assert_eq!(
             Constructor::<Modifiable>::default().output(output).err(),
-            Some(output::ValidationError::LabelWithoutInfo)
+            Some(output::ValidationError::SpLabelWithoutInfo)
         );
     }
 
