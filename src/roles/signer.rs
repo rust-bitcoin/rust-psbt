@@ -196,14 +196,14 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     ///
     /// The signable input is bound to this session; see the [`SignableInput`] docs for the
     /// checks that are run.
-    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
+    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'id>, SignError> {
         SignableInput::verify(self.psbt, index)
     }
 
     /// Creates a [`SignableInput`] for `index` against the [`Psbt`], without verifying data.
     ///
     /// This method assumes the caller verified data offline.
-    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
+    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'id>, SignError> {
         SignableInput::assume_checked(self.psbt, index)
     }
 
@@ -211,9 +211,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     ///
     /// All-or-nothing: if any input fails its checks, returns the per-input errors and no signable
     /// inputs.
-    pub fn signable_inputs(
-        &self,
-    ) -> Result<Vec<SignableInput<'a, 'id>>, BTreeMap<usize, SignError>> {
+    pub fn signable_inputs(&self) -> Result<Vec<SignableInput<'id>>, BTreeMap<usize, SignError>> {
         let mut signable_inputs = Vec::new();
         let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
         for index in 0..self.psbt.global.input_count {
@@ -243,7 +241,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// This method is infallible, all input-validation ran when the signable input was created.
     pub fn get_input_sigs<C, K>(
         &mut self,
-        input: &SignableInput<'a, 'id>,
+        input: &SignableInput<'id>,
         k: &K,
         secp: &Secp256k1<C>,
     ) -> InputSigs
@@ -288,7 +286,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// Produces the signatures for every signable input for which the key is available without writing them.
     pub fn get_all<C, K>(
         &mut self,
-        inputs: &[SignableInput<'a, 'id>],
+        inputs: &[SignableInput<'id>],
         k: &K,
         secp: &Secp256k1<C>,
     ) -> Vec<InputSigs>
@@ -424,7 +422,7 @@ type SessionId<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// A signable input is identified by the session that created it and is a snapshot of the input's
 /// verified signing data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SignableInput<'a, 'id> {
+pub struct SignableInput<'id> {
     /// The input index this validated input refers to.
     index: usize,
     /// The output type of this input's spent output.
@@ -437,11 +435,6 @@ pub struct SignableInput<'a, 'id> {
     sighash_ty: PsbtSighashType,
     /// For taproot inputs, a snapshot of every input's spent output. Empty for non-taproot inputs.
     spent_outputs: Vec<TxOut>,
-    /// The [`Psbt`] this signable input was created from.
-    ///
-    /// Ties the signable input's lifetime to a shared borrow of the [`Psbt`], so the borrow checker
-    /// forbids mutating the [`Psbt`] while the signable input is alive.
-    psbt: &'a Psbt,
     /// The id of the [`SigningSession`] that created this signable input.
     session_id: SessionId<'id>,
 }
@@ -455,14 +448,14 @@ pub enum Sighash {
     Schnorr(TapSighashType),
 }
 
-impl<'a, 'id> SignableInput<'a, 'id> {
+impl<'id> SignableInput<'id> {
     /// Runs the full BIP-174 signer checks and returns evidence of success.
     ///
     /// This is the untrusted path: in addition to the structural checks of
     /// [`Self::assume_checked`], it verifies the funding UTXO against a full transaction (rejecting
     /// witness-only non-P2TR inputs), checks that the redeem/witness scripts match the
     /// scriptPubKey, and that any existing signatures' sighash types agree with the declared one.
-    fn verify(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn verify(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         let input = Self::check_data(psbt, index)?;
 
         // Strict funding UTXO: a witness-only UTXO cannot be verified for a non-P2TR input.
@@ -518,7 +511,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     ///
     /// Signing with an unattested amount enables the fee-inflation attack: a crafted `witness_utxo`
     /// can overstate an input's value, so the resulting transaction overpays the fee.
-    fn assume_checked(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn assume_checked(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         Self::check_data(psbt, index)
     }
 
@@ -532,7 +525,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     ///
     /// Shared by both [`Self::verify`] and [`Self::assume_checked`]; runs no consistency checks
     /// against the scriptPubKey or existing signatures.
-    fn check_data(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn check_data(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         let input = psbt.checked_input(index).map_err(SignError::IndexOutOfBounds)?;
         let prevout = input.funding_utxo().map_err(SignError::FundingUtxo)?.clone();
         // `output_type` re-derives the funding UTXO, which cannot fail here: any funding error
@@ -597,7 +590,6 @@ impl<'a, 'id> SignableInput<'a, 'id> {
             script_code,
             sighash_ty,
             spent_outputs,
-            psbt,
             session_id: PhantomData,
         })
     }
@@ -621,7 +613,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     /// This method is infallible, as its only called by [`SigningSession`], the [`SighashCache`]
     /// and the [`Psbt`] and this same [`SignableInput`] are unchangeable, so the invariants ensured
     /// by [`SignableInput`] stay true for the whole signing session.
-    pub(crate) fn sighash(&self, cache: &'a mut SighashCache<Transaction>) -> (Message, Sighash) {
+    pub(crate) fn sighash(&self, cache: &mut SighashCache<Transaction>) -> (Message, Sighash) {
         match self.output_type {
             OutputType::Tr => {
                 let tap_ty = self
