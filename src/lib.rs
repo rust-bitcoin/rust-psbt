@@ -27,8 +27,6 @@ pub extern crate miniscript;
 mod consts;
 mod encoding;
 mod error;
-#[macro_use]
-mod macros;
 mod map;
 mod psbt;
 mod roles;

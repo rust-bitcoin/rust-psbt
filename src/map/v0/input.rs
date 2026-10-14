@@ -746,9 +746,8 @@ impl Decoder for InputMapDecoder {
                     decoder.push_bytes(bytes).map_err(InputDecodeError::WitnessScript)?,
                 InputStage::DecodingFinalScriptSig { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::FinalScriptSig)?,
-                InputStage::DecodingFinalScriptWitness { ref mut decoder, .. } => decoder
-                    .push_bytes(bytes)
-                    .map_err(InputDecodeError::FinalScriptWitness)?,
+                InputStage::DecodingFinalScriptWitness { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(InputDecodeError::FinalScriptWitness)?,
                 InputStage::DecodingTapKeySig { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapKeySig)?,
                 InputStage::DecodingTapInternalKey { ref mut decoder, .. } =>
@@ -771,9 +770,8 @@ impl Decoder for InputMapDecoder {
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapScriptSig)?,
                 InputStage::DecodingTapLeafScript { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapLeafScript)?,
-                InputStage::DecodingTapBip32Derivation { ref mut decoder, .. } => decoder
-                    .push_bytes(bytes)
-                    .map_err(InputDecodeError::TapBip32Derivation)?,
+                InputStage::DecodingTapBip32Derivation { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(InputDecodeError::TapBip32Derivation)?,
                 InputStage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::ProprietaryValue)?,
                 InputStage::DecodingUnknown { ref mut decoder, .. } =>
@@ -849,8 +847,7 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingFinalScriptWitness { key, decoder } => {
-                    let witness =
-                        decoder.end().map_err(InputDecodeError::FinalScriptWitness)?;
+                    let witness = decoder.end().map_err(InputDecodeError::FinalScriptWitness)?;
                     if self.final_script_witness.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
@@ -908,8 +905,7 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingRipemd160 { key, decoder } => {
-                    let value =
-                        decoder.end().map_err(InputDecodeError::Ripemd160Preimage)?;
+                    let value = decoder.end().map_err(InputDecodeError::Ripemd160Preimage)?;
                     let hash = ripemd160::Hash::from_slice(&key.key)
                         .map_err(InputDecodeError::InvalidHash)?;
                     match self.ripemd160_preimages.entry(hash) {
@@ -983,8 +979,7 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapLeafScript { key, decoder } => {
-                    let (script, ver) =
-                        decoder.end().map_err(InputDecodeError::TapLeafScript)?;
+                    let (script, ver) = decoder.end().map_err(InputDecodeError::TapLeafScript)?;
                     let cb = ControlBlock::decode(&key.key)
                         .map_err(|_| InputDecodeError::InvalidControlBlock)?;
                     match self.tap_scripts.entry(cb) {
@@ -997,8 +992,7 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapBip32Derivation { key, decoder } => {
-                    let pair =
-                        decoder.end().map_err(InputDecodeError::TapBip32Derivation)?;
+                    let pair = decoder.end().map_err(InputDecodeError::TapBip32Derivation)?;
                     let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
