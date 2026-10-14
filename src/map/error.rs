@@ -247,13 +247,6 @@ impl std::error::Error for OutputDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum OutputValueDecodeError {
-    /// Value length does not match the expected fixed size for this key type (got, expected).
-    WrongLength {
-        /// The decoded value length.
-        got: usize,
-        /// The expected value length.
-        expected: usize,
-    },
     /// Error decoding the amount value.
     Amount(
         ValueDecoderError<
@@ -291,8 +284,6 @@ pub enum OutputValueDecodeError {
 impl fmt::Display for OutputValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongLength { got, expected } =>
-                write!(f, "value length {} (expected {})", got, expected),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -317,7 +308,6 @@ impl fmt::Display for OutputValueDecodeError {
 impl std::error::Error for OutputValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WrongLength { .. } => None,
             Self::Amount(ref e) => Some(e),
             Self::Script(ref e) => Some(e),
             Self::RedeemScript(ref e) => Some(e),
