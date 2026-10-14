@@ -30,8 +30,6 @@ mod error;
 mod map;
 mod psbt;
 mod roles;
-#[cfg(feature = "serde")]
-mod serde_utils;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
