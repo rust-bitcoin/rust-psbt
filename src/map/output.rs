@@ -110,7 +110,7 @@ impl Output {
     pub fn validate(&self) -> Result<(), ValidationError> {
         #[cfg(feature = "silent-payments")]
         if self.sp_v0_label.is_some() && self.sp_v0_info.is_none() {
-            return Err(ValidationError::LabelWithoutInfo);
+            return Err(ValidationError::SpLabelWithoutInfo);
         }
 
         Ok(())
@@ -356,32 +356,31 @@ impl Decoder for OutputDecoder {
                 DecoderStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(OutputDecodeError::KeyDecode)?,
                 DecoderStage::DecodingAmount { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::Amount(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::Amount)?,
                 DecoderStage::DecodingTapInternalKey { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::TapInternalKey(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::TapInternalKey)?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Info { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::SpV0Info(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::SpV0Info)?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Label { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::SpV0Label(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::SpV0Label)?,
                 DecoderStage::DecodingScript { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::Script(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::Script)?,
                 DecoderStage::DecodingRedeemScript { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::RedeemScript(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::RedeemScript)?,
                 DecoderStage::DecodingWitnessScript { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::WitnessScript(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::WitnessScript)?,
                 DecoderStage::DecodingBip32Derivation { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::Bip32Derivation(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::Bip32Derivation)?,
                 DecoderStage::DecodingTapTree { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::TapTree(e))?,
-                DecoderStage::DecodingTapBip32Derivation { ref mut decoder, .. } => decoder
-                    .push_bytes(bytes)
-                    .map_err(|e| OutputDecodeError::TapBip32Derivation(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::TapTree)?,
+                DecoderStage::DecodingTapBip32Derivation { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::TapBip32Derivation)?,
                 DecoderStage::DecodingProprietary { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::ProprietaryValue(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::ProprietaryValue)?,
                 DecoderStage::DecodingUnknown { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| OutputDecodeError::UnknownValue(e))?,
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::UnknownValue)?,
                 DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
                 DecoderStage::DecodingSeparator | DecoderStage::Errored => {
                     panic!("push_bytes in unexpected stage")
@@ -399,7 +398,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::from_key(key)?;
                 }
                 DecoderStage::DecodingAmount { key, decoder } => {
-                    let amount = decoder.end().map_err(|e| OutputDecodeError::Amount(e))?;
+                    let amount = decoder.end().map_err(OutputDecodeError::Amount)?;
                     if self.amount.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -407,7 +406,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingScript { key, decoder } => {
-                    let script = decoder.end().map_err(|e| OutputDecodeError::Script(e))?;
+                    let script = decoder.end().map_err(OutputDecodeError::Script)?;
                     if self.script_pubkey.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -415,7 +414,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingRedeemScript { key, decoder } => {
-                    let script = decoder.end().map_err(|e| OutputDecodeError::RedeemScript(e))?;
+                    let script = decoder.end().map_err(OutputDecodeError::RedeemScript)?;
                     if self.redeem_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -423,7 +422,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingWitnessScript { key, decoder } => {
-                    let script = decoder.end().map_err(|e| OutputDecodeError::WitnessScript(e))?;
+                    let script = decoder.end().map_err(OutputDecodeError::WitnessScript)?;
                     if self.witness_script.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -431,7 +430,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingBip32Derivation { key, decoder } => {
-                    let ks = decoder.end().map_err(|e| OutputDecodeError::Bip32Derivation(e))?;
+                    let ks = decoder.end().map_err(OutputDecodeError::Bip32Derivation)?;
                     let pk = PublicKey::from_slice(&key.key)
                         .map_err(OutputDecodeError::InvalidPublicKey)?;
                     match self.bip32_derivations.entry(pk) {
@@ -444,7 +443,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapInternalKey { key, decoder } => {
-                    let xonly = decoder.end().map_err(|e| OutputDecodeError::TapInternalKey(e))?;
+                    let xonly = decoder.end().map_err(OutputDecodeError::TapInternalKey)?;
                     if self.tap_internal_key.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -452,7 +451,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapTree { key, decoder } => {
-                    let tree = decoder.end().map_err(|e| OutputDecodeError::TapTree(e))?;
+                    let tree = decoder.end().map_err(OutputDecodeError::TapTree)?;
                     if self.tap_tree.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -460,8 +459,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapBip32Derivation { key, decoder } => {
-                    let pair =
-                        decoder.end().map_err(|e| OutputDecodeError::TapBip32Derivation(e))?;
+                    let pair = decoder.end().map_err(OutputDecodeError::TapBip32Derivation)?;
                     let xonly = XOnlyPublicKey::from_slice(&key.key)
                         .map_err(|_| OutputDecodeError::InvalidXOnlyPublicKey)?;
                     match self.tap_key_origins.entry(xonly) {
@@ -475,7 +473,7 @@ impl Decoder for OutputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Info { key, decoder } => {
-                    let info = decoder.end().map_err(|e| OutputDecodeError::SpV0Info(e))?;
+                    let info = decoder.end().map_err(OutputDecodeError::SpV0Info)?;
                     if self.sp_v0_info.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -489,7 +487,7 @@ impl Decoder for OutputDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpV0Label { key, decoder } => {
-                    let label = decoder.end().map_err(|e| OutputDecodeError::SpV0Label(e))?;
+                    let label = decoder.end().map_err(OutputDecodeError::SpV0Label)?;
                     if self.sp_v0_label.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
@@ -502,8 +500,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingProprietary { key, decoder } => {
-                    let value =
-                        decoder.end().map_err(|e| OutputDecodeError::ProprietaryValue(e))?;
+                    let value = decoder.end().map_err(OutputDecodeError::ProprietaryValue)?;
                     let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
                         OutputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
@@ -517,7 +514,7 @@ impl Decoder for OutputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingUnknown { key, decoder } => {
-                    let value = decoder.end().map_err(|e| OutputDecodeError::UnknownValue(e))?;
+                    let value = decoder.end().map_err(OutputDecodeError::UnknownValue)?;
                     match self.unknowns.entry(key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -540,7 +537,10 @@ impl Decoder for OutputDecoder {
     fn end(self) -> Result<Output, Self::Error> {
         match self.stage {
             DecoderStage::Done(output) => {
-                output.validate()?;
+                output.validate().map_err(|e| match e {
+                    #[cfg(feature = "silent-payments")]
+                    ValidationError::SpLabelWithoutInfo => OutputDecodeError::SpLabelWithoutInfo,
+                })?;
                 Ok(output)
             }
             _ => Err(OutputDecodeError::EarlyEnd),
@@ -829,27 +829,23 @@ impl OutputBuilder {
 #[non_exhaustive]
 pub enum ValidationError {
     /// Output has a `sp_v0_label` without a `sp_v0_info`.
-    LabelWithoutInfo,
+    #[cfg(feature = "silent-payments")]
+    SpLabelWithoutInfo,
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            #[cfg(feature = "silent-payments")]
+            Self::SpLabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            #[allow(unreachable_patterns)]
+            _ => write!(f, "output validation error"),
         }
     }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for ValidationError {}
-
-impl From<ValidationError> for OutputDecodeError {
-    fn from(e: ValidationError) -> Self {
-        match e {
-            ValidationError::LabelWithoutInfo => Self::LabelWithoutInfo,
-        }
-    }
-}
 
 /// Error combining two output maps.
 #[derive(Debug, Clone, PartialEq, Eq)]

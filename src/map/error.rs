@@ -181,20 +181,21 @@ impl std::error::Error for XpubDecodeError {
 pub enum OutputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
+    /// Error decoding a raw PSBT key.
+    KeyDecode(KeyDecodeError),
+    /// Decoding finished before fully decoding the output map.
+    EarlyEnd,
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
     /// Invalid xonly public key when parsing key data.
     InvalidXOnlyPublicKey,
-    /// Error decoding a raw PSBT key.
-    KeyDecode(KeyDecodeError),
-    /// End before fully decoding the output map.
-    EarlyEnd,
     /// Encoded output is missing an amount value.
     MissingAmount,
     /// Encoded output is missing a script pubkey.
     MissingScriptPubkey,
-    /// Encoded output is missing a sp_v0_info.
-    LabelWithoutInfo,
+    /// Encoded output has a sp_v0_label without a sp_v0_info.
+    #[cfg(feature = "silent-payments")]
+    SpLabelWithoutInfo,
     /// Error decoding the amount value.
     Amount(
         ValueDecoderError<
@@ -237,7 +238,8 @@ impl fmt::Display for OutputDecodeError {
             Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
             Self::MissingAmount => write!(f, "encoded output is missing an amount"),
             Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
-            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            #[cfg(feature = "silent-payments")]
+            Self::SpLabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -281,8 +283,9 @@ impl std::error::Error for OutputDecodeError {
             | Self::InvalidXOnlyPublicKey
             | Self::EarlyEnd
             | Self::MissingAmount
-            | Self::MissingScriptPubkey
-            | Self::LabelWithoutInfo => None,
+            | Self::MissingScriptPubkey => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpLabelWithoutInfo => None,
         }
     }
 }
