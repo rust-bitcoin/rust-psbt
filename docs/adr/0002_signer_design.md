@@ -25,7 +25,7 @@ signature batch produced against a different `Psbt`.
 Every signature in a session must commit to the transaction the sighash cache was
 built from, so `Signer` owns the `Psbt` and builds the `SighashCache` at construction,
 failing upfront if the lock time cannot be determined. Writing signatures needs
-`&mut Psbt`, which conflicts with live evidence, so signing runs in two phases:
+`&mut Psbt`, which conflicts with live evidence (`&'a Psbt`), so signing runs in two phases:
 
 ```rust
 let mut signer = Signer::new(psbt)?;
@@ -36,12 +36,14 @@ let sigs = signer.session(|mut session| {    // lends Psbt + cache
 let psbt = signer.apply(sigs)?;              // writes, clears TX_MODIFIABLE
 ```
 
-A `SignableInput` carries `&'a Psbt`, so the borrow checker forbids mutating the
-`Psbt` while any is alive. The evidence snapshots everything the sighash commits to -
-prevout, script code, sighash type, taproot spent outputs - so remaining live reads
-are shape-only (key lookup). `SigningSession` holds `&'a Psbt` and
-`&'a mut SighashCache` under one lifetime, letting the cache be reused while the
-`Psbt` stays frozen.
+A `SignableInput` snapshots everything the sighash commits to - prevout, script
+code, sighash type - so remaining live reads are shape-only (key lookup); the
+complete prevout slice a non-ANYONECANPAY taproot sighash commits to is carried
+once by `AllSignableInputs` instead of per input.
+Signable inputs cannot outlive the session closure, so the `Psbt` stays frozen
+while any is alive.
+`SigningSession` holds `&'a Psbt` and `&'a mut SighashCache` under one
+lifetime, letting the cache be reused while the `Psbt` stays frozen.
 
 ## Unique Sessions via an Invariant Higher-Ranked Lifetime
 
@@ -87,6 +89,31 @@ the split with `strict_sign` / `trusted_sign` tasks.
 A signing API directly on `Psbt` couples the data structure with the signing
 workflow. By removing `Psbt::sign` and signing through `Signer`, that coupling
 is broke.
+
+## Non-ANYONECANPAY Taproot Inputs Require the Complete Input Set
+
+A taproot default sighash commits to every input's prevout, so those taproot
+input can only be signed when every input's funding UTXO is present. A runtime
+error cannot express this cleanly: it either needs a dedicated error variant
+for a caller mistake, or lets a taproot input be "signed" standalone and
+silently produce nothing. Instead the rule is carried by the type system,
+using the constructor privacy of `SignableInput`:
+
+- The singular session methods (`signable_input`, `assume_checked_input`) reject
+  non-ANYONECANPAY taproot inputs with the `SignError::AllPrevoutsRequired` error, so a
+  bare `SignableInput` sighash commits to its own prevout only.
+- The plural session methods (`signable_inputs`, `assume_checked_inputs`) build the opaque
+  `AllSignableInputs` by iterating every input all-or-nothing. Completeness (every input
+  validated, every prevout present) holds by construction, with no counting or index
+  matching at signing time.
+
+Because the set is opaque, a taproot input cannot reach `get_input_sigs`; `get_all` is the
+only taproot-capable signing path. `AllSignableInputs` also carries the complete prevout
+slice, collected once at creation: `get_all` signs any number of taproot inputs with a
+single O(N) prevout collection, and once schnorr signing lands the sighash engine shares it
+across all taproot inputs (the `SighashCache` itself memoizes the shared BIP-341
+intermediate hashes). Standalone subsets are signed with `get_some`, which needs no
+completeness proof - each standalone sighash commits only to its own prevout.
 
 [^1]: Alexis King, "Parse, don't validate", 2019. <https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/>
 [^2]: Bitcoin Optech Newsletter #101, "Fee overpayment attack on multi-input segwit transactions". <https://bitcoinops.org/en/newsletters/2020/06/10/#fee-overpayment-attack-on-multi-input-segwit-transactions>
