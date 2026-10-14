@@ -66,21 +66,16 @@ pub struct Input {
     ///
     ///  `OutPoint { txid: self.previous_txid, vout: self.spent_output_index }`
     pub previous_txid: Txid,
-
     /// The index of the output being spent in the transaction with the txid of `self.previous_txid`.
     pub spent_output_index: u32,
-
     /// The sequence number of this input.
     ///
     /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]).
     pub sequence: Option<Sequence>,
-
     /// The minimum Unix timestamp that this input requires to be set as the transaction's lock time.
     pub min_time: Option<absolute::Time>,
-
     /// The minimum block height that this input requires to be set as the transaction's lock time.
     pub min_height: Option<absolute::Height>,
-
     /// The non-witness transaction this input spends from. Should only be
     /// `Option::Some` for inputs which spend non-segwit outputs or
     /// if it is unknown whether an input spends a segwit output.
@@ -137,17 +132,14 @@ pub struct Input {
     pub tap_internal_key: Option<XOnlyPublicKey>,
     /// Taproot Merkle root.
     pub tap_merkle_root: Option<TapNodeHash>,
-
-    /// BIP-375: Map from scan public key to per-input ECDH share (33 bytes each).
+    /// BIP-375: Map from scan public key to per-input ECDH share.
     #[cfg(feature = "silent-payments")]
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
     pub sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
-
-    /// BIP-375: Map from scan public key to per-input DLEQ proof (64 bytes each).
+    /// BIP-375: Map from scan public key to per-input DLEQ proof.
     #[cfg(feature = "silent-payments")]
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
     pub sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
-
     /// Proprietary key-value pairs for this input.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
