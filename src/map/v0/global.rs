@@ -28,7 +28,7 @@ use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
-use crate::map::error::{GlobalDecodeError, KeyDecodeError};
+use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{DleqProof, DleqProofDecoder};
@@ -324,8 +324,9 @@ impl Decoder for GlobalMapDecoder {
                     decoder.push_bytes(bytes).map_err(GlobalDecodeError::Version)?,
                 Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnsignedTx)?,
-                Stage::DecodingXpub { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::XpubKeySource)?,
+                Stage::DecodingXpub { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::KeySource(e)))?,
                 Stage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnknownValue)?,
                 Stage::DecodingUnknown { ref mut decoder, .. } =>
@@ -394,9 +395,11 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingXpub { key, decoder } => {
-                    let key_source =
-                        decoder.end().map_err(GlobalDecodeError::XpubKeySource)?;
-                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
+                    let key_source = decoder
+                        .end()
+                        .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::KeySource(e)))?;
+                    let xpub = Xpub::decode(&key.key)
+                        .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::Key(e)))?;
                     if self.xpubs.contains_key(&xpub) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -592,7 +595,7 @@ mod tests {
                 &xpub.fingerprint().as_bytes()[..3],
             ))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::XpubKeySource(_)));
+        assert!(matches!(err, GlobalDecodeError::Xpub(_)));
     }
 
     #[test]
@@ -624,6 +627,6 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub.encode(), &value))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::XpubKeySource(_)));
+        assert!(matches!(err, GlobalDecodeError::Xpub(_)));
     }
 }

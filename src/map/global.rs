@@ -34,7 +34,7 @@ use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, Ecdh
 use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError};
 use crate::error::write_err;
-use crate::map::error::{GlobalDecodeError, KeyDecodeError};
+use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{DleqProof, DleqProofDecoder};
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
@@ -425,8 +425,9 @@ impl Decoder for GlobalDecoder {
                 DecoderStage::DecodingInputCount { ref mut decoder, .. }
                 | DecoderStage::DecodingOutputCount { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(GlobalDecodeError::Count)?,
-                DecoderStage::DecodingXpub { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::XpubKeySource)?,
+                DecoderStage::DecodingXpub { ref mut decoder, .. } => decoder
+                    .push_bytes(bytes)
+                    .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::KeySource(e)))?,
                 DecoderStage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(GlobalDecodeError::ProprietaryValue)?,
                 DecoderStage::DecodingUnknown { ref mut decoder, .. } =>
@@ -516,17 +517,18 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
-                    let key_source =
-                        decoder.end().map_err(GlobalDecodeError::XpubKeySource)?;
-                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
+                    let key_source = decoder
+                        .end()
+                        .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::KeySource(e)))?;
+                    let xpub = Xpub::decode(&key.key)
+                        .map_err(|e| GlobalDecodeError::Xpub(XpubDecodeError::Key(e)))?;
                     if self.xpubs.insert(xpub, key_source).is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingProprietary { key, decoder } => {
-                    let value =
-                        decoder.end().map_err(GlobalDecodeError::ProprietaryValue)?;
+                    let value = decoder.end().map_err(GlobalDecodeError::ProprietaryValue)?;
                     let pk = ProprietaryKey::try_from(key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
@@ -1027,8 +1029,8 @@ mod tests {
         data.push(PSBT_SEPARATOR);
         let res = decoder.push_bytes(&mut data.as_slice());
         assert!(
-            matches!(res, Err(GlobalDecodeError::XpubKeySource(_))),
-            "expected XpubKeySource error for xpub value too short, got {:?}",
+            matches!(res, Err(GlobalDecodeError::Xpub(_))),
+            "expected Xpub error for xpub value too short, got {:?}",
             res,
         );
     }

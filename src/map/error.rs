@@ -32,7 +32,7 @@ pub enum GlobalDecodeError {
     DuplicateKey(Key),
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
-    /// End before the end-of-map separator was reached.
+    /// Finished decoding before the end-of-map separator was reached.
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
     MissingVersion,
@@ -46,8 +46,8 @@ pub enum GlobalDecodeError {
     MissingOutputCount,
     /// v0 global map is missing the unsigned transaction (v0 only).
     MissingUnsignedTx,
-    /// PSBT_GLOBAL_XPUB: Failed to decode the extended public key from key data.
-    Xpub(bip32::Error),
+    /// Failed to decode an extended public key.
+    Xpub(XpubDecodeError),
     /// Error decoding the PSBT version value.
     Version(ValueDecoderError<crate::version::VersionDecoderError>),
     /// Error decoding the transaction modifiable flags value.
@@ -60,8 +60,6 @@ pub enum GlobalDecodeError {
     LockTime(ValueDecoderError<bitcoin::locktime::absolute::LockTimeDecoderError>),
     /// Error decoding a v0 unsigned transaction value.
     UnsignedTx(ValueDecoderError<UnsignedTxDecodeError>),
-    /// Error decoding a keysource of an xpub (fingerprint + derivation path).
-    XpubKeySource(KeySourceDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
@@ -103,7 +101,6 @@ impl fmt::Display for GlobalDecodeError {
             Self::TxVersion(ref e) => write_err!(f, "error decoding transaction version"; e),
             Self::LockTime(ref e) => write_err!(f, "error decoding lock time"; e),
             Self::UnsignedTx(ref e) => write_err!(f, "error decoding unsigned tx"; e),
-            Self::XpubKeySource(ref e) => write_err!(f, "error decoding xpub key source"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
             #[cfg(feature = "silent-payments")]
@@ -135,13 +132,41 @@ impl std::error::Error for GlobalDecodeError {
             Self::TxVersion(ref e) => Some(e),
             Self::LockTime(ref e) => Some(e),
             Self::UnsignedTx(ref e) => Some(e),
-            Self::XpubKeySource(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+        }
+    }
+}
+
+/// Error decoding a PSBT_GLOBAL_XPUB key-value pair.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum XpubDecodeError {
+    /// Error parsing the extended public key from the key data.
+    Key(bip32::Error),
+    /// Error decoding the key source (fingerprint + derivation path) from the value.
+    KeySource(KeySourceDecodeError),
+}
+
+impl fmt::Display for XpubDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Key(ref e) => write_err!(f, "invalid xpub"; e),
+            Self::KeySource(ref e) => write_err!(f, "error decoding xpub key source"; e),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for XpubDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Key(ref e) => Some(e),
+            Self::KeySource(ref e) => Some(e),
         }
     }
 }
