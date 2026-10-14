@@ -8,18 +8,22 @@ use core::fmt;
 use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
-use bitcoin::{bip32, ecdsa, hashes, key};
+use bitcoin::{bip32, ecdsa, hashes, key, Amount};
 use bitcoin_consensus_encoding::{
-    ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
+    ByteVecDecoderError, CompactSizeDecoderError, Decode, UnexpectedEofError,
 };
 
 use super::Key;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::CompressedPublicKeyDecodeError;
-use crate::encoding::native::KeySourceDecodeError;
+use crate::encoding::native::{
+    KeySourceDecodeError, TapKeyOriginDecodeError, TapTreeDecodeError, XOnlyPublicKeyDecodeError,
+};
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
+#[cfg(feature = "silent-payments")]
+use crate::silent_payments::SpV0InfoDecodeError;
 
 /// An error while decoding a global map.
 ///
@@ -251,7 +255,11 @@ pub enum OutputValueDecodeError {
         expected: usize,
     },
     /// Error decoding the amount value.
-    Amount(ValueDecoderError<UnexpectedEofError>),
+    Amount(
+        ValueDecoderError<
+            <<Amount as Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+        >,
+    ),
     /// Error decoding the script pubkey.
     Script(ScriptBufDecoderError),
     /// Error decoding the redeem script.
@@ -259,22 +267,22 @@ pub enum OutputValueDecodeError {
     /// Error decoding the witness script.
     WitnessScript(ScriptBufDecoderError),
     /// Error decoding the BIP32 derivation value.
-    Bip32Derivation(ByteVecDecoderError),
+    Bip32Derivation(KeySourceDecodeError),
     /// Error decoding the taproot internal key.
-    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
+    TapInternalKey(ValueDecoderError<XOnlyPublicKeyDecodeError>),
     /// Error decoding the taproot tree.
-    TapTree(ByteVecDecoderError),
+    TapTree(TapTreeDecodeError),
     /// The decoded value is not a valid taproot tree.
     InvalidTapTree,
     /// Error decoding the taproot BIP32 derivation value.
-    TapBip32Derivation(ByteVecDecoderError),
+    TapBip32Derivation(TapKeyOriginDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
     UnknownValue(ByteVecDecoderError),
     /// Error decoding a silent payments v0 info.
     #[cfg(feature = "silent-payments")]
-    SpV0Info(ValueDecoderError<UnexpectedEofError>),
+    SpV0Info(ValueDecoderError<SpV0InfoDecodeError>),
     /// Error decoding a silent payments v0 label.
     #[cfg(feature = "silent-payments")]
     SpV0Label(ValueDecoderError<UnexpectedEofError>),
