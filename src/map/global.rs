@@ -381,7 +381,7 @@ impl Decoder for GlobalDecoder {
                             let has_ecdh = !self.sp_ecdh_shares.is_empty();
                             let has_dleq = !self.sp_dleq_proofs.is_empty();
                             if has_ecdh != has_dleq {
-                                return Err(GlobalDecodeError::FieldMismatch);
+                                return Err(GlobalDecodeError::SpFieldMismatch);
                             }
                         }
 
@@ -415,48 +415,28 @@ impl Decoder for GlobalDecoder {
                 DecoderStage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
                 DecoderStage::DecodingVersion { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::Version(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::Version)?,
                 DecoderStage::DecodingTxVersion { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::TxVersion(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::TxVersion)?,
                 DecoderStage::DecodingLockTime { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::LockTime(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::LockTime)?,
                 DecoderStage::DecodingTxModifiable { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ModifiableFlags(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::ModifiableFlags)?,
                 DecoderStage::DecodingInputCount { ref mut decoder, .. }
                 | DecoderStage::DecodingOutputCount { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::Count(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::Count)?,
                 DecoderStage::DecodingXpub { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::XpubKeySource(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::XpubKeySource)?,
                 DecoderStage::DecodingProprietary { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ProprietaryValue(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::ProprietaryValue)?,
                 DecoderStage::DecodingUnknown { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnknownValue)?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpEcdhShare { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::SpEcdh(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::SpEcdh)?,
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpDleqProof { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::SpDleq(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::SpDleq)?,
                 DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
                 DecoderStage::DecodingSeparator | DecoderStage::Errored => {
                     panic!("call to push_bytes() in unexpected stage")
@@ -496,9 +476,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTxVersion { key, decoder } => {
-                    let v = decoder.end().map_err(|e| {
-                        GlobalDecodeError::TxVersion(e)
-                    })?;
+                    let v = decoder.end().map_err(GlobalDecodeError::TxVersion)?;
                     if self.tx_version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -506,9 +484,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingLockTime { key, decoder } => {
-                    let lt = decoder.end().map_err(|e| {
-                        GlobalDecodeError::LockTime(e)
-                    })?;
+                    let lt = decoder.end().map_err(GlobalDecodeError::LockTime)?;
                     if self.fallback_lock_time.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -516,9 +492,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingInputCount { key, decoder } => {
-                    let count = decoder.end().map_err(|e| {
-                        GlobalDecodeError::Count(e)
-                    })?;
+                    let count = decoder.end().map_err(GlobalDecodeError::Count)?;
                     if self.input_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -526,9 +500,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingOutputCount { key, decoder } => {
-                    let count = decoder.end().map_err(|e| {
-                        GlobalDecodeError::Count(e)
-                    })?;
+                    let count = decoder.end().map_err(GlobalDecodeError::Count)?;
                     if self.output_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -536,9 +508,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTxModifiable { key, decoder } => {
-                    let flags = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ModifiableFlags(e)
-                    })?;
+                    let flags = decoder.end().map_err(GlobalDecodeError::ModifiableFlags)?;
                     if self.tx_modifiable_flags.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -546,9 +516,8 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
-                    let key_source = decoder.end().map_err(|e| {
-                        GlobalDecodeError::XpubKeySource(e)
-                    })?;
+                    let key_source =
+                        decoder.end().map_err(GlobalDecodeError::XpubKeySource)?;
                     let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
                     if self.xpubs.insert(xpub, key_source).is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -556,9 +525,8 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingProprietary { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ProprietaryValue(e)
-                    })?;
+                    let value =
+                        decoder.end().map_err(GlobalDecodeError::ProprietaryValue)?;
                     let pk = ProprietaryKey::try_from(key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
@@ -573,9 +541,7 @@ impl Decoder for GlobalDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingUnknown { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?;
+                    let value = decoder.end().map_err(GlobalDecodeError::UnknownValue)?;
                     match self.unknowns.entry(key) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -588,9 +554,7 @@ impl Decoder for GlobalDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpEcdhShare { key, decoder } => {
-                    let share = decoder.end().map_err(|e| {
-                        GlobalDecodeError::SpEcdh(e)
-                    })?;
+                    let share = decoder.end().map_err(GlobalDecodeError::SpEcdh)?;
                     if key.key.is_empty() {
                         return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
                             key,
@@ -611,9 +575,7 @@ impl Decoder for GlobalDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 DecoderStage::DecodingSpDleqProof { key, decoder } => {
-                    let proof = decoder.end().map_err(|e| {
-                        GlobalDecodeError::SpDleq(e)
-                    })?;
+                    let proof = decoder.end().map_err(GlobalDecodeError::SpDleq)?;
                     if key.key.is_empty() {
                         return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
                             key,

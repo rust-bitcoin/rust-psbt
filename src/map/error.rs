@@ -44,8 +44,6 @@ pub enum GlobalDecodeError {
     MissingInputCount,
     /// Serialized PSBT is missing the output count (v2 only).
     MissingOutputCount,
-    /// ECDH shares and DLEQ proofs must both be present or both absent.
-    FieldMismatch,
     /// v0 global map is missing the unsigned transaction (v0 only).
     MissingUnsignedTx,
     /// PSBT_GLOBAL_XPUB: Failed to decode the extended public key from key data.
@@ -74,6 +72,9 @@ pub enum GlobalDecodeError {
     /// Error decoding a silent payments DLEQ proof value.
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),
+    /// ECDH shares and DLEQ proofs must both be present or both absent.
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
 }
 
 impl fmt::Display for GlobalDecodeError {
@@ -91,7 +92,8 @@ impl fmt::Display for GlobalDecodeError {
             }
             Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
             Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
-            Self::FieldMismatch => {
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
             Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
@@ -123,9 +125,10 @@ impl std::error::Error for GlobalDecodeError {
             | Self::MissingTxVersion
             | Self::MissingInputCount
             | Self::MissingOutputCount
-            | Self::FieldMismatch
             | Self::MissingUnsignedTx
             | Self::EarlyEnd => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),
             Self::Count(ref e) => Some(e),
@@ -326,7 +329,8 @@ pub enum InputDecodeError {
     /// End before fully decoding the input map.
     EarlyEnd,
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
-    FieldMismatch,
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
     /// Non-witness UTXO txid does not match the input's previous txid.
     IncorrectNonWitnessUtxo {
         /// The txid of the input being spent.
@@ -352,7 +356,8 @@ impl fmt::Display for InputDecodeError {
             Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
             Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
             Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
-            Self::FieldMismatch => {
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
             Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
@@ -380,10 +385,11 @@ impl std::error::Error for InputDecodeError {
             Self::MissingPreviousTxid
             | Self::MissingSpentOutputIndex
             | Self::EarlyEnd
-            | Self::FieldMismatch
             | Self::IncorrectNonWitnessUtxo { .. }
             | Self::MissingXpubFingerprint
             | Self::MissingTapBip32Fingerprint => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
         }
     }
 }

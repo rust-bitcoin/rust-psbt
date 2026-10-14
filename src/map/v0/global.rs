@@ -281,7 +281,7 @@ impl Decoder for GlobalMapDecoder {
                             let has_ecdh = !self.sp_ecdh_shares.is_empty();
                             let has_dleq = !self.sp_dleq_proofs.is_empty();
                             if has_ecdh != has_dleq {
-                                return Err(GlobalDecodeError::FieldMismatch);
+                                return Err(GlobalDecodeError::SpFieldMismatch);
                             }
                         }
 
@@ -321,35 +321,21 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingKey(d) =>
                     d.push_bytes(bytes).map_err(GlobalDecodeError::KeyDecode)?,
                 Stage::DecodingVersion { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::Version(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::Version)?,
                 Stage::DecodingUnsignedTx { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::UnsignedTx(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnsignedTx)?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::XpubKeySource(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::XpubKeySource)?,
                 Stage::DecodingProprietary { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnknownValue)?,
                 Stage::DecodingUnknown { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::UnknownValue)?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::SpEcdh(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::SpEcdh)?,
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::SpDleq(e)
-                    })?,
+                    decoder.push_bytes(bytes).map_err(GlobalDecodeError::SpDleq)?,
                 Stage::Done(_) => return Ok(DecoderStatus::Ready),
                 Stage::DecodingSeparator | Stage::Errored => {
                     panic!("call to push_bytes() in unexpected stage")
@@ -400,9 +386,7 @@ impl Decoder for GlobalMapDecoder {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
                     let (version, tx_inputs, tx_outputs, lock_time) =
-                        decoder.end().map_err(|e| {
-                            GlobalDecodeError::UnsignedTx(e)
-                        })?;
+                        decoder.end().map_err(GlobalDecodeError::UnsignedTx)?;
                     self.tx_version = Some(version);
                     self.tx_inputs = Some(tx_inputs);
                     self.tx_outputs = Some(tx_outputs);
@@ -410,9 +394,8 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingXpub { key, decoder } => {
-                    let key_source = decoder.end().map_err(|e| {
-                        GlobalDecodeError::XpubKeySource(e)
-                    })?;
+                    let key_source =
+                        decoder.end().map_err(GlobalDecodeError::XpubKeySource)?;
                     let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
                     if self.xpubs.contains_key(&xpub) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
@@ -421,9 +404,7 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingProprietary { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?;
+                    let value = decoder.end().map_err(GlobalDecodeError::UnknownValue)?;
                     let prop_key = core::convert::TryInto::<ProprietaryKey>::try_into(key)
                         .map_err(|_| {
                             GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
@@ -435,9 +416,7 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingUnknown { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::UnknownValue(e)
-                    })?;
+                    let value = decoder.end().map_err(GlobalDecodeError::UnknownValue)?;
                     if self.unknowns.contains_key(&key) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -446,9 +425,7 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpEcdhShare { key, decoder } => {
-                    let share = decoder.end().map_err(|e| {
-                        GlobalDecodeError::SpEcdh(e)
-                    })?;
+                    let share = decoder.end().map_err(GlobalDecodeError::SpEcdh)?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
@@ -460,9 +437,7 @@ impl Decoder for GlobalMapDecoder {
                 }
                 #[cfg(feature = "silent-payments")]
                 Stage::DecodingSpDleqProof { key, decoder } => {
-                    let proof = decoder.end().map_err(|e| {
-                        GlobalDecodeError::SpDleq(e)
-                    })?;
+                    let proof = decoder.end().map_err(GlobalDecodeError::SpDleq)?;
                     let scan_key = CompressedPublicKey::from_slice(&key.key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
@@ -556,10 +531,7 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_VERSION, &[], &[0; 5]))
             .unwrap_err();
-        assert!(
-            matches!(err, GlobalDecodeError::Version(_)),
-            "expected Version, got {err:?}"
-        );
+        assert!(matches!(err, GlobalDecodeError::Version(_)), "expected Version, got {err:?}");
     }
 
     #[test]
