@@ -7,7 +7,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use bitcoin::bip32::{self, DerivationPath, Fingerprint, Xpub};
+use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use bitcoin::locktime::absolute;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
@@ -24,9 +24,9 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
-use crate::encoding::native::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::error::{GlobalDecodeError, GlobalValueDecodeError, KeyDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
@@ -185,7 +185,7 @@ enum Stage {
     },
     DecodingXpub {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: KeySourceDecoder,
     },
     DecodingVersion {
         key: Key,
@@ -218,7 +218,8 @@ impl Stage {
         match key.type_value {
             PSBT_GLOBAL_UNSIGNED_TX =>
                 Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() }),
-            PSBT_GLOBAL_XPUB => Ok(Self::DecodingXpub { key, decoder: ByteVecDecoder::new() }),
+            PSBT_GLOBAL_XPUB =>
+                Ok(Self::DecodingXpub { key, decoder: KeySourceDecoder::default() }),
             PSBT_GLOBAL_VERSION =>
                 Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
             PSBT_GLOBAL_PROPRIETARY =>
@@ -329,7 +330,7 @@ impl Decoder for GlobalMapDecoder {
                     })?,
                 Stage::DecodingXpub { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
-                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubKeySource(e))
                     })?,
                 Stage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(|e| {
@@ -409,37 +410,14 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingXpub { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
-                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::UnknownValue(e))
+                    let key_source = decoder.end().map_err(|e| {
+                        GlobalDecodeError::ValueDecode(GlobalValueDecodeError::XpubKeySource(e))
                     })?;
-                    if value.len() < 4 {
-                        return Err(GlobalDecodeError::XpubValueTooShort(value.len()));
-                    }
-                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Bip32)?;
-                    let fingerprint = Fingerprint::from(
-                        <[u8; 4]>::try_from(&value[..4]).expect("checked length >= 4"),
-                    );
-                    let derivation: DerivationPath = if value.len() > 4 {
-                        let child_bytes = &value[4..];
-                        if child_bytes.len() % 4 != 0 {
-                            return Err(GlobalDecodeError::XpubValueTooShort(value.len()));
-                        }
-                        let children: Vec<bip32::ChildNumber> = child_bytes
-                            .chunks_exact(4)
-                            .map(|c| {
-                                let idx =
-                                    u32::from_le_bytes(c.try_into().expect("chunks_exact(4)"));
-                                bip32::ChildNumber::from(idx)
-                            })
-                            .collect();
-                        bip32::DerivationPath::from(children)
-                    } else {
-                        bip32::DerivationPath::master()
-                    };
+                    let xpub = Xpub::decode(&key.key).map_err(GlobalDecodeError::Xpub)?;
                     if self.xpubs.contains_key(&xpub) {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.xpubs.insert(xpub, (fingerprint, derivation));
+                    self.xpubs.insert(xpub, key_source);
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingProprietary { key, decoder } => {
@@ -642,7 +620,7 @@ mod tests {
                 &xpub.fingerprint().as_bytes()[..3],
             ))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::XpubValueTooShort(3)));
+        assert!(matches!(err, GlobalDecodeError::ValueDecode(_)));
     }
 
     #[test]
@@ -674,6 +652,6 @@ mod tests {
         let err = dec
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub.encode(), &value))
             .unwrap_err();
-        assert!(matches!(err, GlobalDecodeError::XpubValueTooShort(_)));
+        assert!(matches!(err, GlobalDecodeError::ValueDecode(_)));
     }
 }
