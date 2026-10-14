@@ -559,15 +559,15 @@ impl Decoder for GlobalDecoder {
                     let value = decoder.end().map_err(|e| {
                         GlobalDecodeError::ValueDecode(GlobalValueDecodeError::ProprietaryValue(e))
                     })?;
-                    let pk = ProprietaryKey::try_from(key.clone()).map_err(|_| {
+                    let pk = ProprietaryKey::try_from(key).map_err(|_| {
                         GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                     })?;
                     match self.proprietaries.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(value);
                         }
-                        btree_map::Entry::Occupied(_) => {
-                            return Err(GlobalDecodeError::DuplicateKey(key));
+                        btree_map::Entry::Occupied(e) => {
+                            return Err(GlobalDecodeError::DuplicateKey(e.key().to_key()));
                         }
                     }
                     self.stage = DecoderStage::DecodingSeparator;
