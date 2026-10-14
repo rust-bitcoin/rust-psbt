@@ -187,8 +187,6 @@ pub enum OutputDecodeError {
     InvalidXOnlyPublicKey,
     /// Error decoding a raw PSBT key.
     KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(OutputValueDecodeError),
     /// End before fully decoding the output map.
     EarlyEnd,
     /// Encoded output is missing an amount value.
@@ -197,56 +195,6 @@ pub enum OutputDecodeError {
     MissingScriptPubkey,
     /// Encoded output is missing a sp_v0_info.
     LabelWithoutInfo,
-    /// Invalid leaf version.
-    InvalidLeafVersion,
-    /// Encoded xpub key derivation is missing a fingerprint.
-    MissingXpubFingerprint,
-    /// Encoded taproot BIP32 derivation is missing a fingerprint.
-    MissingTapBip32Fingerprint,
-}
-
-impl fmt::Display for OutputDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
-            Self::MissingAmount => write!(f, "encoded output is missing an amount"),
-            Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
-            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
-            Self::MissingXpubFingerprint => write!(f, "xpub derivation missing fingerprint"),
-            Self::MissingTapBip32Fingerprint =>
-                write!(f, "tap BIP32 derivation missing fingerprint"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for OutputDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::DuplicateKey(_) | Self::InvalidXOnlyPublicKey => None,
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::EarlyEnd
-            | Self::MissingAmount
-            | Self::MissingScriptPubkey
-            | Self::LabelWithoutInfo
-            | Self::InvalidLeafVersion
-            | Self::MissingXpubFingerprint
-            | Self::MissingTapBip32Fingerprint => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum OutputValueDecodeError {
     /// Error decoding the amount value.
     Amount(
         ValueDecoderError<
@@ -265,8 +213,6 @@ pub enum OutputValueDecodeError {
     TapInternalKey(ValueDecoderError<XOnlyPublicKeyDecodeError>),
     /// Error decoding the taproot tree.
     TapTree(TapTreeDecodeError),
-    /// The decoded value is not a valid taproot tree.
-    InvalidTapTree,
     /// Error decoding the taproot BIP32 derivation value.
     TapBip32Derivation(TapKeyOriginDecodeError),
     /// Error decoding a proprietary value.
@@ -281,9 +227,17 @@ pub enum OutputValueDecodeError {
     SpV0Label(ValueDecoderError<UnexpectedEofError>),
 }
 
-impl fmt::Display for OutputValueDecodeError {
+impl fmt::Display for OutputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::InvalidXOnlyPublicKey => write!(f, "invalid xonly public key"),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
+            Self::MissingAmount => write!(f, "encoded output is missing an amount"),
+            Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
+            Self::LabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -291,7 +245,6 @@ impl fmt::Display for OutputValueDecodeError {
             Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
             Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
             Self::TapTree(ref e) => write_err!(f, "error decoding tap tree"; e),
-            Self::InvalidTapTree => write!(f, "invalid tap tree"),
             Self::TapBip32Derivation(ref e) =>
                 write_err!(f, "error decoding tap BIP32 derivation"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
@@ -305,9 +258,11 @@ impl fmt::Display for OutputValueDecodeError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for OutputValueDecodeError {
+impl std::error::Error for OutputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
             Self::Amount(ref e) => Some(e),
             Self::Script(ref e) => Some(e),
             Self::RedeemScript(ref e) => Some(e),
@@ -322,7 +277,12 @@ impl std::error::Error for OutputValueDecodeError {
             Self::SpV0Info(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpV0Label(ref e) => Some(e),
-            Self::InvalidTapTree => None,
+            Self::DuplicateKey(_)
+            | Self::InvalidXOnlyPublicKey
+            | Self::EarlyEnd
+            | Self::MissingAmount
+            | Self::MissingScriptPubkey
+            | Self::LabelWithoutInfo => None,
         }
     }
 }
