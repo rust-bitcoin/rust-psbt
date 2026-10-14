@@ -327,7 +327,7 @@ impl Decoder for OutputDecoder {
                             None if self.sp_v0_info.is_some() => ScriptBuf::new(),
                             None => return Err(OutputDecodeError::MissingScriptPubkey),
                         };
-                        self.stage = DecoderStage::Done(Output {
+                        let output = Output {
                             amount,
                             script_pubkey,
                             redeem_script: self.redeem_script.take(),
@@ -342,7 +342,9 @@ impl Decoder for OutputDecoder {
                             sp_v0_label: self.sp_v0_label.take(),
                             proprietaries: core::mem::take(&mut self.proprietaries),
                             unknowns: core::mem::take(&mut self.unknowns),
-                        });
+                        };
+                        output.validate().map_err(OutputDecodeError::Validation)?;
+                        self.stage = DecoderStage::Done(output);
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {
@@ -536,13 +538,7 @@ impl Decoder for OutputDecoder {
 
     fn end(self) -> Result<Output, Self::Error> {
         match self.stage {
-            DecoderStage::Done(output) => {
-                output.validate().map_err(|e| match e {
-                    #[cfg(feature = "silent-payments")]
-                    ValidationError::SpLabelWithoutInfo => OutputDecodeError::SpLabelWithoutInfo,
-                })?;
-                Ok(output)
-            }
+            DecoderStage::Done(output) => Ok(output),
             _ => Err(OutputDecodeError::EarlyEnd),
         }
     }

@@ -441,9 +441,8 @@ impl Decoder for OutputMapDecoder {
                     decoder.push_bytes(bytes).map_err(OutputDecodeError::TapInternalKey)?,
                 OutputStage::DecodingTapTree { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(OutputDecodeError::TapTree)?,
-                OutputStage::DecodingTapBip32Derivation { ref mut decoder, .. } => decoder
-                    .push_bytes(bytes)
-                    .map_err(OutputDecodeError::TapBip32Derivation)?,
+                OutputStage::DecodingTapBip32Derivation { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(OutputDecodeError::TapBip32Derivation)?,
                 OutputStage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(OutputDecodeError::ProprietaryValue)?,
                 OutputStage::DecodingUnknown { ref mut decoder, .. } =>
@@ -516,8 +515,7 @@ impl Decoder for OutputMapDecoder {
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingTapBip32Derivation { key, decoder } => {
-                    let pair =
-                        decoder.end().map_err(OutputDecodeError::TapBip32Derivation)?;
+                    let pair = decoder.end().map_err(OutputDecodeError::TapBip32Derivation)?;
                     let xonly = XOnlyPublicKey::from_slice(&key.key)
                         .map_err(|_| OutputDecodeError::InvalidXOnlyPublicKey)?;
                     match self.tap_key_origins.entry(xonly) {
@@ -530,8 +528,7 @@ impl Decoder for OutputMapDecoder {
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::DecodingProprietary { key, decoder } => {
-                    let value =
-                        decoder.end().map_err(OutputDecodeError::ProprietaryValue)?;
+                    let value = decoder.end().map_err(OutputDecodeError::ProprietaryValue)?;
                     let prop_key: ProprietaryKey =
                         core::convert::TryInto::try_into(key).map_err(|_| {
                             OutputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)

@@ -21,6 +21,7 @@ use crate::encoding::native::{
 };
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
+use crate::map::output::ValidationError;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::SpV0InfoDecodeError;
@@ -193,9 +194,6 @@ pub enum OutputDecodeError {
     MissingAmount,
     /// Encoded output is missing a script pubkey.
     MissingScriptPubkey,
-    /// Encoded output has a sp_v0_label without a sp_v0_info.
-    #[cfg(feature = "silent-payments")]
-    SpLabelWithoutInfo,
     /// Error decoding the amount value.
     Amount(
         ValueDecoderError<
@@ -220,6 +218,8 @@ pub enum OutputDecodeError {
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
     UnknownValue(ByteVecDecoderError),
+    /// Error validating the decoded output.
+    Validation(ValidationError),
     /// Error decoding a silent payments v0 info.
     #[cfg(feature = "silent-payments")]
     SpV0Info(ValueDecoderError<SpV0InfoDecodeError>),
@@ -238,8 +238,7 @@ impl fmt::Display for OutputDecodeError {
             Self::EarlyEnd => write!(f, "called build() before completing output map decode"),
             Self::MissingAmount => write!(f, "encoded output is missing an amount"),
             Self::MissingScriptPubkey => write!(f, "encoded output is missing a script pubkey"),
-            #[cfg(feature = "silent-payments")]
-            Self::SpLabelWithoutInfo => write!(f, "output has a sp_v0_label without a sp_v0_info"),
+            Self::Validation(ref e) => write_err!(f, "output validation error"; e),
             Self::Amount(ref e) => write_err!(f, "error decoding amount"; e),
             Self::Script(ref e) => write_err!(f, "error decoding script pubkey"; e),
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
@@ -284,8 +283,7 @@ impl std::error::Error for OutputDecodeError {
             | Self::EarlyEnd
             | Self::MissingAmount
             | Self::MissingScriptPubkey => None,
-            #[cfg(feature = "silent-payments")]
-            Self::SpLabelWithoutInfo => None,
+            Self::Validation(ref e) => Some(e),
         }
     }
 }
