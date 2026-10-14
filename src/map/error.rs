@@ -298,22 +298,22 @@ impl std::error::Error for OutputDecodeError {
 pub enum InputDecodeError {
     /// Keys within key-value map should never be duplicated.
     DuplicateKey(Key),
+    /// Error decoding key.
+    KeyDecode(KeyDecodeError),
+    /// Finished decoding before fully decoding the input map.
+    EarlyEnd,
     /// Invalid hash when parsing key or value data.
     InvalidHash(hashes::FromSliceError),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
     /// Invalid ECDSA signature when parsing value data.
     InvalidEcdsaSignature(ecdsa::Error),
-    /// Error decoding key.
-    KeyDecode(KeyDecodeError),
     /// Error decoding a value.
     ValueDecode(InputValueDecodeError),
     /// Input must contain a previous txid.
     MissingPreviousTxid,
     /// Input must contain a spent output index.
     MissingSpentOutputIndex,
-    /// End before fully decoding the input map.
-    EarlyEnd,
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
     #[cfg(feature = "silent-payments")]
     SpFieldMismatch,
@@ -384,13 +384,6 @@ impl std::error::Error for InputDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum InputValueDecodeError {
-    /// Value length does not match the expected fixed size for this key type (got, expected).
-    WrongLength {
-        /// The decoded value length.
-        got: usize,
-        /// The expected value length.
-        expected: usize,
-    },
     /// Error decoding the previous transaction ID.
     PreviousTxid(ValueDecoderError<TxidDecodeError>),
     /// Error decoding the output index.
@@ -460,8 +453,6 @@ pub enum InputValueDecodeError {
 impl fmt::Display for InputValueDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WrongLength { got, expected } =>
-                write!(f, "value length {} (expected {})", got, expected),
             Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
             Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
             Self::Sequence(ref e) => write_err!(f, "error decoding sequence"; e),
@@ -503,7 +494,6 @@ impl fmt::Display for InputValueDecodeError {
 impl std::error::Error for InputValueDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WrongLength { .. } => None,
             Self::PreviousTxid(ref e) => Some(e),
             Self::OutputIndex(ref e) => Some(e),
             Self::Sequence(ref e) => Some(e),
