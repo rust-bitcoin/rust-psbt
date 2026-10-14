@@ -8,7 +8,7 @@
 use alloc::collections::{btree_map, BTreeMap};
 use alloc::vec::Vec;
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource};
+use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
@@ -16,8 +16,8 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
 use bitcoin::CompressedPublicKey;
 use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder,
-    EncoderStatus, ExactVecDecoderWith, IterEncoder,
+    ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder,
 };
 
 use super::super::{
@@ -35,16 +35,18 @@ use crate::consts::{
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 use crate::encoding::delegates::{FinalScriptWitnessPair, WitnessUtxoPair};
 use crate::encoding::native::{
-    Bip32DerivationIter, Hash160Iter, Hash256Iter, PartialSigIter, Ripemd160Iter, ScriptPair,
-    Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginIter, TapKeySigPair,
-    TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
+    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
+    PartialSigIter, Ripemd160Iter, ScriptPair, Sha256Iter, SighashPair, TapInternalKeyPair,
+    TapKeyOriginDecoder, TapKeyOriginIter, TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair,
+    TapNodeHashDecoder, TapScriptIter, TapScriptSigIter, TaprootSignatureDecoder,
+    XOnlyPublicKeyDecoder,
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{CompressedPublicKeyDecoder, DleqPairIter, EcdhPairIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, InputValueDecodeError, KeyDecodeError};
-use crate::sighash_type::PsbtSighashType;
+use crate::sighash_type::{PsbtSighashType, SighashTypeDecoder};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{DleqProof, DleqProofDecoder};
 
@@ -465,7 +467,7 @@ enum InputStage {
     },
     DecodingSighashType {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<4>>,
+        decoder: ValueDecoder<SighashTypeDecoder>,
     },
     DecodingRedeemScript {
         key: Key,
@@ -485,23 +487,23 @@ enum InputStage {
     },
     DecodingTapKeySig {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: TaprootSignatureDecoder,
     },
     DecodingTapInternalKey {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<32>>,
+        decoder: ValueDecoder<XOnlyPublicKeyDecoder>,
     },
     DecodingTapMerkleRoot {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<32>>,
+        decoder: ValueDecoder<TapNodeHashDecoder>,
     },
     DecodingPartialSig {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: EcdsaSignatureDecoder,
     },
     DecodingBip32Derivation {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: KeySourceDecoder,
     },
     DecodingRipemd160 {
         key: Key,
@@ -521,15 +523,15 @@ enum InputStage {
     },
     DecodingTapScriptSig {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: TaprootSignatureDecoder,
     },
     DecodingTapLeafScript {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: TapLeafScriptDecoder,
     },
     DecodingTapBip32Derivation {
         key: Key,
-        decoder: ByteVecDecoder,
+        decoder: TapKeyOriginDecoder,
     },
     DecodingProprietary {
         key: Key,
@@ -571,7 +573,7 @@ impl InputStage {
             PSBT_IN_FINAL_SCRIPTWITNESS if key.key.is_empty() =>
                 Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() }),
             PSBT_IN_TAP_KEY_SIG if key.key.is_empty() =>
-                Ok(Self::DecodingTapKeySig { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingTapKeySig { key, decoder: TaprootSignatureDecoder::default() }),
             PSBT_IN_TAP_INTERNAL_KEY if key.key.is_empty() =>
                 Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() }),
             PSBT_IN_TAP_MERKLE_ROOT if key.key.is_empty() =>
@@ -587,15 +589,17 @@ impl InputStage {
             PSBT_IN_PROPRIETARY if key.key.is_empty() =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             PSBT_IN_PARTIAL_SIG =>
-                Ok(Self::DecodingPartialSig { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingPartialSig { key, decoder: EcdsaSignatureDecoder::default() }),
             PSBT_IN_BIP32_DERIVATION =>
-                Ok(Self::DecodingBip32Derivation { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingBip32Derivation { key, decoder: KeySourceDecoder::default() }),
             PSBT_IN_TAP_SCRIPT_SIG =>
-                Ok(Self::DecodingTapScriptSig { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingTapScriptSig { key, decoder: TaprootSignatureDecoder::default() }),
             PSBT_IN_TAP_LEAF_SCRIPT =>
-                Ok(Self::DecodingTapLeafScript { key, decoder: ByteVecDecoder::new() }),
-            PSBT_IN_TAP_BIP32_DERIVATION =>
-                Ok(Self::DecodingTapBip32Derivation { key, decoder: ByteVecDecoder::new() }),
+                Ok(Self::DecodingTapLeafScript { key, decoder: TapLeafScriptDecoder::default() }),
+            PSBT_IN_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
+                key,
+                decoder: TapKeyOriginDecoder::default(),
+            }),
             #[cfg(feature = "silent-payments")]
             PSBT_IN_SP_ECDH_SHARE =>
                 Ok(Self::DecodingSpEcdhShare { key, decoder: ValueDecoder::default() }),
@@ -859,13 +863,13 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingSighashType { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let st = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::SighashType(e))
                     })?;
                     if self.sighash_type.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.sighash_type = Some(PsbtSighashType { inner: u32::from_le_bytes(bytes) });
+                    self.sighash_type = Some(st);
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingRedeemScript { key, decoder } => {
@@ -909,56 +913,41 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapKeySig { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let sig = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapKeySig(e))
                     })?;
                     if self.tap_key_sig.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_key_sig =
-                        Some(taproot::Signature::from_slice(&value).map_err(|_| {
-                            InputDecodeError::ValueDecode(
-                                InputValueDecodeError::InvalidTaprootSignature,
-                            )
-                        })?);
+                    self.tap_key_sig = Some(sig);
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapInternalKey { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let xonly = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapInternalKey(e))
                     })?;
                     if self.tap_internal_key.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_internal_key =
-                        Some(XOnlyPublicKey::from_slice(&bytes).map_err(|_| {
-                            InputDecodeError::ValueDecode(InputValueDecodeError::WrongLength {
-                                got: 32,
-                                expected: 32,
-                            })
-                        })?);
+                    self.tap_internal_key = Some(xonly);
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapMerkleRoot { key, decoder } => {
-                    let bytes = decoder.end().map_err(|e| {
+                    let root = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapMerkleRoot(e))
                     })?;
                     if self.tap_merkle_root.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.tap_merkle_root = Some(
-                        TapNodeHash::from_slice(&bytes).map_err(InputDecodeError::InvalidHash)?,
-                    );
+                    self.tap_merkle_root = Some(root);
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingPartialSig { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let sig = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::PartialSig(e))
                     })?;
                     let pk = PublicKey::from_slice(&key.key)
                         .map_err(InputDecodeError::InvalidPublicKey)?;
-                    let sig = ecdsa::Signature::from_slice(&value)
-                        .map_err(InputDecodeError::InvalidEcdsaSignature)?;
                     match self.partial_sigs.entry(pk) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(sig);
@@ -969,19 +958,9 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingBip32Derivation { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let ks = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::Bip32Derivation(e))
                     })?;
-                    let fprint = Fingerprint::from(
-                        <[u8; 4]>::try_from(&value[..4])
-                            .map_err(|_| InputDecodeError::MissingXpubFingerprint)?,
-                    );
-                    let mut dpath: Vec<ChildNumber> = Default::default();
-                    for chunk in value[4..].chunks_exact(4) {
-                        let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
-                        dpath.push(ChildNumber::from(index));
-                    }
-                    let ks = (fprint, DerivationPath::from(dpath));
                     let pk = PublicKey::from_slice(&key.key)
                         .map_err(InputDecodeError::InvalidPublicKey)?;
                     match self.bip32_derivations.entry(pk) {
@@ -1054,7 +1033,7 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapScriptSig { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let sig = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapScriptSig(e))
                     })?;
                     if key.key.len() != 64 {
@@ -1068,11 +1047,6 @@ impl Decoder for InputMapDecoder {
                     let leaf_hash = TapLeafHash::from_slice(&key.key[32..64]).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
-                    let sig = taproot::Signature::from_slice(&value).map_err(|_| {
-                        InputDecodeError::ValueDecode(
-                            InputValueDecodeError::InvalidTaprootSignature,
-                        )
-                    })?;
                     match self.tap_script_sigs.entry((xonly, leaf_hash)) {
                         btree_map::Entry::Vacant(e) => {
                             e.insert(sig);
@@ -1083,21 +1057,11 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapLeafScript { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let (script, ver) = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapLeafScript(e))
                     })?;
                     let cb = ControlBlock::decode(&key.key).map_err(|_| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::InvalidControlBlock)
-                    })?;
-                    if value.is_empty() {
-                        return Err(InputDecodeError::ValueDecode(
-                            InputValueDecodeError::WrongLength { got: 0, expected: 1 },
-                        ));
-                    }
-                    let last = value.len() - 1;
-                    let script = ScriptBuf::from_bytes(value[..last].to_vec());
-                    let ver = LeafVersion::from_consensus(value[last]).map_err(|_| {
-                        InputDecodeError::ValueDecode(InputValueDecodeError::InvalidLeafVersion)
                     })?;
                     match self.tap_scripts.entry(cb) {
                         btree_map::Entry::Vacant(e) => {
@@ -1109,39 +1073,15 @@ impl Decoder for InputMapDecoder {
                     self.stage = InputStage::DecodingSeparator;
                 }
                 InputStage::DecodingTapBip32Derivation { key, decoder } => {
-                    let value = decoder.end().map_err(|e| {
+                    let pair = decoder.end().map_err(|e| {
                         InputDecodeError::ValueDecode(InputValueDecodeError::TapBip32Derivation(e))
                     })?;
-                    if value.is_empty() {
-                        return Err(InputDecodeError::ValueDecode(
-                            InputValueDecodeError::WrongLength { got: 0, expected: 1 },
-                        ));
-                    }
-                    let count = value[0] as usize;
-                    let hash_end = 1 + count * 32;
-                    if value.len() < hash_end + 4 {
-                        return Err(InputDecodeError::MissingTapBip32Fingerprint);
-                    }
-                    let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
-                        .chunks_exact(32)
-                        .map(|chunk| TapLeafHash::from_slice(chunk).expect("32 bytes"))
-                        .collect();
-                    let fprint = Fingerprint::from(
-                        <[u8; 4]>::try_from(&value[hash_end..hash_end + 4]).expect("4 bytes"),
-                    );
-                    let mut dpath: Vec<ChildNumber> = Default::default();
-                    let key_bytes = &value[hash_end + 4..];
-                    for chunk in key_bytes.chunks_exact(4) {
-                        let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
-                        dpath.push(ChildNumber::from(index));
-                    }
-                    let ks = (fprint, DerivationPath::from(dpath));
                     let xonly = XOnlyPublicKey::from_slice(&key.key).map_err(|_| {
                         InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key.clone()))
                     })?;
                     match self.tap_key_origins.entry(xonly) {
                         btree_map::Entry::Vacant(e) => {
-                            e.insert((leaf_hashes, ks));
+                            e.insert(pair);
                         }
                         btree_map::Entry::Occupied(_) =>
                             return Err(InputDecodeError::DuplicateKey(key)),
@@ -1221,17 +1161,17 @@ impl Decoder for InputMapDecoder {
             | InputStage::DecodingWitnessScript { ref decoder, .. }
             | InputStage::DecodingFinalScriptSig { ref decoder, .. } => decoder.read_limit(),
             InputStage::DecodingTapKeySig { ref decoder, .. }
-            | InputStage::DecodingPartialSig { ref decoder, .. }
-            | InputStage::DecodingBip32Derivation { ref decoder, .. }
-            | InputStage::DecodingRipemd160 { ref decoder, .. }
+            | InputStage::DecodingTapScriptSig { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingPartialSig { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingBip32Derivation { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingRipemd160 { ref decoder, .. }
             | InputStage::DecodingSha256 { ref decoder, .. }
             | InputStage::DecodingHash160 { ref decoder, .. }
             | InputStage::DecodingHash256 { ref decoder, .. }
-            | InputStage::DecodingTapScriptSig { ref decoder, .. }
-            | InputStage::DecodingTapLeafScript { ref decoder, .. }
-            | InputStage::DecodingTapBip32Derivation { ref decoder, .. }
             | InputStage::DecodingProprietary { ref decoder, .. }
             | InputStage::DecodingUnknown { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingTapLeafScript { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingTapBip32Derivation { ref decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
             InputStage::DecodingSpEcdhShare { ref decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]

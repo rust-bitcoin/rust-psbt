@@ -6,10 +6,12 @@ use core::fmt;
 use core::str::FromStr;
 
 use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError, TapSighashType};
-use bitcoin_consensus_encoding::ArrayEncoder;
+use bitcoin_consensus_encoding::{
+    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
+};
 
 use crate::error::write_err;
-use crate::PsbtEncode;
+use crate::{PsbtDecode, PsbtEncode};
 
 const SIGHASH_ANYONECANPAY: u32 = 0x80;
 
@@ -214,6 +216,32 @@ impl PsbtEncode for PsbtSighashType {
     fn psbt_encoder(&self) -> Self::Encoder<'_> {
         ArrayEncoder::without_length_prefix(self.to_u32().to_le_bytes())
     }
+}
+
+/// Decoder for a [`PsbtSighashType`] value (4 bytes, u32 LE).
+#[derive(Debug, Default)]
+pub struct SighashTypeDecoder {
+    inner: ArrayDecoder<4>,
+}
+
+impl Decoder for SighashTypeDecoder {
+    type Output = PsbtSighashType;
+    type Error = UnexpectedEofError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.inner.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        let bytes = self.inner.end()?;
+        Ok(PsbtSighashType { inner: u32::from_le_bytes(bytes) })
+    }
+
+    fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for PsbtSighashType {
+    type Decoder = SighashTypeDecoder;
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use core::fmt;
 use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
-use bitcoin::{bip32, ecdsa, hashes, key, Amount};
+use bitcoin::{bip32, ecdsa, hashes, key, Amount, Sequence};
 use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, Decode, UnexpectedEofError,
 };
@@ -17,7 +17,9 @@ use super::Key;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::CompressedPublicKeyDecodeError;
 use crate::encoding::native::{
-    KeySourceDecodeError, TapKeyOriginDecodeError, TapTreeDecodeError, XOnlyPublicKeyDecodeError,
+    EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapKeyOriginDecodeError,
+    TapLeafScriptDecodeError, TapNodeHashDecodeError, TapTreeDecodeError,
+    TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError, XOnlyPublicKeyDecodeError,
 };
 use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
@@ -390,21 +392,25 @@ pub enum InputValueDecodeError {
         expected: usize,
     },
     /// Error decoding the previous transaction ID.
-    PreviousTxid(ValueDecoderError<UnexpectedEofError>),
+    PreviousTxid(ValueDecoderError<TxidDecodeError>),
     /// Error decoding the output index.
     OutputIndex(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the sequence number).
-    Sequence(ValueDecoderError<UnexpectedEofError>),
+    Sequence(
+        ValueDecoderError<
+            <<Sequence as bitcoin_consensus_encoding::Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+        >,
+    ),
     /// Error decoding the minimum lock time.
-    MinTime(ValueDecoderError<UnexpectedEofError>),
+    MinTime(ValueDecoderError<TimeDecodeError>),
     /// Error decoding the minimum lock height.
-    MinHeight(ValueDecoderError<UnexpectedEofError>),
+    MinHeight(ValueDecoderError<HeightDecodeError>),
     /// Error decoding the sighash type.
     SighashType(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot internal key.
-    TapInternalKey(ValueDecoderError<UnexpectedEofError>),
+    TapInternalKey(ValueDecoderError<XOnlyPublicKeyDecodeError>),
     /// Error decoding the taproot merkle root.
-    TapMerkleRoot(ValueDecoderError<UnexpectedEofError>),
+    TapMerkleRoot(ValueDecoderError<TapNodeHashDecodeError>),
     /// Error decoding the non-witness UTXO (full transaction).
     NonWitnessUtxo(ValueDecoderError<TransactionDecoderError>),
     /// Error decoding the witness UTXO (transaction output).
@@ -418,13 +424,13 @@ pub enum InputValueDecodeError {
     /// Error decoding the final scriptSig.
     FinalScriptSig(ScriptBufDecoderError),
     /// Error decoding the taproot key signature.
-    TapKeySig(ByteVecDecoderError),
+    TapKeySig(TaprootSignatureDecodeError),
     /// Error decoding an ECDSA partial signature.
-    PartialSig(ByteVecDecoderError),
+    PartialSig(EcdsaSignatureDecodeError),
     /// Error decoding the BIP32 derivation key source.
-    Bip32Derivation(ByteVecDecoderError),
+    Bip32Derivation(KeySourceDecodeError),
     /// Error decoding the taproot BIP32 derivation key source.
-    TapBip32Derivation(ByteVecDecoderError),
+    TapBip32Derivation(TapKeyOriginDecodeError),
     /// Error decoding a RIPEMD160 preimage.
     Ripemd160Preimage(ByteVecDecoderError),
     /// Error decoding a SHA256 preimage.
@@ -434,23 +440,15 @@ pub enum InputValueDecodeError {
     /// Error decoding a HASH256 preimage.
     Hash256Preimage(ByteVecDecoderError),
     /// Error decoding a taproot script signature.
-    TapScriptSig(ByteVecDecoderError),
+    TapScriptSig(TaprootSignatureDecodeError),
     /// Error decoding a tap leaf script.
-    TapLeafScript(ByteVecDecoderError),
+    TapLeafScript(TapLeafScriptDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
     UnknownValue(ByteVecDecoderError),
-    /// The decoded value is not a valid minimum lock time.
-    InvalidMinTime,
-    /// The decoded value is not a valid minimum lock height.
-    InvalidMinHeight,
-    /// The decoded value is not a valid taproot signature.
-    InvalidTaprootSignature,
     /// The decoded value is not a valid taproot control block.
     InvalidControlBlock,
-    /// The decoded value is not a valid taproot leaf version.
-    InvalidLeafVersion,
     /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
     SpEcdh(ValueDecoderError<CompressedPublicKeyDecodeError>),
@@ -492,11 +490,7 @@ impl fmt::Display for InputValueDecodeError {
             Self::TapLeafScript(ref e) => write_err!(f, "error decoding tap leaf script"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
-            Self::InvalidMinTime => write!(f, "invalid minimum lock time"),
-            Self::InvalidMinHeight => write!(f, "invalid minimum lock height"),
-            Self::InvalidTaprootSignature => write!(f, "invalid taproot signature"),
             Self::InvalidControlBlock => write!(f, "invalid control block"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version"),
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
             #[cfg(feature = "silent-payments")]
@@ -536,11 +530,7 @@ impl std::error::Error for InputValueDecodeError {
             Self::TapLeafScript(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
-            Self::InvalidMinTime
-            | Self::InvalidMinHeight
-            | Self::InvalidTaprootSignature
-            | Self::InvalidControlBlock
-            | Self::InvalidLeafVersion => None,
+            Self::InvalidControlBlock => None,
             #[cfg(feature = "silent-payments")]
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
