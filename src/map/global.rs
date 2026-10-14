@@ -55,39 +55,29 @@ const SIGHASH_SINGLE: u8 = 0x01 << 2;
 pub struct Global {
     /// The version number of this PSBT.
     pub version: Version,
-
     /// The version number of the transaction being built.
     pub tx_version: transaction::Version,
-
     /// The transaction locktime to use if no inputs specify a required locktime.
     pub fallback_lock_time: Option<absolute::LockTime>,
-
     /// A bitfield for various transaction modification flags.
     pub tx_modifiable_flags: u8,
-
     /// The number of inputs in this PSBT.
-    pub input_count: usize, // Serialized in compact form as a u64 (VarInt).
-
+    pub input_count: usize,
     /// The number of outputs in this PSBT.
-    pub output_count: usize, // Serialized in compact form as a u64 (VarInt).
-
+    pub output_count: usize,
     /// A map from xpub to the used key fingerprint and derivation path as defined by BIP 32.
     pub xpubs: BTreeMap<Xpub, KeySource>,
-
-    /// BIP-375: Map from scan public key to ECDH share (33 bytes each).
+    /// BIP-375: Map from scan public key to ECDH share.
     #[cfg(feature = "silent-payments")]
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
     pub sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
-
-    /// BIP-375: Map from scan public key to DLEQ proof (64 bytes each).
+    /// BIP-375: Map from scan public key to DLEQ proof.
     #[cfg(feature = "silent-payments")]
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
     pub sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
-
     /// Global proprietary key-value pairs.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
-
     /// Unknown global key-value pairs.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
     pub unknowns: BTreeMap<Key, Vec<u8>>,
