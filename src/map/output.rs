@@ -44,10 +44,8 @@ use crate::SpV0Info;
 pub struct Output {
     /// The output's amount (serialized as satoshis).
     pub amount: Amount,
-
     /// The script for this output, also known as the scriptPubKey.
     pub script_pubkey: ScriptBuf,
-
     /// The redeem script for this output.
     pub redeem_script: Option<ScriptBuf>,
     /// The witness script for this output.
@@ -63,15 +61,12 @@ pub struct Output {
     /// Map of tap root x only keys to origin info and leaf hashes contained in it.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
     pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-
-    /// BIP-375: Silent payment v0 address info (66 bytes: scan_key || spend_key).
+    /// BIP-375: Silent payment v0 address info.
     #[cfg(feature = "silent-payments")]
     pub sp_v0_info: Option<SpV0Info>,
-
-    /// BIP-375: Silent payment v0 label (4-byte little-endian u32).
+    /// BIP-375: Silent payment v0 label.
     #[cfg(feature = "silent-payments")]
     pub sp_v0_label: Option<u32>,
-
     /// Proprietary key-value pairs for this output.
     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
