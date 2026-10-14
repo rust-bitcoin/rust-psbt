@@ -32,8 +32,6 @@ pub enum GlobalDecodeError {
     DuplicateKey(Key),
     /// Error decoding a key from the stream.
     KeyDecode(KeyDecodeError),
-    /// Error decoding a value.
-    ValueDecode(GlobalValueDecodeError),
     /// End before the end-of-map separator was reached.
     EarlyEnd,
     /// Serialized PSBT is missing the version number (v2 only).
@@ -52,55 +50,6 @@ pub enum GlobalDecodeError {
     MissingUnsignedTx,
     /// PSBT_GLOBAL_XPUB: Failed to decode the extended public key from key data.
     Xpub(bip32::Error),
-}
-
-impl fmt::Display for GlobalDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::WrongVersion(v) =>
-                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
-            Self::Xpub(ref e) => write_err!(f, "xpub"; e),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
-            Self::MissingVersion => write!(f, "serialized PSBT is missing the version number"),
-            Self::MissingTxVersion => {
-                write!(f, "serialized PSBT is missing the transaction version number")
-            }
-            Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
-            Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
-            Self::FieldMismatch => {
-                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
-            }
-            Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for GlobalDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DuplicateKey(_) | Self::WrongVersion(_) => None,
-            Self::Xpub(ref e) => Some(e),
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::MissingVersion
-            | Self::MissingTxVersion
-            | Self::MissingInputCount
-            | Self::MissingOutputCount
-            | Self::FieldMismatch
-            | Self::MissingUnsignedTx
-            | Self::EarlyEnd => None,
-        }
-    }
-}
-
-/// Error decoding a global value.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum GlobalValueDecodeError {
     /// Error decoding the PSBT version value.
     Version(ValueDecoderError<crate::version::VersionDecoderError>),
     /// Error decoding the transaction modifiable flags value.
@@ -127,9 +76,25 @@ pub enum GlobalValueDecodeError {
     SpDleq(ValueDecoderError<UnexpectedEofError>),
 }
 
-impl fmt::Display for GlobalValueDecodeError {
+impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::WrongVersion(v) =>
+                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
+            Self::Xpub(ref e) => write_err!(f, "xpub"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
+            Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
+            Self::MissingVersion => write!(f, "serialized PSBT is missing the version number"),
+            Self::MissingTxVersion => {
+                write!(f, "serialized PSBT is missing the transaction version number")
+            }
+            Self::MissingInputCount => write!(f, "serialized PSBT is missing the input count"),
+            Self::MissingOutputCount => write!(f, "serialized PSBT is missing the output count"),
+            Self::FieldMismatch => {
+                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
+            }
+            Self::MissingUnsignedTx => write!(f, "missing unsigned tx in v0 global map"),
             Self::Version(ref e) => write_err!(f, "error decoding PSBT version"; e),
             Self::ModifiableFlags(ref e) => write_err!(f, "error decoding modifiable flags"; e),
             Self::Count(ref e) => write_err!(f, "error decoding count"; e),
@@ -148,9 +113,19 @@ impl fmt::Display for GlobalValueDecodeError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for GlobalValueDecodeError {
+impl std::error::Error for GlobalDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::DuplicateKey(_) | Self::WrongVersion(_) => None,
+            Self::Xpub(ref e) => Some(e),
+            Self::KeyDecode(ref e) => Some(e),
+            Self::MissingVersion
+            | Self::MissingTxVersion
+            | Self::MissingInputCount
+            | Self::MissingOutputCount
+            | Self::FieldMismatch
+            | Self::MissingUnsignedTx
+            | Self::EarlyEnd => None,
             Self::Version(ref e) => Some(e),
             Self::ModifiableFlags(ref e) => Some(e),
             Self::Count(ref e) => Some(e),
