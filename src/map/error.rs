@@ -8,7 +8,7 @@ use core::fmt;
 use bitcoin::blockdata::script::ScriptBufDecoderError;
 use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError};
 use bitcoin::blockdata::witness::WitnessDecoderError;
-use bitcoin::{bip32, ecdsa, hashes, key, Amount, Sequence};
+use bitcoin::{bip32, hashes, key, Amount, Sequence};
 use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, Decode, UnexpectedEofError,
 };
@@ -306,84 +306,6 @@ pub enum InputDecodeError {
     InvalidHash(hashes::FromSliceError),
     /// Invalid public key when parsing key data.
     InvalidPublicKey(key::FromSliceError),
-    /// Invalid ECDSA signature when parsing value data.
-    InvalidEcdsaSignature(ecdsa::Error),
-    /// Error decoding a value.
-    ValueDecode(InputValueDecodeError),
-    /// Input must contain a previous txid.
-    MissingPreviousTxid,
-    /// Input must contain a spent output index.
-    MissingSpentOutputIndex,
-    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
-    #[cfg(feature = "silent-payments")]
-    SpFieldMismatch,
-    /// Non-witness UTXO txid does not match the input's previous txid.
-    IncorrectNonWitnessUtxo {
-        /// The txid of the input being spent.
-        previous_txid: bitcoin::Txid,
-        /// The txid of the non-witness UTXO.
-        non_witness_utxo_txid: bitcoin::Txid,
-    },
-    /// Encoded xpub key derivation is missing a fingerprint.
-    MissingXpubFingerprint,
-    /// Encoded taproot BIP32 derivation is missing a fingerprint.
-    MissingTapBip32Fingerprint,
-}
-
-impl fmt::Display for InputDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
-            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
-            Self::InvalidEcdsaSignature(ref e) => write_err!(f, "invalid ECDSA signature"; e),
-            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
-            Self::ValueDecode(ref e) => write_err!(f, "error decoding value"; e),
-            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
-            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
-            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
-            #[cfg(feature = "silent-payments")]
-            Self::SpFieldMismatch => {
-                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
-            }
-            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
-                f,
-                "non-witness utxo txid {} does not match previous txid {}",
-                non_witness_utxo_txid, previous_txid
-            ),
-            Self::MissingXpubFingerprint => write!(f, "xpub derivation missing fingerprint"),
-            Self::MissingTapBip32Fingerprint =>
-                write!(f, "tap BIP32 derivation missing fingerprint"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InputDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidHash(ref e) => Some(e),
-            Self::InvalidPublicKey(ref e) => Some(e),
-            Self::InvalidEcdsaSignature(ref e) => Some(e),
-            Self::DuplicateKey(_) => None,
-            Self::KeyDecode(ref e) => Some(e),
-            Self::ValueDecode(ref e) => Some(e),
-            Self::MissingPreviousTxid
-            | Self::MissingSpentOutputIndex
-            | Self::EarlyEnd
-            | Self::IncorrectNonWitnessUtxo { .. }
-            | Self::MissingXpubFingerprint
-            | Self::MissingTapBip32Fingerprint => None,
-            #[cfg(feature = "silent-payments")]
-            Self::SpFieldMismatch => None,
-        }
-    }
-}
-
-/// Error decoding the body of a value from an input map.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum InputValueDecodeError {
     /// Error decoding the previous transaction ID.
     PreviousTxid(ValueDecoderError<TxidDecodeError>),
     /// Error decoding the output index.
@@ -442,17 +364,35 @@ pub enum InputValueDecodeError {
     UnknownValue(ByteVecDecoderError),
     /// The decoded value is not a valid taproot control block.
     InvalidControlBlock,
+    /// Input must contain a previous txid.
+    MissingPreviousTxid,
+    /// Input must contain a spent output index.
+    MissingSpentOutputIndex,
+    /// Non-witness UTXO txid does not match the input's previous txid.
+    IncorrectNonWitnessUtxo {
+        /// The txid of the input being spent.
+        previous_txid: bitcoin::Txid,
+        /// The txid of the non-witness UTXO.
+        non_witness_utxo_txid: bitcoin::Txid,
+    },
     /// Error decoding a silent payments ECDH share.
     #[cfg(feature = "silent-payments")]
     SpEcdh(ValueDecoderError<CompressedPublicKeyDecodeError>),
     /// Error decoding a silent payments DLEQ proof).
     #[cfg(feature = "silent-payments")]
     SpDleq(ValueDecoderError<UnexpectedEofError>),
+    /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
+    #[cfg(feature = "silent-payments")]
+    SpFieldMismatch,
 }
 
-impl fmt::Display for InputValueDecodeError {
+impl fmt::Display for InputDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
+            Self::InvalidHash(ref e) => write_err!(f, "invalid hash"; e),
+            Self::InvalidPublicKey(ref e) => write_err!(f, "invalid public key"; e),
+            Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::PreviousTxid(ref e) => write_err!(f, "error decoding previous txid"; e),
             Self::OutputIndex(ref e) => write_err!(f, "error decoding output index"; e),
             Self::Sequence(ref e) => write_err!(f, "error decoding sequence"; e),
@@ -486,14 +426,30 @@ impl fmt::Display for InputValueDecodeError {
             Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => write_err!(f, "error decoding SP DLEQ proof"; e),
+            Self::MissingPreviousTxid => write!(f, "input must contain a previous txid"),
+            Self::MissingSpentOutputIndex => write!(f, "input must contain a spent output index"),
+            Self::EarlyEnd => write!(f, "called build() before completing input map decode"),
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => {
+                write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
+            }
+            Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
+                f,
+                "non-witness utxo txid {} does not match previous txid {}",
+                non_witness_utxo_txid, previous_txid
+            ),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for InputValueDecodeError {
+impl std::error::Error for InputDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::InvalidHash(ref e) => Some(e),
+            Self::InvalidPublicKey(ref e) => Some(e),
+            Self::DuplicateKey(_) => None,
+            Self::KeyDecode(ref e) => Some(e),
             Self::PreviousTxid(ref e) => Some(e),
             Self::OutputIndex(ref e) => Some(e),
             Self::Sequence(ref e) => Some(e),
@@ -525,6 +481,12 @@ impl std::error::Error for InputValueDecodeError {
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+            Self::MissingPreviousTxid
+            | Self::MissingSpentOutputIndex
+            | Self::EarlyEnd
+            | Self::IncorrectNonWitnessUtxo { .. } => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SpFieldMismatch => None,
         }
     }
 }
