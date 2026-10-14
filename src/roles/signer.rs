@@ -249,7 +249,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
         C: Signing,
         K: GetKey,
     {
-        let (msg, sighash) = input.sighash(self.cache);
+        let (msg, sighash) = self.sighash(input);
         let Sighash::Ecdsa(sighash_ty) = sighash else {
             // Taproot inputs sign nothing (schnorr signing is as yet unsupported).
             return InputSigs { index: input.index, signatures: Vec::new() };
@@ -295,6 +295,91 @@ impl<'a, 'id> SigningSession<'a, 'id> {
         K: GetKey,
     {
         inputs.iter().map(|input| self.get_input_sigs(input, k, secp)).collect()
+    }
+
+    /// Computes the sighash a new signature over `input` commits to.
+    ///
+    /// The [`Sighash`] variant is determined by the input's [`OutputType`].
+    ///
+    /// `all_prevouts` must be the complete prevout slice ([`AllSignableInputs::prevouts`]) when
+    /// `input` is a non-ANYONECANPAY taproot input, whose sighash commits to every input's
+    /// prevout; the slice is built once per complete set and shared by all its taproot inputs.
+    ///
+    /// This method is infallible: the [`SighashCache`] and the [`SignableInput`] are unchangeable,
+    /// so the invariants ensured when the signable input was created stay true for the whole
+    /// signing session.
+    fn sighash(&mut self, input: &SignableInput<'id>) -> (Message, Sighash) {
+        match input.output_type {
+            OutputType::Tr => {
+                let tap_ty = input
+                    .sighash_ty
+                    .taproot_hash_ty()
+                    .expect("sighash type validated when the signable input was created");
+                let sighash = if matches!(
+                    tap_ty,
+                    TapSighashType::AllPlusAnyoneCanPay
+                        | TapSighashType::NonePlusAnyoneCanPay
+                        | TapSighashType::SinglePlusAnyoneCanPay
+                ) {
+                    // SIGHASH_ANYONECANPAY commits to only this input's prevout.
+                    self.cache
+                        .taproot_key_spend_signature_hash(
+                            input.index,
+                            &Prevouts::One(input.index, &input.prevout),
+                            tap_ty,
+                        )
+                        .expect("input index in bounds (checked above)")
+                } else {
+                    self.cache
+                        .taproot_key_spend_signature_hash(
+                            input.index,
+                            &Prevouts::All(&input.spent_outputs),
+                            tap_ty,
+                        )
+                        .expect("prevout slice is complete, input index in bounds (checked above)")
+                };
+                (Message::from(sighash), Sighash::Schnorr(tap_ty))
+            }
+            _ => {
+                let ecdsa_ty = input
+                    .sighash_ty
+                    .ecdsa_hash_ty()
+                    .expect("sighash type validated when the signable input was created");
+                let sighash = match input.output_type {
+                    OutputType::Bare | OutputType::Sh => Message::from(
+                        self.cache
+                            .legacy_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                ecdsa_ty.to_u32(),
+                            )
+                            .expect("input index in bounds (checked above)"),
+                    ),
+                    OutputType::Wpkh | OutputType::ShWpkh => Message::from(
+                        self.cache
+                            .p2wpkh_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                input.prevout.value,
+                                ecdsa_ty,
+                            )
+                            .expect("standard sighash type validated at creation"),
+                    ),
+                    OutputType::Wsh | OutputType::ShWsh => Message::from(
+                        self.cache
+                            .p2wsh_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                input.prevout.value,
+                                ecdsa_ty,
+                            )
+                            .expect("standard sighash type validated at creation"),
+                    ),
+                    OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
+                };
+                (sighash, Sighash::Ecdsa(ecdsa_ty))
+            }
+        }
     }
 }
 
@@ -605,83 +690,6 @@ impl<'id> SignableInput<'id> {
     /// The declared type, or the per-output-type default (Default for taproot, ALL otherwise) when
     /// none is declared.
     pub fn sighash_type(&self) -> PsbtSighashType { self.sighash_ty }
-
-    /// Computes the sighash a new signature over `input` commits to.
-    ///
-    /// The [`Sighash`] variant is determined by the input's [`OutputType`].
-    ///
-    /// This method is infallible, as its only called by [`SigningSession`], the [`SighashCache`]
-    /// and the [`Psbt`] and this same [`SignableInput`] are unchangeable, so the invariants ensured
-    /// by [`SignableInput`] stay true for the whole signing session.
-    pub(crate) fn sighash(&self, cache: &mut SighashCache<Transaction>) -> (Message, Sighash) {
-        match self.output_type {
-            OutputType::Tr => {
-                let tap_ty = self
-                    .sighash_ty
-                    .taproot_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = if matches!(
-                    tap_ty,
-                    TapSighashType::AllPlusAnyoneCanPay
-                        | TapSighashType::NonePlusAnyoneCanPay
-                        | TapSighashType::SinglePlusAnyoneCanPay
-                ) {
-                    // SIGHASH_ANYONECANPAY commits to only this input's prevout.
-                    cache
-                        .taproot_key_spend_signature_hash(
-                            self.index,
-                            &Prevouts::One(self.index, &self.prevout),
-                            tap_ty,
-                        )
-                        .expect("input index in bounds (checked above)")
-                } else {
-                    cache
-                        .taproot_key_spend_signature_hash(
-                            self.index,
-                            &Prevouts::All(&self.spent_outputs),
-                            tap_ty,
-                        )
-                        .expect("prevouts size matched, input index in bounds (checked above)")
-                };
-                (Message::from(sighash), Sighash::Schnorr(tap_ty))
-            }
-            _ => {
-                let ecdsa_ty = self
-                    .sighash_ty
-                    .ecdsa_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = match self.output_type {
-                    OutputType::Bare | OutputType::Sh => Message::from(
-                        cache
-                            .legacy_signature_hash(self.index, &self.script_code, ecdsa_ty.to_u32())
-                            .expect("input index in bounds (checked above)"),
-                    ),
-                    OutputType::Wpkh | OutputType::ShWpkh => Message::from(
-                        cache
-                            .p2wpkh_signature_hash(
-                                self.index,
-                                &self.script_code,
-                                self.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Wsh | OutputType::ShWsh => Message::from(
-                        cache
-                            .p2wsh_signature_hash(
-                                self.index,
-                                &self.script_code,
-                                self.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
-                };
-                (sighash, Sighash::Ecdsa(ecdsa_ty))
-            }
-        }
-    }
 }
 
 /// Data required to call [`GetKey`] to get the private key to sign an input.
@@ -1168,9 +1176,9 @@ mod test {
     fn sighash_matches_direct_computation() {
         // The signer's sighash must equal an independent SighashCache computation for the input.
         let mut signer = Signer::new(wpkh_psbt()).unwrap();
-        let (msg, ty) = signer.session(|session| {
+        let (msg, ty) = signer.session(|mut session| {
             let input = session.signable_input(0).unwrap();
-            input.sighash(session.cache)
+            session.sighash(&input)
         });
 
         // Recompute independently from the input's (validated) funding UTXO.
@@ -1210,9 +1218,9 @@ mod test {
             })],
         };
         let mut signer = Signer::new(psbt).unwrap();
-        let (msg, ty) = signer.session(|session| {
+        let (msg, ty) = signer.session(|mut session| {
             let input = session.signable_input(0).expect("taproot passes signer checks");
-            input.sighash(session.cache)
+            session.sighash(&input)
         });
 
         // Recompute independently: key-path spend over the single prevout.
