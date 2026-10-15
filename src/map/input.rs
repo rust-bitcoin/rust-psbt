@@ -567,7 +567,7 @@ impl Input {
 /// Decoder for a single PSBT input map.
 ///
 /// Incrementally decodes `<keypair>* <PSBT_SEPARATOR>`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InputDecoder {
     stage: DecoderStage,
     previous_txid: Option<Txid>,
@@ -602,9 +602,10 @@ pub struct InputDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     /// Decoding the previous txid.
@@ -815,44 +816,6 @@ impl DecoderStage {
             PSBT_IN_SP_DLEQ =>
                 Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
-        }
-    }
-}
-
-impl Default for InputDecoder {
-    fn default() -> Self {
-        Self {
-            stage: DecoderStage::DecodingSeparator,
-            previous_txid: None,
-            spent_output_index: None,
-            sequence: None,
-            min_time: None,
-            min_height: None,
-            non_witness_utxo: None,
-            witness_utxo: None,
-            partial_sigs: BTreeMap::default(),
-            sighash_type: None,
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            final_script_sig: None,
-            final_script_witness: None,
-            ripemd160_preimages: BTreeMap::default(),
-            sha256_preimages: BTreeMap::default(),
-            hash160_preimages: BTreeMap::default(),
-            hash256_preimages: BTreeMap::default(),
-            tap_key_sig: None,
-            tap_script_sigs: BTreeMap::default(),
-            tap_scripts: BTreeMap::default(),
-            tap_key_origins: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_merkle_root: None,
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
         }
     }
 }

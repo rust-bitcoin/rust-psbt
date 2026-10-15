@@ -245,9 +245,10 @@ impl<'e> From<core::slice::Iter<'e, crate::Output>> for Outputs<'e> {
 }
 
 /// Internal stages of the v0 output map decoder.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum OutputStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingRedeemScript {
@@ -340,7 +341,7 @@ impl OutputStage {
 }
 
 /// Decoder for a single v0 output map.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct OutputMapDecoder {
     stage: OutputStage,
     amount: Amount,
@@ -357,28 +358,6 @@ pub(crate) struct OutputMapDecoder {
     sp_v0_label: Option<u32>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     unknowns: BTreeMap<Key, Vec<u8>>,
-}
-
-impl Default for OutputMapDecoder {
-    fn default() -> Self {
-        Self {
-            stage: OutputStage::DecodingSeparator,
-            amount: Amount::from_sat(0),
-            script_pubkey: ScriptBuf::new(),
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_tree: None,
-            tap_key_origins: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_info: None,
-            #[cfg(feature = "silent-payments")]
-            sp_v0_label: None,
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-        }
-    }
 }
 
 impl OutputMapDecoder {

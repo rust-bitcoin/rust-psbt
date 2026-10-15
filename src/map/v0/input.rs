@@ -453,9 +453,10 @@ impl<'e> From<core::slice::Iter<'e, crate::input::Input>> for Inputs<'e> {
 }
 
 /// Internal stages of the v0 input map decoder.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum InputStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingNonWitnessUtxo {
@@ -672,7 +673,7 @@ pub(crate) struct InputMapDecoder {
 impl Default for InputMapDecoder {
     fn default() -> Self {
         Self {
-            stage: InputStage::DecodingSeparator,
+            stage: InputStage::default(),
             txid: Txid::all_zeros(),
             vout: 0,
             sequence: Sequence::MAX,

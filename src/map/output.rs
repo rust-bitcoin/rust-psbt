@@ -162,7 +162,7 @@ impl Output {
 }
 
 /// Push-based decoder for a single PSBT output map.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OutputDecoder {
     stage: DecoderStage,
     amount: Option<Amount>,
@@ -181,9 +181,10 @@ pub struct OutputDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingAmount {
@@ -268,28 +269,6 @@ impl DecoderStage {
             PSBT_OUT_PROPRIETARY =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
-        }
-    }
-}
-
-impl Default for OutputDecoder {
-    fn default() -> Self {
-        Self {
-            stage: DecoderStage::DecodingSeparator,
-            amount: None,
-            script_pubkey: None,
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_tree: None,
-            tap_key_origins: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_info: None,
-            #[cfg(feature = "silent-payments")]
-            sp_v0_label: None,
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
         }
     }
 }
