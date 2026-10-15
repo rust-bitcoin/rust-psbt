@@ -73,6 +73,10 @@ required-features = ["std"]
 name = "v2-separate-creator-constructor"
 required-features = ["std"]
 
+[[example]]
+name = "psbt2json"
+required-features = ["serde"]
+
 [lints.rust]
 missing_docs = "warn"
 

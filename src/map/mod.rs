@@ -46,6 +46,8 @@ pub mod global;
 pub mod input;
 /// The `output-map`.
 pub mod output;
+#[cfg(feature = "serde")]
+pub(crate) mod serde;
 /// PSBT v0 (BIP-174) map encoders.
 pub mod v0;
 
@@ -104,7 +106,7 @@ pub struct Key {
     /// The `keytype` of this PSBT map key (`keytype`).
     pub type_value: u64,
     /// The `keydata` itself in raw byte form.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::hex_bytes"))]
     pub key: Vec<u8>,
 }
 
@@ -127,12 +129,12 @@ where
 {
     /// Proprietary type prefix used for grouping together keys under some
     /// application and avoid namespace collision
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::hex_bytes"))]
     pub prefix: Vec<u8>,
     /// Custom proprietary subtype
     pub subtype: Subtype,
     /// Additional key bytes (like serialized public key data etc)
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::hex_bytes"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::hex_bytes"))]
     pub key: Vec<u8>,
 }
 

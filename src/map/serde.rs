@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: CC0-1.0
 
-//! Bitcoin serde utilities.
-//!
-//! This module is for special serde serializations.
+//! Serde helpers for PSBT map types.
 
 use crate::serde;
 
@@ -30,18 +28,16 @@ pub mod btreemap_byte_values {
 
     use bitcoin::hex::FromHex;
 
-    use crate::serde;
-
     pub fn serialize<S, T>(v: &BTreeMap<T, Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
-        T: serde::Serialize + core::hash::Hash + Eq + Ord,
+        S: crate::serde::Serializer,
+        T: crate::serde::Serialize + core::hash::Hash + Eq + Ord,
     {
         use crate::serde::ser::SerializeMap;
 
         // Don't do anything special when not human readable.
         if !s.is_human_readable() {
-            serde::Serialize::serialize(v, s)
+            crate::serde::Serialize::serialize(v, s)
         } else {
             let mut map = s.serialize_map(Some(v.len()))?;
             for (key, value) in v.iter() {
@@ -53,15 +49,15 @@ pub mod btreemap_byte_values {
 
     pub fn deserialize<'de, D, T>(d: D) -> Result<BTreeMap<T, Vec<u8>>, D::Error>
     where
-        D: serde::Deserializer<'de>,
-        T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+        D: crate::serde::Deserializer<'de>,
+        T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
     {
         use core::marker::PhantomData;
 
         struct Visitor<T>(PhantomData<T>);
-        impl<'de, T> serde::de::Visitor<'de> for Visitor<T>
+        impl<'de, T> crate::serde::de::Visitor<'de> for Visitor<T>
         where
-            T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+            T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
         {
             type Value = BTreeMap<T, Vec<u8>>;
 
@@ -69,13 +65,16 @@ pub mod btreemap_byte_values {
                 write!(f, "a map with hexadecimal values")
             }
 
-            fn visit_map<A: serde::de::MapAccess<'de>>(
+            fn visit_map<A: crate::serde::de::MapAccess<'de>>(
                 self,
                 mut a: A,
             ) -> Result<Self::Value, A::Error> {
                 let mut ret = BTreeMap::new();
                 while let Some((key, value)) = a.next_entry()? {
-                    ret.insert(key, FromHex::from_hex(value).map_err(serde::de::Error::custom)?);
+                    ret.insert(
+                        key,
+                        FromHex::from_hex(value).map_err(crate::serde::de::Error::custom)?,
+                    );
                 }
                 Ok(ret)
             }
@@ -83,7 +82,7 @@ pub mod btreemap_byte_values {
 
         // Don't do anything special when not human readable.
         if !d.is_human_readable() {
-            serde::Deserialize::deserialize(d)
+            crate::serde::Deserialize::deserialize(d)
         } else {
             d.deserialize_map(Visitor(PhantomData))
         }
@@ -97,19 +96,17 @@ pub mod btreemap_as_seq {
 
     use alloc::collections::BTreeMap;
 
-    use crate::serde;
-
     pub fn serialize<S, T, U>(v: &BTreeMap<T, U>, s: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
-        T: serde::Serialize + core::hash::Hash + Eq + Ord,
-        U: serde::Serialize,
+        S: crate::serde::Serializer,
+        T: crate::serde::Serialize + core::hash::Hash + Eq + Ord,
+        U: crate::serde::Serialize,
     {
-        use serde::ser::SerializeSeq;
+        use crate::serde::ser::SerializeSeq;
 
         // Don't do anything special when not human readable.
         if !s.is_human_readable() {
-            serde::Serialize::serialize(v, s)
+            crate::serde::Serialize::serialize(v, s)
         } else {
             let mut seq = s.serialize_seq(Some(v.len()))?;
             for pair in v.iter() {
@@ -121,17 +118,17 @@ pub mod btreemap_as_seq {
 
     pub fn deserialize<'de, D, T, U>(d: D) -> Result<BTreeMap<T, U>, D::Error>
     where
-        D: serde::Deserializer<'de>,
-        T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
-        U: serde::Deserialize<'de>,
+        D: crate::serde::Deserializer<'de>,
+        T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+        U: crate::serde::Deserialize<'de>,
     {
         use core::marker::PhantomData;
 
         struct Visitor<T, U>(PhantomData<(T, U)>);
-        impl<'de, T, U> serde::de::Visitor<'de> for Visitor<T, U>
+        impl<'de, T, U> crate::serde::de::Visitor<'de> for Visitor<T, U>
         where
-            T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
-            U: serde::Deserialize<'de>,
+            T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+            U: crate::serde::Deserialize<'de>,
         {
             type Value = BTreeMap<T, U>;
 
@@ -139,7 +136,7 @@ pub mod btreemap_as_seq {
                 write!(f, "a sequence of pairs")
             }
 
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            fn visit_seq<A: crate::serde::de::SeqAccess<'de>>(
                 self,
                 mut a: A,
             ) -> Result<Self::Value, A::Error> {
@@ -153,7 +150,7 @@ pub mod btreemap_as_seq {
 
         // Don't do anything special when not human readable.
         if !d.is_human_readable() {
-            serde::Deserialize::deserialize(d)
+            crate::serde::Deserialize::deserialize(d)
         } else {
             d.deserialize_seq(Visitor(PhantomData))
         }
@@ -170,32 +167,30 @@ pub mod btreemap_as_seq_byte_values {
     use alloc::collections::BTreeMap;
     use alloc::vec::Vec;
 
-    use crate::serde;
-
     /// A custom key-value pair type that serialized the bytes as hex.
     #[derive(Debug, Deserialize)]
     struct OwnedPair<T>(
         T,
-        #[serde(deserialize_with = "crate::serde_utils::hex_bytes::deserialize")] Vec<u8>,
+        #[serde(deserialize_with = "crate::map::serde::hex_bytes::deserialize")] Vec<u8>,
     );
 
     /// A custom key-value pair type that serialized the bytes as hex.
     #[derive(Debug, Serialize)]
     struct BorrowedPair<'a, T: 'static>(
         &'a T,
-        #[serde(serialize_with = "crate::serde_utils::hex_bytes::serialize")] &'a [u8],
+        #[serde(serialize_with = "crate::map::serde::hex_bytes::serialize")] &'a [u8],
     );
 
     pub fn serialize<S, T>(v: &BTreeMap<T, Vec<u8>>, s: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
-        T: serde::Serialize + core::hash::Hash + Eq + Ord + 'static,
+        S: crate::serde::Serializer,
+        T: crate::serde::Serialize + core::hash::Hash + Eq + Ord + 'static,
     {
-        use serde::ser::SerializeSeq;
+        use crate::serde::ser::SerializeSeq;
 
         // Don't do anything special when not human readable.
         if !s.is_human_readable() {
-            serde::Serialize::serialize(v, s)
+            crate::serde::Serialize::serialize(v, s)
         } else {
             let mut seq = s.serialize_seq(Some(v.len()))?;
             for (key, value) in v.iter() {
@@ -207,15 +202,15 @@ pub mod btreemap_as_seq_byte_values {
 
     pub fn deserialize<'de, D, T>(d: D) -> Result<BTreeMap<T, Vec<u8>>, D::Error>
     where
-        D: serde::Deserializer<'de>,
-        T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+        D: crate::serde::Deserializer<'de>,
+        T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
     {
         use core::marker::PhantomData;
 
         struct Visitor<T>(PhantomData<T>);
-        impl<'de, T> serde::de::Visitor<'de> for Visitor<T>
+        impl<'de, T> crate::serde::de::Visitor<'de> for Visitor<T>
         where
-            T: serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
+            T: crate::serde::Deserialize<'de> + core::hash::Hash + Eq + Ord,
         {
             type Value = BTreeMap<T, Vec<u8>>;
 
@@ -223,7 +218,7 @@ pub mod btreemap_as_seq_byte_values {
                 write!(f, "a sequence of pairs")
             }
 
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            fn visit_seq<A: crate::serde::de::SeqAccess<'de>>(
                 self,
                 mut a: A,
             ) -> Result<Self::Value, A::Error> {
@@ -237,7 +232,7 @@ pub mod btreemap_as_seq_byte_values {
 
         // Don't do anything special when not human readable.
         if !d.is_human_readable() {
-            serde::Deserialize::deserialize(d)
+            crate::serde::Deserialize::deserialize(d)
         } else {
             d.deserialize_seq(Visitor(PhantomData))
         }
@@ -250,29 +245,27 @@ pub mod hex_bytes {
 
     use bitcoin::hex::FromHex;
 
-    use crate::serde;
-
     pub fn serialize<T, S>(bytes: &T, s: S) -> Result<S::Ok, S::Error>
     where
-        T: serde::Serialize + AsRef<[u8]>,
-        S: serde::Serializer,
+        T: crate::serde::Serialize + AsRef<[u8]>,
+        S: crate::serde::Serializer,
     {
         // Don't do anything special when not human readable.
         if !s.is_human_readable() {
-            serde::Serialize::serialize(bytes, s)
+            crate::serde::Serialize::serialize(bytes, s)
         } else {
-            serde::Serialize::serialize(&super::SerializeBytesAsHex(bytes.as_ref()), s)
+            crate::serde::Serialize::serialize(&super::SerializeBytesAsHex(bytes.as_ref()), s)
         }
     }
 
     pub fn deserialize<'de, D, B>(d: D) -> Result<B, D::Error>
     where
-        D: serde::Deserializer<'de>,
-        B: serde::Deserialize<'de> + FromHex,
+        D: crate::serde::Deserializer<'de>,
+        B: crate::serde::Deserialize<'de> + FromHex,
     {
         struct Visitor<B>(core::marker::PhantomData<B>);
 
-        impl<B: FromHex> serde::de::Visitor<'_> for Visitor<B> {
+        impl<B: FromHex> crate::serde::de::Visitor<'_> for Visitor<B> {
             type Value = B;
 
             fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -281,18 +274,18 @@ pub mod hex_bytes {
 
             fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
             where
-                E: serde::de::Error,
+                E: crate::serde::de::Error,
             {
                 if let Ok(hex) = core::str::from_utf8(v) {
                     FromHex::from_hex(hex).map_err(E::custom)
                 } else {
-                    Err(E::invalid_value(serde::de::Unexpected::Bytes(v), &self))
+                    Err(E::invalid_value(crate::serde::de::Unexpected::Bytes(v), &self))
                 }
             }
 
             fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
             where
-                E: serde::de::Error,
+                E: crate::serde::de::Error,
             {
                 FromHex::from_hex(v).map_err(E::custom)
             }
@@ -300,7 +293,7 @@ pub mod hex_bytes {
 
         // Don't do anything special when not human readable.
         if !d.is_human_readable() {
-            serde::Deserialize::deserialize(d)
+            crate::serde::Deserialize::deserialize(d)
         } else {
             d.deserialize_str(Visitor(core::marker::PhantomData))
         }

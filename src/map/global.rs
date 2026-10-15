@@ -69,17 +69,17 @@ pub struct Global {
     pub xpubs: BTreeMap<Xpub, KeySource>,
     /// BIP-375: Map from scan public key to ECDH share.
     #[cfg(feature = "silent-payments")]
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
     pub sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
     /// BIP-375: Map from scan public key to DLEQ proof.
     #[cfg(feature = "silent-payments")]
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
     pub sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
     /// Global proprietary key-value pairs.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq_byte_values"))]
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown global key-value pairs.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq_byte_values"))]
     pub unknowns: BTreeMap<Key, Vec<u8>>,
 }
 

@@ -51,14 +51,14 @@ pub struct Output {
     pub witness_script: Option<ScriptBuf>,
     /// A map from public keys needed to spend this output to their
     /// corresponding master key fingerprints and derivation paths.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
     pub bip32_derivations: BTreeMap<PublicKey, KeySource>,
     /// The internal pubkey.
     pub tap_internal_key: Option<XOnlyPublicKey>,
     /// Taproot Output tree.
     pub tap_tree: Option<TapTree>,
     /// Map of tap root x only keys to origin info and leaf hashes contained in it.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
     pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     /// BIP-375: Silent payment v0 address info.
     #[cfg(feature = "silent-payments")]
@@ -67,10 +67,10 @@ pub struct Output {
     #[cfg(feature = "silent-payments")]
     pub sp_v0_label: Option<u32>,
     /// Proprietary key-value pairs for this output.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq_byte_values"))]
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs for this output.
-    #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq_byte_values"))]
     pub unknowns: BTreeMap<Key, Vec<u8>>,
 }
 

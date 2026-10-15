@@ -5,6 +5,25 @@
 //! Implementation of the Partially Signed Bitcoin Transaction Format as defined in [BIP-174] and
 //! PSBT version 2 as defined in [BIP-370].
 //!
+//! # Serialization
+//!
+//! This crate provides two serialization paths, the canonical binary wire format as well as human
+//! readable `serde` representation.
+//!
+//! The [`PsbtEncode`] and [`PsbtDecode`] traits produce and consume the canonical PSBT wire
+//! format, a compact binary representation defined by the BIP specifications. This encoding is
+//! deterministic and consistent, the same PSBT always produces the same bytes. This is the format
+//! used on the wire between signers, coordinators, and hardware wallets. It uses a sans-I/O
+//! encoder/decoder model (via [`bitcoin_consensus_encoding`]) that works in `no_std` environments
+//! and avoids heap allocations where possible.
+//!
+//! When the `serde` feature is enabled, all PSBT types additionally implement
+//! [`Serialize`](serde::Serialize) and [`Deserialize`](serde::Deserialize). This produces a
+//! human-readable representation (e.g. JSON) that is not part of any BIP specification. Unlike
+//! the wire format, this representation is not guaranteed to be deterministic, the output
+//! format is controlled by the serde backend, not by this crate. It is intended for debugging,
+//! logging, and readability, not for wire compatibility.
+//!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 //! [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
 
@@ -30,8 +49,6 @@ mod error;
 mod map;
 mod psbt;
 mod roles;
-#[cfg(feature = "serde")]
-mod serde_utils;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
@@ -91,7 +108,11 @@ pub use crate::{
     version::{UnsupportedVersionError, Version},
 };
 
-/// PSBT version 0 - the original PSBT version.
+/// PSBT version 0 as defined in [BIP-174].
+///
+/// [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 pub const V0: Version = Version::ZERO;
-/// PSBT version 2 - the second PSBT version.
+/// PSBT version 2 as defined in [BIP-370].
+///
+/// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
 pub const V2: Version = Version::TWO;
