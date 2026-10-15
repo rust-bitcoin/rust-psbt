@@ -190,7 +190,9 @@ impl Global {
                         entry.insert((fingerprint1, derivation1));
                         continue;
                     }
-                    return Err(InconsistentKeySourcesError(xpub).into());
+                    return Err(CombineError::InconsistentKeySources(InconsistentKeySourcesError(
+                        xpub,
+                    )));
                 }
             }
         }
@@ -834,10 +836,6 @@ impl std::error::Error for CombineError {
             Self::VersionMismatch { .. } | Self::TxVersionMismatch { .. } => None,
         }
     }
-}
-
-impl From<InconsistentKeySourcesError> for CombineError {
-    fn from(e: InconsistentKeySourcesError) -> Self { Self::InconsistentKeySources(e) }
 }
 
 /// Encoder for an input or output count key-value pair (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
