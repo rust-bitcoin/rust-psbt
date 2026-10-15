@@ -30,10 +30,11 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::codecs::{KeySourceDecoder, TapKeyOriginDecoder, TapTreeDecoder};
+use crate::encoding::codecs::{KeySourceDecoder, TapTreeDecoder};
 use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder};
+use crate::map::taproot::TapKeyOriginDecoder;
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};

@@ -11,8 +11,9 @@ use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
 #[cfg(feature = "silent-payments")]
 use bitcoin_consensus_encoding::ArrayEncoder;
-use bitcoin_consensus_encoding::{ ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder,
-    EncoderStatus, ExactVecDecoderWith, IterEncoder,
+use bitcoin_consensus_encoding::{
+    ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder,
 };
 
 use super::framing::{KeyValueEncoder, KeyValueIter, ValueDecoder};
@@ -27,11 +28,10 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::codecs::{
-    KeySourceDecoder, TapKeyOriginDecoder, TapTreeDecoder, TapTreeEncoder,
-};
+use crate::encoding::codecs::{KeySourceDecoder, TapTreeDecoder, TapTreeEncoder};
 use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
+use crate::map::taproot::TapKeyOriginDecoder;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
 

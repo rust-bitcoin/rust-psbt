@@ -37,13 +37,11 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-use crate::encoding::codecs::{
-    EcdsaSignatureDecoder, KeySourceDecoder, TapKeyOriginDecoder, TapLeafScriptDecoder,
-    TaprootSignatureDecoder,
-};
+use crate::encoding::codecs::{EcdsaSignatureDecoder, KeySourceDecoder, TaprootSignatureDecoder};
 use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
+use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]

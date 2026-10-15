@@ -18,12 +18,13 @@ use super::Key;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::codecs::CompressedPublicKeyDecodeError;
 use crate::encoding::codecs::{
-    EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapKeyOriginDecodeError,
-    TapLeafScriptDecodeError, TapNodeHashDecodeError, TapTreeDecodeError,
-    TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError, XOnlyPublicKeyDecodeError,
+    EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapNodeHashDecodeError,
+    TapTreeDecodeError, TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError,
+    XOnlyPublicKeyDecodeError,
 };
 use crate::error::write_err;
 use crate::map::output::ValidationError;
+use crate::map::taproot::{TapKeyOriginDecodeError, TapLeafScriptDecodeError};
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::SpV0InfoDecodeError;
