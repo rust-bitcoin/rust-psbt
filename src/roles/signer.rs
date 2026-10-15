@@ -1176,9 +1176,9 @@ mod test {
     fn sighash_matches_direct_computation() {
         // The signer's sighash must equal an independent SighashCache computation for the input.
         let mut signer = Signer::new(wpkh_psbt()).unwrap();
-        let (msg, ty) = signer.session(|provider| {
-            let input = provider.signable_input(0).unwrap();
-            input.sighash(provider.cache)
+        let (msg, ty) = signer.session(|session| {
+            let input = session.signable_input(0).unwrap();
+            input.sighash(session.cache)
         });
 
         // Recompute independently from the input's (validated) funding UTXO.
@@ -1218,9 +1218,9 @@ mod test {
             })],
         };
         let mut signer = Signer::new(psbt).unwrap();
-        let (msg, ty) = signer.session(|provider| {
-            let input = provider.signable_input(0).expect("taproot passes signer checks");
-            input.sighash(provider.cache)
+        let (msg, ty) = signer.session(|session| {
+            let input = session.signable_input(0).expect("taproot passes signer checks");
+            input.sighash(session.cache)
         });
 
         // Recompute independently: key-path spend over the single prevout.
@@ -1240,9 +1240,9 @@ mod test {
         let pubkey = *key_map.keys().next().unwrap();
 
         let mut signer = Signer::new(psbt).unwrap();
-        let sigs = signer.session(|mut provider| {
-            let input = provider.signable_input(0).unwrap();
-            provider.get_input_sigs(&input, &key_map, &secp)
+        let sigs = signer.session(|mut session| {
+            let input = session.signable_input(0).unwrap();
+            session.get_input_sigs(&input, &key_map, &secp)
         });
         let used: Vec<PublicKey> = sigs.signatures.iter().map(|(pk, _)| *pk).collect();
         let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
