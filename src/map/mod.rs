@@ -40,6 +40,8 @@ macro_rules! v2_combine_map {
 
 /// Error types shared by map decoders.
 pub mod error;
+/// Map-level framing: key-value framing and per-field encoder/decoder aliases.
+pub(crate) mod framing;
 /// The `global-map`.
 pub mod global;
 /// The `input-map`.
@@ -57,6 +59,8 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin::hex::DisplayHex;
+use bitcoin::key::XOnlyPublicKey;
+use bitcoin::ScriptBuf;
 use bitcoin_consensus_encoding::{
     ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeDecoder, CompactSizeDecoderError,
     CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2, DecoderStatus, Encoder, Encoder2,
@@ -64,8 +68,9 @@ use bitcoin_consensus_encoding::{
 };
 
 use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};
-use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode};
+use crate::encoding::{PsbtDecode, PsbtEncode};
 use crate::map::error::KeyDecodeError;
+use crate::map::framing::KeyValueEncoder;
 
 /// Encoder for the PSBT record separator (`0x00`).
 ///
@@ -335,6 +340,10 @@ impl<'e> Iterator for UnknownKeyValueIter<'e> {
         ))
     }
 }
+pub(crate) type TapInternalKeyPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <XOnlyPublicKey as PsbtEncode>::Encoder<'e>>;
+pub(crate) type ScriptPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <ScriptBuf as PsbtEncode>::Encoder<'e>>;
 
 #[cfg(test)]
 mod tests {

@@ -8,9 +8,9 @@
 
 use bitcoin::locktime::absolute;
 use bitcoin::{transaction, Amount, OutPoint, Sequence, Transaction, TxOut, Witness};
-use bitcoin_consensus_encoding::{CompactSizeEncoder, Decode, Encode};
+use bitcoin_consensus_encoding::{Decode, Encode};
 
-use super::{ExactLenEncoder, KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
+use super::{PsbtDecode, PsbtEncode};
 
 /// Marker trait for types that delegate consensus encoding and decoding to PSBT.
 ///
@@ -36,27 +36,15 @@ impl<T: PsbtDelegate> PsbtDecode for T {
 
 /// [`absolute::LockTime`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for absolute::LockTime {}
-pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
-pub(crate) type FallbackLockTimeValueDecoder = ValueDecoder<absolute::LockTime>;
 
 /// [`Amount`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Amount {}
 
-pub(crate) type AmountPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
-
 /// [`Sequence`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Sequence {}
 
-pub(crate) type SequencePair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <Sequence as PsbtEncode>::Encoder<'e>>;
-
 /// [`transaction::Version`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for transaction::Version {}
-pub(crate) type TxVersionKeyValueEncoder<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <transaction::Version as PsbtEncode>::Encoder<'e>>;
-pub(crate) type TxVersionValueDecoder = ValueDecoder<transaction::Version>;
 
 /// [`OutPoint`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for OutPoint {}
@@ -64,17 +52,8 @@ impl PsbtDelegate for OutPoint {}
 /// [`Transaction`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Transaction {}
 
-pub(crate) type NonWitnessUtxoPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Transaction>>;
-
 /// [`TxOut`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for TxOut {}
 
-pub(crate) type WitnessUtxoPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <TxOut as PsbtEncode>::Encoder<'e>>;
-
 /// [`Witness`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Witness {}
-
-pub(crate) type FinalScriptWitnessPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Witness>>;

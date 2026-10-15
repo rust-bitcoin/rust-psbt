@@ -7,7 +7,8 @@ use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
-use crate::encoding::{KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
+use crate::encoding::{PsbtDecode, PsbtEncode};
+use crate::map::framing::{KeyValueEncoder, ValueDecoder};
 
 /// The PSBT version.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

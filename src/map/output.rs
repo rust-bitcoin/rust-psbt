@@ -9,13 +9,16 @@ use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
-use bitcoin_consensus_encoding::{
-    ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
-    ExactVecDecoderWith, IterEncoder,
+#[cfg(feature = "silent-payments")]
+use bitcoin_consensus_encoding::ArrayEncoder;
+use bitcoin_consensus_encoding::{ ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder,
+    EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
+use super::framing::{KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_OUT_AMOUNT, PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
@@ -24,14 +27,10 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::delegates::AmountPair;
-use crate::encoding::native::{
-    KeySourceDecoder, OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair,
+use crate::encoding::codecs::{
+    KeySourceDecoder, TapKeyOriginDecoder, TapTreeDecoder, TapTreeEncoder,
 };
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
@@ -884,6 +883,20 @@ impl std::error::Error for CombineError {
         }
     }
 }
+pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
+pub(crate) type AmountPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0InfoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+pub(crate) type OutBip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
+pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
+>;
 
 #[cfg(test)]
 #[cfg(feature = "std")]

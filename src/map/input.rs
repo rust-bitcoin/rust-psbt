@@ -21,8 +21,10 @@ use bitcoin_consensus_encoding::{
     Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
+use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
@@ -35,19 +37,11 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-use crate::encoding::delegates::{
-    FinalScriptWitnessPair, NonWitnessUtxoPair, SequencePair, WitnessUtxoPair,
-};
-use crate::encoding::native::{
-    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
-    MinHeightPair, MinTimePair, PartialSigIter, PreviousTxidPair, Ripemd160Iter, ScriptPair,
-    Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginDecoder, TapKeyOriginIter,
-    TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
+use crate::encoding::codecs::{
+    EcdsaSignatureDecoder, KeySourceDecoder, TapKeyOriginDecoder, TapLeafScriptDecoder,
     TaprootSignatureDecoder,
 };
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqPairIter, EcdhPairIter};
-use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
+use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
@@ -1926,6 +1920,58 @@ impl std::error::Error for CombineError {
         }
     }
 }
+pub(crate) type PreviousTxidPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Txid as PsbtEncode>::Encoder<'e>>;
+pub(crate) type SequencePair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Sequence as PsbtEncode>::Encoder<'e>>;
+pub(crate) type MinTimePair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::Time as PsbtEncode>::Encoder<'e>>;
+pub(crate) type MinHeightPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
+pub(crate) type SighashPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
+pub(crate) type Ripemd160Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
+pub(crate) type Hash160Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
+pub(crate) type Sha256Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
+pub(crate) type Hash256Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
+pub(crate) type PartialSigIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, bitcoin::ecdsa::Signature>, PSBT_IN_PARTIAL_SIG>;
+pub(crate) type TapKeySigPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <bitcoin::taproot::Signature as PsbtEncode>::Encoder<'e>>;
+pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, (XOnlyPublicKey, TapLeafHash), bitcoin::taproot::Signature>,
+    PSBT_IN_TAP_SCRIPT_SIG,
+>;
+pub(crate) type TapScriptIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, ControlBlock, (ScriptBuf, LeafVersion)>,
+    PSBT_IN_TAP_LEAF_SCRIPT,
+>;
+pub(crate) type Bip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_IN_BIP32_DERIVATION>;
+pub(crate) type TapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_IN_TAP_BIP32_DERIVATION,
+>;
+pub(crate) type NonWitnessUtxoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Transaction>>;
+pub(crate) type WitnessUtxoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <TxOut as PsbtEncode>::Encoder<'e>>;
+pub(crate) type FinalScriptWitnessPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Witness>>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type EcdhPairIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
+    PSBT_IN_SP_ECDH_SHARE,
+>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type DleqPairIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_IN_SP_DLEQ>;
+pub(crate) type TapMerkleRootPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <TapNodeHash as PsbtEncode>::Encoder<'e>>;
 
 #[cfg(test)]
 #[cfg(feature = "std")]

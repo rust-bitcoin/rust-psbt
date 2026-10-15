@@ -13,15 +13,15 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
 };
 
+use super::framing::ValueDecoderError;
 use super::Key;
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::CompressedPublicKeyDecodeError;
-use crate::encoding::native::{
+use crate::encoding::codecs::CompressedPublicKeyDecodeError;
+use crate::encoding::codecs::{
     EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapKeyOriginDecodeError,
     TapLeafScriptDecodeError, TapNodeHashDecodeError, TapTreeDecodeError,
     TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError, XOnlyPublicKeyDecodeError,
 };
-use crate::encoding::ValueDecoderError;
 use crate::error::write_err;
 use crate::map::output::ValidationError;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;

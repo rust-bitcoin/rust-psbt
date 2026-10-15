@@ -16,6 +16,9 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
 };
 
+use super::super::global::XpubKeyValueIter;
+#[cfg(feature = "silent-payments")]
+use super::super::global::{DleqKeyValueIter, EcdhKeyValueIter};
 use super::super::SeparatorEncoder;
 use super::unsigned_tx::{UnsignedTx, UnsignedTxEncoder};
 use crate::consts::{
@@ -24,11 +27,9 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
-use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
-use crate::encoding::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
+use crate::encoding::codecs::KeySourceDecoder;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
+use crate::map::framing::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
@@ -497,7 +498,7 @@ mod tests {
 
     /// Drain a [`KeyValueEncoder`] into the byte payload for the decoder.
     fn encode_kv(key_type: u64, key_data: &[u8], value: &[u8]) -> Vec<u8> {
-        drain_to_vec(&mut crate::encoding::KeyValueEncoder::from_sized_kv(
+        drain_to_vec(&mut KeyValueEncoder::from_sized_kv(
             Encoder2::new(
                 CompactSizeEncoder::new_u64(key_type),
                 BytesEncoder::without_length_prefix(key_data),

@@ -15,6 +15,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, IterEncoder,
 };
 
+use super::framing::{KeyValueEncoder, KeyValueIter, ValueDecoder, ValueDecoderError};
 use super::{
     Count, Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder,
     UnknownKeyValueIter,
@@ -26,14 +27,8 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
-use crate::encoding::delegates::{
-    FallbackLockTimeKeyValueEncoder, FallbackLockTimeValueDecoder, TxVersionKeyValueEncoder,
-    TxVersionValueDecoder,
-};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
-use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError};
+use crate::encoding::codecs::KeySourceDecoder;
+use crate::encoding::PsbtEncode;
 use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
@@ -851,6 +846,22 @@ impl std::error::Error for CombineError {
 impl From<InconsistentKeySourcesError> for CombineError {
     fn from(e: InconsistentKeySourcesError) -> Self { Self::InconsistentKeySources(e) }
 }
+pub(crate) type XpubKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
+pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
+pub(crate) type FallbackLockTimeValueDecoder = ValueDecoder<absolute::LockTime>;
+pub(crate) type TxVersionKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <bitcoin::transaction::Version as PsbtEncode>::Encoder<'e>>;
+pub(crate) type TxVersionValueDecoder = ValueDecoder<bitcoin::transaction::Version>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
+    PSBT_GLOBAL_SP_ECDH_SHARE,
+>;
+#[cfg(feature = "silent-payments")]
+pub(crate) type DleqKeyValueIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
 
 #[cfg(test)]
 mod tests {

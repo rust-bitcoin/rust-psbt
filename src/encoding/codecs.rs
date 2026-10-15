@@ -4,7 +4,6 @@
 //! but are not consensus encodable.
 
 use alloc::borrow::ToOwned as _;
-use alloc::collections::btree_map;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::BitOr as _;
@@ -23,23 +22,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
-use super::{
-    BytesKeyValueIter, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder,
-};
-#[cfg(feature = "silent-payments")]
-use crate::consts::{
-    PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE,
-};
-use crate::consts::{
-    PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
-    PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
-    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
-    PSBT_OUT_TAP_BIP32_DERIVATION,
-};
-use crate::encoding::KeyValueEncoder;
-use crate::sighash_type::PsbtSighashType;
-#[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, SpV0Info};
+use super::{PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder};
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -56,9 +39,6 @@ impl PsbtEncode for Xpub {
         XpubEncoder::new(ArrayEncoder::without_length_prefix(self.encode()))
     }
 }
-
-pub(crate) type XpubKeyValueIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
 
 /// Decoder for a serialized [`Xpub`].
 #[derive(Debug, Default)]
@@ -239,9 +219,6 @@ impl PsbtEncode for absolute::Time {
     }
 }
 
-pub(crate) type MinTimePair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::Time as PsbtEncode>::Encoder<'e>>;
-
 impl PsbtEncode for absolute::Height {
     type Encoder<'e>
         = ArrayEncoder<4>
@@ -253,12 +230,6 @@ impl PsbtEncode for absolute::Height {
     }
 }
 
-pub(crate) type MinHeightPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
-
-pub(crate) type SighashPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
-
 impl PsbtEncode for XOnlyPublicKey {
     type Encoder<'e>
         = ArrayEncoder<32>
@@ -269,9 +240,6 @@ impl PsbtEncode for XOnlyPublicKey {
         ArrayEncoder::without_length_prefix(self.serialize())
     }
 }
-
-pub(crate) type TapInternalKeyPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <XOnlyPublicKey as PsbtEncode>::Encoder<'e>>;
 
 /// Decoder for an [`XOnlyPublicKey`] value (32 bytes).
 #[derive(Debug, Default)]
@@ -560,34 +528,16 @@ macro_rules! impl_hash_encoder {
 
 impl_hash_encoder!(Txid, 32);
 
-pub(crate) type PreviousTxidPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <Txid as PsbtEncode>::Encoder<'e>>;
-
 impl_hash_encoder!(ripemd160::Hash, 20);
-
-pub(crate) type Ripemd160Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
 
 impl_hash_encoder!(hash160::Hash, 20);
 
-pub(crate) type Hash160Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
-
 impl_hash_encoder!(sha256::Hash, 32);
-
-pub(crate) type Sha256Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
 
 impl_hash_encoder!(sha256d::Hash, 32);
 
-pub(crate) type Hash256Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
-
 impl_hash_encoder!(TapLeafHash, 32);
 impl_hash_encoder!(TapNodeHash, 32);
-
-pub(crate) type TapMerkleRootPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <TapNodeHash as PsbtEncode>::Encoder<'e>>;
 
 impl PsbtEncode for LeafVersion {
     type Encoder<'e>
@@ -610,9 +560,6 @@ impl PsbtEncode for ScriptBuf {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
-
-pub(crate) type ScriptPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <ScriptBuf as PsbtEncode>::Encoder<'e>>;
 
 /// Encoder for a [`PublicKey`].
 pub enum PublicKeyEncoder {
@@ -688,9 +635,6 @@ impl PsbtEncode for ecdsa::Signature {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
 }
 
-pub(crate) type PartialSigIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, ecdsa::Signature>, PSBT_IN_PARTIAL_SIG>;
-
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(XOnlyPublicKey, TapLeafHash)` composite (32 byte + 32 byte).
     pub struct XOnlyLeafHashPairEncoder<'e>(Encoder2<ArrayEncoder<32>, ArrayEncoder<32>>);
@@ -729,14 +673,6 @@ impl PsbtEncode for taproot::Signature {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
 }
-
-pub(crate) type TapKeySigPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <taproot::Signature as PsbtEncode>::Encoder<'e>>;
-
-pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, (XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    PSBT_IN_TAP_SCRIPT_SIG,
->;
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a `(ScriptBuf, LeafVersion)` composite (`script bytes + 1 byte for version tag`).
@@ -840,8 +776,6 @@ impl PsbtEncode for TapTree {
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapTreeEncoder::new(self) }
 }
-
-pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
 
 /// Decoder for a [`TapTree`] value.
 #[derive(Debug, Default)]
@@ -958,19 +892,6 @@ impl PsbtEncode for ControlBlock {
     }
 }
 
-pub(crate) type TapScriptIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, ControlBlock, (ScriptBuf, LeafVersion)>,
-    PSBT_IN_TAP_LEAF_SCRIPT,
->;
-
-pub(crate) type Bip32DerivationIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_IN_BIP32_DERIVATION>;
-
-pub(crate) type TapKeyOriginIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    PSBT_IN_TAP_BIP32_DERIVATION,
->;
-
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
         = ArrayEncoder<33>
@@ -1036,33 +957,6 @@ impl std::error::Error for CompressedPublicKeyDecodeError {
         }
     }
 }
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
-    PSBT_GLOBAL_SP_ECDH_SHARE,
->;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type EcdhPairIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
-    PSBT_IN_SP_ECDH_SHARE,
->;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type SpV0InfoPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
-
-pub(crate) type OutBip32DerivationIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
-
-pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    PSBT_OUT_TAP_BIP32_DERIVATION,
->;
 
 /// Decoder for a [`taproot::Signature`] value.
 #[derive(Debug, Default)]
@@ -1300,14 +1194,6 @@ impl std::error::Error for TapKeyOriginDecodeError {
         }
     }
 }
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type DleqKeyValueIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type DleqPairIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_IN_SP_DLEQ>;
 
 #[cfg(test)]
 mod tests {
