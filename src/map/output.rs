@@ -883,16 +883,23 @@ impl std::error::Error for CombineError {
         }
     }
 }
+
+/// Encoder for the tap-script-tree key-value pair (PSBT_OUT_TAP_TREE).
 pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
+/// Encoder for the amount key-value pair (PSBT_OUT_AMOUNT).
 pub(crate) type AmountPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
 #[cfg(feature = "silent-payments")]
+/// Encoder for the silent-payments v0 key-value pair (PSBT_OUT_SP_V0_INFO).
 pub(crate) type SpV0InfoPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
 #[cfg(feature = "silent-payments")]
+/// Encoder for the silent-payments v0 label key-value pair (PSBT_OUT_SP_V0_LABEL).
 pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+/// Iterator yielding bip-32 derivation entries (PSBT_OUT_BIP32_DERIVATION).
 pub(crate) type OutBip32DerivationIter<'e> =
     KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
+/// Iterator yielding tap-key-origin entries (PSBT_OUT_TAP_BIP32_DERIVATION).
 pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
     btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     PSBT_OUT_TAP_BIP32_DERIVATION,

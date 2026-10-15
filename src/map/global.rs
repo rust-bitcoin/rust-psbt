@@ -210,10 +210,6 @@ impl Default for Global {
     fn default() -> Self { Self::new() }
 }
 
-type CountValueDecoder = ValueDecoder<Count>;
-
-type FlagsValueDecoder = ValueDecoder<TxModifiableFlags>;
-
 /// The internal state of the global map push decoder.
 #[derive(Debug, Default)]
 enum DecoderStage {
@@ -600,14 +596,11 @@ impl Decoder for GlobalDecoder {
     }
 }
 
-type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
-type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
-
 /// State of the global map encoder, one key-value pair group per variant.
 enum State<'e> {
     Version(VersionKeyValueEncoder<'e>),
-    TxVersion(TxVersionKeyValueEncoder<'e>),
-    FallbackLockTime(FallbackLockTimeKeyValueEncoder<'e>),
+    TxVersion(TxVersionPair<'e>),
+    FallbackLockTime(FallbackLockTimePair<'e>),
     InputCount(CountPair),
     OutputCount(CountPair),
     Flags(FlagsPair),
@@ -661,14 +654,14 @@ impl<'e> GlobalMapEncoder<'e> {
         }
     }
 
-    fn tx_version_key_value(&self) -> TxVersionKeyValueEncoder<'e> {
+    fn tx_version_key_value(&self) -> TxVersionPair<'e> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_TX_VERSION),
             self.global.tx_version.psbt_encoder(),
         )
     }
 
-    fn fallback_key_value(&self) -> FallbackLockTimeKeyValueEncoder<'e> {
+    fn fallback_key_value(&self) -> FallbackLockTimePair<'e> {
         let lock_time = self.global.fallback_lock_time.as_ref().expect("checked by caller");
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_FALLBACK_LOCKTIME),
@@ -846,19 +839,35 @@ impl std::error::Error for CombineError {
 impl From<InconsistentKeySourcesError> for CombineError {
     fn from(e: InconsistentKeySourcesError) -> Self { Self::InconsistentKeySources(e) }
 }
+
+/// Encoder for an input or output count key-value pair (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
+pub(crate) type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
+/// Encoder for the tx-modifiable‑flags key-value pair (PSBT_GLOBAL_TX_MODIFIABLE).
+pub(crate) type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
+/// Decoder for a count value (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
+pub(crate) type CountValueDecoder = ValueDecoder<Count>;
+/// Decoder for the tx-modifiable‑flags value (PSBT_GLOBAL_TX_MODIFIABLE).
+pub(crate) type FlagsValueDecoder = ValueDecoder<TxModifiableFlags>;
+/// Iterator yielding xpub key-value encoders (PSBT_GLOBAL_XPUB).
 pub(crate) type XpubKeyValueIter<'e> =
     KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
-pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
+/// Encoder for the fallback‑locktime key-value pair (PSBT_GLOBAL_FALLBACK_LOCKTIME).
+pub(crate) type FallbackLockTimePair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
+/// Decoder for the fallback‑locktime value (PSBT_GLOBAL_FALLBACK_LOCKTIME).
 pub(crate) type FallbackLockTimeValueDecoder = ValueDecoder<absolute::LockTime>;
-pub(crate) type TxVersionKeyValueEncoder<'e> =
+/// Encoder for the transaction‑version key-value pair (PSBT_GLOBAL_TX_VERSION).
+pub(crate) type TxVersionPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <bitcoin::transaction::Version as PsbtEncode>::Encoder<'e>>;
+/// Decoder for the transaction‑version value (PSBT_GLOBAL_TX_VERSION).
 pub(crate) type TxVersionValueDecoder = ValueDecoder<bitcoin::transaction::Version>;
+/// Iterator yielding ECDH‑share key-value encoders (PSBT_GLOBAL_SP_ECDH_SHARE).
 #[cfg(feature = "silent-payments")]
 pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
     btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
     PSBT_GLOBAL_SP_ECDH_SHARE,
 >;
+/// Iterator yielding DLEQ‑proof key-value encoders (PSBT_GLOBAL_SP_DLEQ).
 #[cfg(feature = "silent-payments")]
 pub(crate) type DleqKeyValueIter<'e> =
     KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
