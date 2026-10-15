@@ -11,12 +11,13 @@ use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeDecoder, CompactSizeEncoder, Decoder,
-    DecoderStatus, Encoder, EncoderStatus, IterEncoder, UnexpectedEofError,
+    ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder,
+    EncoderStatus, IterEncoder,
 };
 
 use super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Count, Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder,
+    UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
@@ -30,13 +31,14 @@ use crate::encoding::delegates::{
     TxVersionValueDecoder,
 };
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder, ValueDecoderError};
 use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, DleqProofDecoder};
+use crate::silent_payments::DleqProof;
+use crate::tx_modifiable_flags::TxModifiableFlags;
 use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
 use crate::{InconsistentKeySourcesError, V2};
 
@@ -213,31 +215,9 @@ impl Default for Global {
     fn default() -> Self { Self::new() }
 }
 
-type CountValueDecoder = ValueDecoder<CompactSizeDecoder>;
+type CountValueDecoder = ValueDecoder<Count>;
 
-/// Decoder for the single-byte modifiable-flags value.
-#[derive(Debug, Default)]
-struct TxModifiableFlagsDecoder {
-    inner: ArrayDecoder<1>,
-}
-
-impl Decoder for TxModifiableFlagsDecoder {
-    type Output = u8;
-    type Error = UnexpectedEofError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let [byte] = self.inner.end()?;
-        Ok(byte)
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-type FlagsValueDecoder = ValueDecoder<TxModifiableFlagsDecoder>;
+type FlagsValueDecoder = ValueDecoder<TxModifiableFlags>;
 
 /// The internal state of the global map push decoder.
 #[derive(Debug, Default)]
@@ -268,10 +248,10 @@ enum DecoderStage {
     DecodingUnknown { key: Key, decoder: ByteVecDecoder },
     #[cfg(feature = "silent-payments")]
     /// Decoding an ECDH share for silent payments.
-    DecodingSpEcdhShare { key: Key, decoder: ValueDecoder<CompressedPublicKeyDecoder> },
+    DecodingSpEcdhShare { key: Key, decoder: ValueDecoder<CompressedPublicKey> },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
-    DecodingSpDleqProof { key: Key, decoder: ValueDecoder<DleqProofDecoder> },
+    DecodingSpDleqProof { key: Key, decoder: ValueDecoder<DleqProof> },
     /// The end-of-map separator has been reached.
     Done(Global),
     /// The decoder has entered a non-recoverable error state.
@@ -487,7 +467,7 @@ impl Decoder for GlobalDecoder {
                     if self.input_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.input_count = Some(count);
+                    self.input_count = Some(count.0);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingOutputCount { key, decoder } => {
@@ -495,7 +475,7 @@ impl Decoder for GlobalDecoder {
                     if self.output_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.output_count = Some(count);
+                    self.output_count = Some(count.0);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTxModifiable { key, decoder } => {
@@ -503,7 +483,7 @@ impl Decoder for GlobalDecoder {
                     if self.tx_modifiable_flags.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.tx_modifiable_flags = Some(flags);
+                    self.tx_modifiable_flags = Some(flags.0);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
@@ -981,7 +961,7 @@ mod tests {
     #[test]
     fn read_limit_expands_for_newtype_decoders() {
         // ValueDecoder wraps a decoder with non-trivial read_limit.
-        assert!(ValueDecoder::<ArrayDecoder<4>>::default().read_limit() > 1);
+        assert!(ValueDecoder::<Count>::default().read_limit() > 1);
         assert!(FlagsValueDecoder::default().read_limit() > 1);
         assert!(CountValueDecoder::default().read_limit() > 1);
     }

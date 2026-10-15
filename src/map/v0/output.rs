@@ -28,7 +28,7 @@ use crate::consts::{
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
 use crate::encoding::native::{
     KeySourceDecoder, OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair, XOnlyPublicKeyDecoder,
+    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair,
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
@@ -36,7 +36,7 @@ use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{SpV0Info, SpV0InfoDecoder, SpV0LabelDecoder};
+use crate::silent_payments::{SpV0Info, SpV0Label};
 
 pub struct OutputMapEncoder<'e> {
     output: &'e Output,
@@ -263,7 +263,7 @@ enum OutputStage {
     },
     DecodingTapInternalKey {
         key: Key,
-        decoder: ValueDecoder<XOnlyPublicKeyDecoder>,
+        decoder: ValueDecoder<XOnlyPublicKey>,
     },
     DecodingTapTree {
         key: Key,
@@ -284,12 +284,12 @@ enum OutputStage {
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Info {
         key: Key,
-        decoder: ValueDecoder<SpV0InfoDecoder>,
+        decoder: ValueDecoder<SpV0Info>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Label {
         key: Key,
-        decoder: ValueDecoder<SpV0LabelDecoder>,
+        decoder: ValueDecoder<SpV0Label>,
     },
     Done(Output),
     Errored,
@@ -562,7 +562,7 @@ impl Decoder for OutputMapDecoder {
                     if self.sp_v0_label.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    self.sp_v0_label = Some(label);
+                    self.sp_v0_label = Some(label.0);
                     self.stage = OutputStage::DecodingSeparator;
                 }
                 OutputStage::Done(_) => return Ok(DecoderStatus::Ready),

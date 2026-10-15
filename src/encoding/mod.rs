@@ -173,33 +173,33 @@ enum ValueDecoderState {
 
 /// Generic decoder (counterpart to [`KeyValueEncoder`]) for a PSBT key/value value.
 ///
-/// Decodes `<valuelen> <value body>` where the inner decoder `D` does not need the length prefix
-/// to determine where the value ends (it is fixed-size or structurally self-delimiting). The
-/// prefix is therefore only validated: `D` must consume exactly `valuelen` bytes, otherwise
-/// [`ValueDecoderError::WrongLength`] is returned.
+/// Decodes `<valuelen> <value body>` where the value type `T: PsbtDecode`'s decoder produces
+/// `T` without needing the length prefix to determine where the value ends (it is fixed-size or
+/// structurally self-delimiting). The prefix is therefore only validated: the inner decoder must
+/// consume exactly `valuelen` bytes, otherwise [`ValueDecoderError::WrongLength`] is returned.
 ///
 /// If a field's value is a length-prefixed blob (a "raw" decoder, such as the consensus decoder for
 /// [`bitcoin::ScriptBuf`]), use that decoder directly instead of wrapping it here.
 #[derive(Debug)]
-pub(crate) struct ValueDecoder<D: Decoder> {
-    inner: D,
+pub(crate) struct ValueDecoder<T: PsbtDecode> {
+    inner: T::Decoder,
     state: ValueDecoderState,
     consumed: usize,
 }
 
-impl<D: Decoder + Default> Default for ValueDecoder<D> {
+impl<T: PsbtDecode> Default for ValueDecoder<T> {
     fn default() -> Self {
         Self {
-            inner: D::default(),
+            inner: T::Decoder::default(),
             state: ValueDecoderState::ReadingPrefix(CompactSizeDecoder::new()),
             consumed: 0,
         }
     }
 }
 
-impl<D: Decoder + Default> Decoder for ValueDecoder<D> {
-    type Output = D::Output;
-    type Error = ValueDecoderError<D::Error>;
+impl<T: PsbtDecode> Decoder for ValueDecoder<T> {
+    type Output = T;
+    type Error = ValueDecoderError<<T::Decoder as Decoder>::Error>;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
         if matches!(self.state, ValueDecoderState::ReadingPrefix(_)) {

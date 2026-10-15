@@ -28,7 +28,7 @@ impl Version {
 
 pub(crate) type VersionKeyValueEncoder<'e> =
     KeyValueEncoder<CompactSizeEncoder, VersionEncoder<'e>>;
-pub(crate) type VersionValueDecoder = ValueDecoder<VersionDecoder>;
+pub(crate) type VersionValueDecoder = ValueDecoder<Version>;
 
 impl Version {
     /// Returns the version number as a `u32`.

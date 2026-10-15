@@ -17,7 +17,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::super::SeparatorEncoder;
-use super::unsigned_tx::{UnsignedTxDecoder, UnsignedTxEncoder};
+use super::unsigned_tx::{UnsignedTx, UnsignedTxEncoder};
 use crate::consts::{
     PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
     PSBT_SEPARATOR,
@@ -25,13 +25,13 @@ use crate::consts::{
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{CompressedPublicKeyDecoder, DleqKeyValueIter, EcdhKeyValueIter};
+use crate::encoding::native::{DleqKeyValueIter, EcdhKeyValueIter};
 use crate::encoding::native::{KeySourceDecoder, XpubKeyValueIter};
 use crate::encoding::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, DleqProofDecoder};
+use crate::silent_payments::DleqProof;
 use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
 use crate::{V0, V2};
 
@@ -181,7 +181,7 @@ enum Stage {
     DecodingKey(KeyDecoder),
     DecodingUnsignedTx {
         key: Key,
-        decoder: ValueDecoder<UnsignedTxDecoder>,
+        decoder: ValueDecoder<UnsignedTx>,
     },
     DecodingXpub {
         key: Key,
@@ -202,12 +202,12 @@ enum Stage {
     #[cfg(feature = "silent-payments")]
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
+        decoder: ValueDecoder<CompressedPublicKey>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<DleqProofDecoder>,
+        decoder: ValueDecoder<DleqProof>,
     },
     Done(V0GlobalInfo),
     Errored,
@@ -386,7 +386,7 @@ impl Decoder for GlobalMapDecoder {
                     if self.tx_version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    let (version, tx_inputs, tx_outputs, lock_time) =
+                    let UnsignedTx { version, inputs: tx_inputs, outputs: tx_outputs, lock_time } =
                         decoder.end().map_err(GlobalDecodeError::UnsignedTx)?;
                     self.tx_version = Some(version);
                     self.tx_inputs = Some(tx_inputs);

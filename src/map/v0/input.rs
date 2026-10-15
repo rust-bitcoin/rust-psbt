@@ -38,17 +38,16 @@ use crate::encoding::native::{
     Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
     PartialSigIter, Ripemd160Iter, ScriptPair, Sha256Iter, SighashPair, TapInternalKeyPair,
     TapKeyOriginDecoder, TapKeyOriginIter, TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair,
-    TapNodeHashDecoder, TapScriptIter, TapScriptSigIter, TaprootSignatureDecoder,
-    XOnlyPublicKeyDecoder,
+    TapScriptIter, TapScriptSigIter, TaprootSignatureDecoder,
 };
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{CompressedPublicKeyDecoder, DleqPairIter, EcdhPairIter};
+use crate::encoding::native::{DleqPairIter, EcdhPairIter};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
-use crate::sighash_type::{PsbtSighashType, SighashTypeDecoder};
+use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, DleqProofDecoder};
+use crate::silent_payments::DleqProof;
 
 pub struct InputMapEncoder<'e> {
     input: &'e Input,
@@ -459,15 +458,15 @@ enum InputStage {
     DecodingKey(KeyDecoder),
     DecodingNonWitnessUtxo {
         key: Key,
-        decoder: ValueDecoder<<Transaction as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<Transaction>,
     },
     DecodingWitnessUtxo {
         key: Key,
-        decoder: ValueDecoder<<TxOut as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<TxOut>,
     },
     DecodingSighashType {
         key: Key,
-        decoder: ValueDecoder<SighashTypeDecoder>,
+        decoder: ValueDecoder<PsbtSighashType>,
     },
     DecodingRedeemScript {
         key: Key,
@@ -483,7 +482,7 @@ enum InputStage {
     },
     DecodingFinalScriptWitness {
         key: Key,
-        decoder: ValueDecoder<<Witness as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<Witness>,
     },
     DecodingTapKeySig {
         key: Key,
@@ -491,11 +490,11 @@ enum InputStage {
     },
     DecodingTapInternalKey {
         key: Key,
-        decoder: ValueDecoder<XOnlyPublicKeyDecoder>,
+        decoder: ValueDecoder<XOnlyPublicKey>,
     },
     DecodingTapMerkleRoot {
         key: Key,
-        decoder: ValueDecoder<TapNodeHashDecoder>,
+        decoder: ValueDecoder<TapNodeHash>,
     },
     DecodingPartialSig {
         key: Key,
@@ -544,12 +543,12 @@ enum InputStage {
     #[cfg(feature = "silent-payments")]
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
+        decoder: ValueDecoder<CompressedPublicKey>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<DleqProofDecoder>,
+        decoder: ValueDecoder<DleqProof>,
     },
     Done(Input),
     Errored,

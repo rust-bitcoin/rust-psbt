@@ -27,14 +27,14 @@ use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
 use crate::encoding::delegates::AmountPair;
 use crate::encoding::native::{
     KeySourceDecoder, OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair, XOnlyPublicKeyDecoder,
+    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair,
 };
 #[cfg(feature = "silent-payments")]
 use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
 use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{SpV0Info, SpV0InfoDecoder, SpV0LabelDecoder};
+use crate::silent_payments::{SpV0Info, SpV0Label};
 
 /// A key-value map for an output of the corresponding index in the unsigned
 /// transaction.
@@ -189,7 +189,7 @@ enum DecoderStage {
     DecodingKey(KeyDecoder),
     DecodingAmount {
         key: Key,
-        decoder: ValueDecoder<<Amount as Decode>::Decoder>,
+        decoder: ValueDecoder<Amount>,
     },
     DecodingScript {
         key: Key,
@@ -209,7 +209,7 @@ enum DecoderStage {
     },
     DecodingTapInternalKey {
         key: Key,
-        decoder: ValueDecoder<XOnlyPublicKeyDecoder>,
+        decoder: ValueDecoder<XOnlyPublicKey>,
     },
     DecodingTapTree {
         key: Key,
@@ -222,12 +222,12 @@ enum DecoderStage {
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Info {
         key: Key,
-        decoder: ValueDecoder<SpV0InfoDecoder>,
+        decoder: ValueDecoder<SpV0Info>,
     },
     #[cfg(feature = "silent-payments")]
     DecodingSpV0Label {
         key: Key,
-        decoder: ValueDecoder<SpV0LabelDecoder>,
+        decoder: ValueDecoder<SpV0Label>,
     },
     DecodingProprietary {
         key: Key,
@@ -498,7 +498,7 @@ impl Decoder for OutputDecoder {
                             key,
                         )));
                     }
-                    self.sp_v0_label = Some(label);
+                    self.sp_v0_label = Some(label.0);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingProprietary { key, decoder } => {
