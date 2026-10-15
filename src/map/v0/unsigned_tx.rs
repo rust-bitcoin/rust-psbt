@@ -25,8 +25,20 @@ use bitcoin_consensus_encoding::{
     IterEncoder, PrefixedBytesEncoder, VecDecoderError, VecDecoderWith,
 };
 
-use crate::encoding::PsbtEncode;
+use crate::encoding::{PsbtDecode, PsbtEncode};
 use crate::version::{VersionDecoder, VersionDecoderError};
+
+/// The unsigned transaction body embedded in a v0 PSBT global map.
+///
+/// Per [BIP-174], this is always the legacy (pre-segwit) transaction format with
+/// empty `scriptSig`s and no witnesses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnsignedTx {
+    pub(crate) version: transaction::Version,
+    pub(crate) inputs: Vec<(Txid, u32, Sequence)>,
+    pub(crate) outputs: Vec<(Amount, ScriptBuf)>,
+    pub(crate) lock_time: absolute::LockTime,
+}
 
 /// Default sequence for unsigned tx inputs. Matches the convention in
 /// [`Input::unsigned_tx_in()`](crate::input::Input::unsigned_tx_in): a
@@ -191,12 +203,7 @@ enum State {
 }
 
 impl Decoder for UnsignedTxDecoder {
-    type Output = (
-        transaction::Version,
-        Vec<(Txid, u32, Sequence)>,
-        Vec<(Amount, ScriptBuf)>,
-        absolute::LockTime,
-    );
+    type Output = UnsignedTx;
     type Error = UnsignedTxDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
@@ -272,8 +279,12 @@ impl Decoder for UnsignedTxDecoder {
     fn end(self) -> Result<Self::Output, Self::Error> {
         match self.state {
             State::Done(version, inputs, outputs, lock_time) =>
-                Ok((version, inputs, outputs, lock_time)),
+                Ok(UnsignedTx { version, inputs, outputs, lock_time }),
             _ => Err(UnsignedTxDecodeError::EarlyEnd),
         }
     }
+}
+
+impl PsbtDecode for UnsignedTx {
+    type Decoder = UnsignedTxDecoder;
 }

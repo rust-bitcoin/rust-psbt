@@ -10,7 +10,7 @@ use bitcoin::blockdata::transaction::{TransactionDecoderError, TxOutDecoderError
 use bitcoin::blockdata::witness::WitnessDecoderError;
 use bitcoin::{bip32, hashes, key, Amount, Sequence};
 use bitcoin_consensus_encoding::{
-    ByteVecDecoderError, CompactSizeDecoderError, Decode, UnexpectedEofError,
+    ByteVecDecoderError, CompactSizeDecoderError, UnexpectedEofError,
 };
 
 use super::Key;
@@ -199,7 +199,7 @@ pub enum OutputDecodeError {
     /// Error decoding the amount value.
     Amount(
         ValueDecoderError<
-            <<Amount as Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+            <<Amount as crate::encoding::PsbtDecode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
         >,
     ),
     /// Error decoding the script pubkey.
@@ -313,7 +313,7 @@ pub enum InputDecodeError {
     /// Error decoding the sequence number).
     Sequence(
         ValueDecoderError<
-            <<Sequence as bitcoin_consensus_encoding::Decode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
+            <<Sequence as crate::encoding::PsbtDecode>::Decoder as bitcoin_consensus_encoding::Decoder>::Error,
         >,
     ),
     /// Error decoding the minimum lock time.

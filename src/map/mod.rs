@@ -58,9 +58,9 @@ use core::fmt;
 
 use bitcoin::hex::DisplayHex;
 use bitcoin_consensus_encoding::{
-    ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder,
-    Decoder2, DecoderStatus, Encoder, Encoder2, Encoder3, EncoderStatus, ExactSizeEncoder,
-    PrefixedBytesEncoder,
+    ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeDecoder, CompactSizeDecoderError,
+    CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2, DecoderStatus, Encoder, Encoder2,
+    Encoder3, EncoderStatus, ExactSizeEncoder, PrefixedBytesEncoder,
 };
 
 use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};
@@ -92,6 +92,31 @@ impl ExactSizeEncoder for SeparatorEncoder {
     // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
     // former does not
     fn len(&self) -> usize { 1 }
+}
+
+/// A PSBT count value, encoded as a compact-size integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Count(pub usize);
+
+/// Decoder for a PSBT count value.
+#[derive(Debug, Default)]
+pub(crate) struct CountDecoder(CompactSizeDecoder);
+
+impl Decoder for CountDecoder {
+    type Output = Count;
+    type Error = CompactSizeDecoderError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.0.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> { self.0.end().map(Count) }
+
+    fn read_limit(&self) -> usize { self.0.read_limit() }
+}
+
+impl PsbtDecode for Count {
+    type Decoder = CountDecoder;
 }
 
 /// The key of a key-value PSBT pair, in its raw byte form.

@@ -118,6 +118,11 @@ impl std::error::Error for SpV0InfoDecodeError {
     }
 }
 
+/// A silent-payments v0 label value (`PSBT_OUT_SP_V0_LABEL`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SpV0Label(pub u32);
+
 /// Decoder for a silent-payments v0 label value (4-byte little-endian u32).
 #[derive(Debug, Default)]
 pub struct SpV0LabelDecoder {
@@ -125,7 +130,7 @@ pub struct SpV0LabelDecoder {
 }
 
 impl Decoder for SpV0LabelDecoder {
-    type Output = u32;
+    type Output = SpV0Label;
     type Error = UnexpectedEofError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
@@ -134,8 +139,12 @@ impl Decoder for SpV0LabelDecoder {
 
     fn end(self) -> Result<Self::Output, Self::Error> {
         let bytes = self.inner.end()?;
-        Ok(u32::from_le_bytes(bytes))
+        Ok(SpV0Label(u32::from_le_bytes(bytes)))
     }
 
     fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for SpV0Label {
+    type Decoder = SpV0LabelDecoder;
 }

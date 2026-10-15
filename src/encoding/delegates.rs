@@ -38,8 +38,7 @@ impl<T: PsbtDelegate> PsbtDecode for T {
 impl PsbtDelegate for absolute::LockTime {}
 pub(crate) type FallbackLockTimeKeyValueEncoder<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
-pub(crate) type FallbackLockTimeValueDecoder =
-    ValueDecoder<<absolute::LockTime as PsbtDecode>::Decoder>;
+pub(crate) type FallbackLockTimeValueDecoder = ValueDecoder<absolute::LockTime>;
 
 /// [`Amount`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Amount {}
@@ -57,7 +56,7 @@ pub(crate) type SequencePair<'e> =
 impl PsbtDelegate for transaction::Version {}
 pub(crate) type TxVersionKeyValueEncoder<'e> =
     KeyValueEncoder<CompactSizeEncoder, <transaction::Version as PsbtEncode>::Encoder<'e>>;
-pub(crate) type TxVersionValueDecoder = ValueDecoder<<transaction::Version as PsbtDecode>::Decoder>;
+pub(crate) type TxVersionValueDecoder = ValueDecoder<transaction::Version>;
 
 /// [`OutPoint`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for OutPoint {}

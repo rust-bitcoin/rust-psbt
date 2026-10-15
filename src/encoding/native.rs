@@ -349,6 +349,10 @@ impl Decoder for TxidDecoder {
     fn read_limit(&self) -> usize { self.inner.read_limit() }
 }
 
+impl PsbtDecode for Txid {
+    type Decoder = TxidDecoder;
+}
+
 /// Error decoding a [`Txid`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxidDecodeError {
@@ -397,6 +401,10 @@ impl Decoder for TapNodeHashDecoder {
     }
 
     fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for TapNodeHash {
+    type Decoder = TapNodeHashDecoder;
 }
 
 /// Error decoding a [`TapNodeHash`].
@@ -448,6 +456,10 @@ impl Decoder for TimeDecoder {
     fn read_limit(&self) -> usize { self.inner.read_limit() }
 }
 
+impl PsbtDecode for absolute::Time {
+    type Decoder = TimeDecoder;
+}
+
 /// Error decoding a minimum lock time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimeDecodeError {
@@ -497,6 +509,10 @@ impl Decoder for HeightDecoder {
     }
 
     fn read_limit(&self) -> usize { self.inner.read_limit() }
+}
+
+impl PsbtDecode for absolute::Height {
+    type Decoder = HeightDecoder;
 }
 
 /// Error decoding a minimum lock height.

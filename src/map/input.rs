@@ -18,7 +18,7 @@ use bitcoin::{
 };
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus,
-    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder,
+    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
 use super::{
@@ -39,22 +39,49 @@ use crate::encoding::delegates::{
     FinalScriptWitnessPair, NonWitnessUtxoPair, SequencePair, WitnessUtxoPair,
 };
 use crate::encoding::native::{
-    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, HeightDecoder,
-    KeySourceDecoder, MinHeightPair, MinTimePair, PartialSigIter, PreviousTxidPair, Ripemd160Iter,
-    ScriptPair, Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginDecoder, TapKeyOriginIter,
-    TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair, TapNodeHashDecoder, TapScriptIter,
-    TapScriptSigIter, TaprootSignatureDecoder, TimeDecoder, TxidDecoder, XOnlyPublicKeyDecoder,
+    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
+    MinHeightPair, MinTimePair, PartialSigIter, PreviousTxidPair, Ripemd160Iter, ScriptPair,
+    Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginDecoder, TapKeyOriginIter,
+    TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
+    TaprootSignatureDecoder,
 };
 #[cfg(feature = "silent-payments")]
-use crate::encoding::native::{CompressedPublicKeyDecoder, DleqPairIter, EcdhPairIter};
-use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::native::{DleqPairIter, EcdhPairIter};
+use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
-use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType, SighashTypeDecoder};
+use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, DleqProofDecoder};
+use crate::silent_payments::DleqProof;
 use crate::SignError;
+
+/// The index of the output being spent, i.e. the `vout` of the previous transaction's outpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Vout(pub u32);
+
+/// Decoder for a PSBT `vout` value (4-byte little-endian).
+#[derive(Debug, Default)]
+pub(crate) struct VoutDecoder(ArrayDecoder<4>);
+
+impl Decoder for VoutDecoder {
+    type Output = Vout;
+    type Error = UnexpectedEofError;
+
+    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
+        self.0.push_bytes(bytes)
+    }
+
+    fn end(self) -> Result<Self::Output, Self::Error> {
+        self.0.end().map(|bytes| Vout(u32::from_le_bytes(bytes)))
+    }
+
+    fn read_limit(&self) -> usize { self.0.read_limit() }
+}
+
+impl PsbtDecode for Vout {
+    type Decoder = VoutDecoder;
+}
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -591,42 +618,42 @@ enum DecoderStage {
     /// Decoding the previous txid.
     DecodingPreviousTxid {
         key: Key,
-        decoder: ValueDecoder<TxidDecoder>,
+        decoder: ValueDecoder<Txid>,
     },
     /// Decoding the spent output index.
     DecodingOutputIndex {
         key: Key,
-        decoder: ValueDecoder<ArrayDecoder<4>>,
+        decoder: ValueDecoder<Vout>,
     },
     /// Decoding a sequence value.
     DecodingSequence {
         key: Key,
-        decoder: ValueDecoder<<Sequence as Decode>::Decoder>,
+        decoder: ValueDecoder<Sequence>,
     },
     /// Decoding a minimum time locktime value.
     DecodingMinTime {
         key: Key,
-        decoder: ValueDecoder<TimeDecoder>,
+        decoder: ValueDecoder<absolute::Time>,
     },
     /// Decoding a minimum height locktime value.
     DecodingMinHeight {
         key: Key,
-        decoder: ValueDecoder<HeightDecoder>,
+        decoder: ValueDecoder<absolute::Height>,
     },
     /// Decoding a non-witness UTXO (full transaction).
     DecodingNonWitnessUtxo {
         key: Key,
-        decoder: ValueDecoder<<Transaction as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<Transaction>,
     },
     /// Decoding a witness UTXO (TxOut).
     DecodingWitnessUtxo {
         key: Key,
-        decoder: ValueDecoder<<TxOut as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<TxOut>,
     },
     /// Decoding a sighash type.
     DecodingSighashType {
         key: Key,
-        decoder: ValueDecoder<SighashTypeDecoder>,
+        decoder: ValueDecoder<PsbtSighashType>,
     },
     /// Decoding a redeem script.
     DecodingRedeemScript {
@@ -646,7 +673,7 @@ enum DecoderStage {
     /// Decoding a final scriptWitness.
     DecodingFinalScriptWitness {
         key: Key,
-        decoder: ValueDecoder<<Witness as crate::encoding::PsbtDecode>::Decoder>,
+        decoder: ValueDecoder<Witness>,
     },
     /// Decoding a taproot key spend signature.
     DecodingTapKeySig {
@@ -656,12 +683,12 @@ enum DecoderStage {
     /// Decoding a taproot internal key.
     DecodingTapInternalKey {
         key: Key,
-        decoder: ValueDecoder<XOnlyPublicKeyDecoder>,
+        decoder: ValueDecoder<XOnlyPublicKey>,
     },
     /// Decoding a taproot merkle root.
     DecodingTapMerkleRoot {
         key: Key,
-        decoder: ValueDecoder<TapNodeHashDecoder>,
+        decoder: ValueDecoder<TapNodeHash>,
     },
     /// Decoding a partial signature.
     DecodingPartialSig {
@@ -722,13 +749,13 @@ enum DecoderStage {
     /// Decoding an ECDH share for silent payments.
     DecodingSpEcdhShare {
         key: Key,
-        decoder: ValueDecoder<CompressedPublicKeyDecoder>,
+        decoder: ValueDecoder<CompressedPublicKey>,
     },
     #[cfg(feature = "silent-payments")]
     /// Decoding a DLEQ proof for silent payments.
     DecodingSpDleqProof {
         key: Key,
-        decoder: ValueDecoder<DleqProofDecoder>,
+        decoder: ValueDecoder<DleqProof>,
     },
     /// The end-of-map separator has been reached.
     Done(Input),
@@ -1002,11 +1029,11 @@ impl Decoder for InputDecoder {
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingOutputIndex { key, decoder } => {
-                    let bytes = decoder.end().map_err(InputDecodeError::OutputIndex)?;
+                    let vout = decoder.end().map_err(InputDecodeError::OutputIndex)?;
                     if self.spent_output_index.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.spent_output_index = Some(u32::from_le_bytes(bytes));
+                    self.spent_output_index = Some(vout.0);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingSequence { key, decoder } => {
