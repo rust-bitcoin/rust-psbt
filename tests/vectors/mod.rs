@@ -14,8 +14,7 @@ use psbt_v2::bitcoin::hex::FromHex;
 use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{OutPoint, PrivateKey, PublicKey, ScriptBuf, TxOut};
 use psbt_v2::{
-    Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0,
-    SignableInput, Signer,
+    Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0, Signer,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -388,14 +387,10 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let inputs_len = psbt.inputs.len();
                 let mut signer = Signer::new(psbt).expect("lock time must be determinable");
                 let sigs = signer.session(|mut session| {
-                    let signable_inputs: Vec<SignableInput> = (0..inputs_len)
-                        .map(|x| {
-                            session.signable_input(x).expect("input is well formed and verifiable")
-                        })
-                        .collect();
+                    let signable_inputs =
+                        session.signable_inputs().expect("inputs are well formed and verifiable");
                     session.get_all(&signable_inputs, &key_map, &secp)
                 });
                 let psbt = signer.apply(sigs).unwrap();
@@ -433,16 +428,9 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let inputs_len = psbt.inputs.len();
                 let mut signer = Signer::new(psbt).expect("lock time must be determinable");
                 let sigs = signer.session(|mut session| {
-                    let mut inputs: Vec<SignableInput> = vec![];
-                    for idx in 0..inputs_len {
-                        match session.assume_checked_input(idx) {
-                            Ok(signable_input) => inputs.push(signable_input),
-                            Err(error) => panic!("unexpected sign error: {:?}", error),
-                        }
-                    }
+                    let inputs = session.assume_checked_inputs().expect("inputs are well formed");
                     session.get_all(&inputs, &key_map, &secp)
                 });
                 let psbt = signer.apply(sigs).unwrap();

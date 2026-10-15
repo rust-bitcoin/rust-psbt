@@ -77,7 +77,7 @@ impl Signer {
     /// # use psbt_v2::bitcoin::{absolute, transaction, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Transaction, TxIn, TxOut};
     /// # use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey};
     /// # use std::collections::BTreeMap;
-    /// # fn psbt() -> Psbt {
+    /// # fn create_psbt() -> Psbt {
     /// #     let secp = Secp256k1::new();
     /// #     let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
     /// #     let pk = key.public_key(&secp);
@@ -104,11 +104,12 @@ impl Signer {
     /// #         })],
     /// #     }
     /// # }
+    /// # let psbt = create_psbt();
     /// let secp = Secp256k1::new();
     /// let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
     /// let keys = BTreeMap::from([(key.public_key(&secp), key)]);
     ///
-    /// let mut signer = Signer::new(psbt()).unwrap();
+    /// let mut signer = Signer::new(psbt).unwrap();
     /// let sigs = signer.session(|mut session| {
     ///     let input = session.signable_input(0).unwrap();
     ///     session.get_input_sigs(&input, &keys, &secp)
@@ -196,54 +197,81 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     ///
     /// The signable input is bound to this session; see the [`SignableInput`] docs for the
     /// checks that are run.
-    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
-        SignableInput::verify(self.psbt, index)
+    ///
+    /// Taproot inputs that are not ANYONECANPAY are rejected with
+    /// [`SignError::AllPrevoutsRequired`]: a taproot sighash commits to every input's
+    /// prevout, so taproot inputs can only be created for a complete input set (see
+    /// [`Self::signable_inputs`]) and can only be signed through [`Self::get_all`].
+    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'id>, SignError> {
+        let signable_input = SignableInput::verify(self.psbt, index)?;
+
+        if matches!(signable_input.output_type, OutputType::Tr)
+            && !signable_input.sighash_type().is_anyone_can_pay()
+        {
+            return Err(SignError::AllPrevoutsRequired);
+        }
+
+        Ok(signable_input)
     }
 
     /// Creates a [`SignableInput`] for `index` against the [`Psbt`], without verifying data.
     ///
     /// This method assumes the caller verified data offline.
-    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
-        SignableInput::assume_checked(self.psbt, index)
+    ///
+    /// Taproot inputs are rejected with [`SignError::AllPrevoutsRequired`]: a taproot sighash
+    /// commits to every input's prevout, so taproot inputs can only be created for a complete input
+    /// set (see [`Self::assume_checked_inputs`]) and can only be signed through [`Self::get_all`].
+    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'id>, SignError> {
+        let signable_input = SignableInput::assume_checked(self.psbt, index)?;
+
+        if matches!(signable_input.output_type, OutputType::Tr)
+            && !signable_input.sighash_type().is_anyone_can_pay()
+        {
+            return Err(SignError::AllPrevoutsRequired);
+        }
+
+        Ok(signable_input)
     }
 
-    /// Strictly creates a [`SignableInput`] for every input.
+    /// Strictly creates the complete set of [`SignableInput`]s for every input.
     ///
     /// All-or-nothing: if any input fails its checks, returns the per-input errors and no signable
     /// inputs.
+    /// inputs. The returned [`AllSignableInputs`] proves every input was validated, which is what
+    /// makes non-ANYONECANPAY taproot inputs signable through [`Self::get_all`].
     pub fn signable_inputs(
         &self,
-    ) -> Result<Vec<SignableInput<'a, 'id>>, BTreeMap<usize, SignError>> {
-        let mut signable_inputs = Vec::new();
-        let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
-        for index in 0..self.psbt.global.input_count {
-            match SignableInput::verify(self.psbt, index) {
-                Ok(input) => signable_inputs.push(input),
-                Err(e) => {
-                    errors.insert(index, e);
-                }
-            }
-        }
-        if errors.is_empty() {
-            Ok(signable_inputs)
-        } else {
-            Err(errors)
-        }
+    ) -> Result<AllSignableInputs<'a, 'id>, BTreeMap<usize, SignError>> {
+        AllSignableInputs::new(self.psbt, SignableInput::verify)
+    }
+
+    /// Creates the complete set of [`SignableInput`]s for every input, without verifying data.
+    ///
+    /// This method assumes the caller verified the inputs' data offline. All-or-nothing: if any
+    /// input is malformed, returns the per-input errors and no signable inputs. The returned
+    /// [`AllSignableInputs`] proves every input was checked, which is what makes non-ANYONECANPAY
+    /// taproot inputs signable through [`Self::get_all`].
+    pub fn assume_checked_inputs(
+        &self,
+    ) -> Result<AllSignableInputs<'a, 'id>, BTreeMap<usize, SignError>> {
+        AllSignableInputs::new(self.psbt, SignableInput::assume_checked)
     }
 
     /// Produces the signatures for a single input without writing them.
     ///
     /// Signs with every key `k` yields for this input's `bip32_derivations`; inputs for which `k`
-    /// holds no key are silently skipped (normal for partial/multisig signing flows). Taproot
-    /// inputs sign nothing (schnorr signing is as yet unsupported).
+    /// holds no key are silently skipped (normal for partial/multisig signing flows).
     ///
     /// The signable input must have been created by this session (enforced by the type system), so
-    /// its sighash policy, script, and amount always agree with this session's [`Psbt`].
+    /// its sighash policy, script, and amount always agree with this session's [`Psbt`]. A signable
+    /// input created by [`Self::signable_input`] or [`Self::assume_checked_input`] cannot ever be a
+    /// non-ANYONECANPAY taproot input, these inputs only exist inside an [`AllSignableInputs`], and
+    /// are signed through [`Self::get_all`], so this method never signs a taproot input.
     ///
     /// This method is infallible, all input-validation ran when the signable input was created.
     pub fn get_input_sigs<C, K>(
         &mut self,
-        input: &SignableInput<'a, 'id>,
+        input: &SignableInput<'id>,
         k: &K,
         secp: &Secp256k1<C>,
     ) -> InputSigs
@@ -251,10 +279,84 @@ impl<'a, 'id> SigningSession<'a, 'id> {
         C: Signing,
         K: GetKey,
     {
-        let (msg, sighash) = input.sighash(self.cache);
-        let Sighash::Ecdsa(sighash_ty) = sighash else {
-            // Taproot inputs sign nothing (schnorr signing is as yet unsupported).
+        self.input_sigs(input, &[], k, secp)
+    }
+
+    /// Produces the signatures for a subset of standalone signable inputs without writing them.
+    ///
+    /// Signs each input with every key `k` yields for it; inputs for which `k` holds no key are
+    /// silently skipped (normal for partial/multisig signing flows).
+    ///
+    /// The inputs must have been created by this session (enforced by the type system) and cannot
+    /// ever be a non-ANYONECANPAY taproot input, these inputs only exist inside an
+    /// [`AllSignableInputs`] and are signed through [`Self::get_all`], so no completeness proof is
+    /// needed: each standalone sighash commits only to its own input's prevout.
+    ///
+    /// This method is infallible, all input-validation ran when the signable inputs were created.
+    pub fn get_some<C, K>(
+        &mut self,
+        inputs: &[SignableInput<'id>],
+        k: &K,
+        secp: &Secp256k1<C>,
+    ) -> Vec<InputSigs>
+    where
+        C: Signing,
+        K: GetKey,
+    {
+        inputs.iter().map(|input| self.input_sigs(input, &[], k, secp)).collect()
+    }
+
+    /// Produces the signatures for every signable input of a complete set without writing them.
+    ///
+    /// This is the only method that signs non-ANYONECANPAY taproot inputs: an [`AllSignableInputs`]
+    /// proves every input of the [`Psbt`] was validated, so the complete prevout slice the taproot
+    /// sighash commits to was collected once at creation.
+    ///
+    /// Taproot inputs themselves sign nothing (schnorr signing is as yet unsupported).
+    ///
+    /// This method is infallible, all input-validation ran when the signable inputs were created.
+    pub fn get_all<C, K>(
+        &mut self,
+        inputs: &AllSignableInputs<'a, 'id>,
+        k: &K,
+        secp: &Secp256k1<C>,
+    ) -> Vec<InputSigs>
+    where
+        C: Signing,
+        K: GetKey,
+    {
+        inputs
+            .inputs
+            .iter()
+            .map(|input| self.input_sigs(input, &inputs.prevouts, k, secp))
+            .collect()
+    }
+
+    /// Produces the signatures for one signable input without writing them.
+    ///
+    /// `all_prevouts` must be the complete prevout slice for non-ANYONECANPAY taproot inputs (the
+    /// `prevouts` field of [`AllSignableInputs`]); it is unused otherwise.
+    fn input_sigs<C, K>(
+        &mut self,
+        input: &SignableInput<'id>,
+        all_prevouts: &[&'a TxOut],
+        k: &K,
+        secp: &Secp256k1<C>,
+    ) -> InputSigs
+    where
+        C: Signing,
+        K: GetKey,
+    {
+        // Taproot inputs sign nothing (schnorr signing is as yet unsupported). Check before
+        // computing the sighash: a taproot sighash commits to every input's prevout, so
+        // computing then discarding it per input is quadratic in the input count.
+        if matches!(input.output_type, OutputType::Tr) {
             return InputSigs { index: input.index, signatures: Vec::new() };
+        }
+
+        let (msg, sighash) = self.sighash(input, all_prevouts);
+        let Sighash::Ecdsa(sighash_ty) = sighash else {
+            unreachable!("taproot inputs sign nothing and return early above")
         };
 
         let psbt_input = self
@@ -285,18 +387,94 @@ impl<'a, 'id> SigningSession<'a, 'id> {
         InputSigs { index: input.index, signatures }
     }
 
-    /// Produces the signatures for every signable input for which the key is available without writing them.
-    pub fn get_all<C, K>(
+    /// Computes the sighash a new signature over `input` commits to.
+    ///
+    /// The [`Sighash`] variant is determined by the input's [`OutputType`].
+    ///
+    /// `all_prevouts` must be the complete prevout slice (the `prevouts` field of
+    /// [`AllSignableInputs`]) when `input` is a non-ANYONECANPAY taproot input, whose sighash
+    /// commits to every input's prevout; the slice is built once per complete set and shared by
+    /// all its taproot inputs.
+    ///
+    /// This method is infallible: the [`SighashCache`] and the [`SignableInput`] are unchangeable,
+    /// so the invariants ensured when the signable input was created stay true for the whole
+    /// signing session.
+    fn sighash(
         &mut self,
-        inputs: &[SignableInput<'a, 'id>],
-        k: &K,
-        secp: &Secp256k1<C>,
-    ) -> Vec<InputSigs>
-    where
-        C: Signing,
-        K: GetKey,
-    {
-        inputs.iter().map(|input| self.get_input_sigs(input, k, secp)).collect()
+        input: &SignableInput<'id>,
+        all_prevouts: &[&'a TxOut],
+    ) -> (Message, Sighash) {
+        match input.output_type {
+            OutputType::Tr => {
+                let tap_ty = input
+                    .sighash_ty
+                    .taproot_hash_ty()
+                    .expect("sighash type validated when the signable input was created");
+                let sighash = if matches!(
+                    tap_ty,
+                    TapSighashType::AllPlusAnyoneCanPay
+                        | TapSighashType::NonePlusAnyoneCanPay
+                        | TapSighashType::SinglePlusAnyoneCanPay
+                ) {
+                    // SIGHASH_ANYONECANPAY commits to only this input's prevout.
+                    self.cache
+                        .taproot_key_spend_signature_hash(
+                            input.index,
+                            &Prevouts::One(input.index, &input.prevout),
+                            tap_ty,
+                        )
+                        .expect("input index in bounds (checked above)")
+                } else {
+                    self.cache
+                        .taproot_key_spend_signature_hash(
+                            input.index,
+                            &Prevouts::All(all_prevouts),
+                            tap_ty,
+                        )
+                        .expect("prevout slice is complete, input index in bounds (checked above)")
+                };
+                (Message::from(sighash), Sighash::Schnorr(tap_ty))
+            }
+            _ => {
+                let ecdsa_ty = input
+                    .sighash_ty
+                    .ecdsa_hash_ty()
+                    .expect("sighash type validated when the signable input was created");
+                let sighash = match input.output_type {
+                    OutputType::Bare | OutputType::Sh => Message::from(
+                        self.cache
+                            .legacy_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                ecdsa_ty.to_u32(),
+                            )
+                            .expect("input index in bounds (checked above)"),
+                    ),
+                    OutputType::Wpkh | OutputType::ShWpkh => Message::from(
+                        self.cache
+                            .p2wpkh_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                input.prevout.value,
+                                ecdsa_ty,
+                            )
+                            .expect("standard sighash type validated at creation"),
+                    ),
+                    OutputType::Wsh | OutputType::ShWsh => Message::from(
+                        self.cache
+                            .p2wsh_signature_hash(
+                                input.index,
+                                &input.script_code,
+                                input.prevout.value,
+                                ecdsa_ty,
+                            )
+                            .expect("standard sighash type validated at creation"),
+                    ),
+                    OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
+                };
+                (sighash, Sighash::Ecdsa(ecdsa_ty))
+            }
+        }
     }
 }
 
@@ -390,21 +568,8 @@ where
     C: Signing,
 {
     move |mut session| {
-        let mut inputs = Vec::new();
-        let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
-        for index in 0..session.psbt.global.input_count {
-            match session.assume_checked_input(index) {
-                Ok(input) => inputs.push(input),
-                Err(e) => {
-                    errors.insert(index, e);
-                }
-            }
-        }
-        if errors.is_empty() {
-            Ok(session.get_all(&inputs, keys, secp))
-        } else {
-            Err(errors)
-        }
+        let inputs = session.assume_checked_inputs()?;
+        Ok(session.get_all(&inputs, keys, secp))
     }
 }
 
@@ -417,14 +582,20 @@ type SessionId<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
 /// Evidence that an input is fit to sign.
 ///
-/// Produced only by a [`SigningSession`], strictly ([`SigningSession::signable_input`]) or trusting
-/// the caller ([`SigningSession::assume_checked_input`]); it borrows the [`Psbt`] for the signable
-/// input's lifetime, so the borrow checker forbids mutating the [`Psbt`] while the struct is alive.
+/// Produced only by a [`SigningSession`]: strictly, as a standalone input
+/// ([`SigningSession::signable_input`], [`SigningSession::assume_checked_input`]), or as part of a
+/// complete set ([`SigningSession::signable_inputs`], [`SigningSession::assume_checked_inputs`]).
+///
+/// A signable input created standalone is never non-ANYONECANPAY taproot, it is rejected with
+/// [`SignError::AllPrevoutsRequired`] at creation, because a non-ANYONECANPAY taproot sighash
+/// commits to every input's prevout and only a complete input set ([`AllSignableInputs`])
+/// guarantees they are all present. Non-ANYONECANPAY taproot inputs therefore only exist inside an
+/// [`AllSignableInputs`] and are signed only through [`SigningSession::get_all`].
 ///
 /// A signable input is identified by the session that created it and is a snapshot of the input's
 /// verified signing data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SignableInput<'a, 'id> {
+pub struct SignableInput<'id> {
     /// The input index this validated input refers to.
     index: usize,
     /// The output type of this input's spent output.
@@ -435,15 +606,28 @@ pub struct SignableInput<'a, 'id> {
     script_code: ScriptBuf,
     /// The sighash type a new signature commits to.
     sighash_ty: PsbtSighashType,
-    /// For taproot inputs, a snapshot of every input's spent output. Empty for non-taproot inputs.
-    spent_outputs: Vec<TxOut>,
-    /// The [`Psbt`] this signable input was created from.
-    ///
-    /// Ties the signable input's lifetime to a shared borrow of the [`Psbt`], so the borrow checker
-    /// forbids mutating the [`Psbt`] while the signable input is alive.
-    psbt: &'a Psbt,
     /// The id of the [`SigningSession`] that created this signable input.
     session_id: SessionId<'id>,
+}
+
+/// The complete set of a [`Psbt`]'s signable inputs, created by
+/// [`SigningSession::signable_inputs`] or [`SigningSession::assume_checked_inputs`].
+///
+/// Completeness holds by construction: the set is built by iterating every input of the [`Psbt`],
+/// all-or-nothing, so holding one proves every input was validated , and, since a non-ANYONECANPAY
+/// taproot input can only be created this way, that every input's funding UTXO is present.
+///
+/// The set carries the complete prevout slice the non-ANYONECANPAY taproot sighash commits to,
+/// collected once at creation, so [`SigningSession::get_all`] signs any number of non-ANYONECANPAY
+/// taproot inputs with a single prevout collection instead of one per input.
+///
+/// The set is opaque: its elements cannot be extracted, so a non-ANYONECANPAY taproot input can
+/// never reach [`SigningSession::get_input_sigs`], non-ANYONECANPAY taproot inputs are signed only
+/// through [`SigningSession::get_all`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AllSignableInputs<'a, 'id> {
+    inputs: Vec<SignableInput<'id>>,
+    prevouts: Vec<&'a TxOut>,
 }
 
 /// The sighash type a new signature over a [`SignableInput`] commits to.
@@ -455,14 +639,14 @@ pub enum Sighash {
     Schnorr(TapSighashType),
 }
 
-impl<'a, 'id> SignableInput<'a, 'id> {
+impl<'id> SignableInput<'id> {
     /// Runs the full BIP-174 signer checks and returns evidence of success.
     ///
     /// This is the untrusted path: in addition to the structural checks of
     /// [`Self::assume_checked`], it verifies the funding UTXO against a full transaction (rejecting
     /// witness-only non-P2TR inputs), checks that the redeem/witness scripts match the
     /// scriptPubKey, and that any existing signatures' sighash types agree with the declared one.
-    fn verify(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn verify(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         let input = Self::check_data(psbt, index)?;
 
         // Strict funding UTXO: a witness-only UTXO cannot be verified for a non-P2TR input.
@@ -518,7 +702,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     ///
     /// Signing with an unattested amount enables the fee-inflation attack: a crafted `witness_utxo`
     /// can overstate an input's value, so the resulting transaction overpays the fee.
-    fn assume_checked(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn assume_checked(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         Self::check_data(psbt, index)
     }
 
@@ -532,7 +716,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     ///
     /// Shared by both [`Self::verify`] and [`Self::assume_checked`]; runs no consistency checks
     /// against the scriptPubKey or existing signatures.
-    fn check_data(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn check_data(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         let input = psbt.checked_input(index).map_err(SignError::IndexOutOfBounds)?;
         let prevout = input.funding_utxo().map_err(SignError::FundingUtxo)?.clone();
         // `output_type` re-derives the funding UTXO, which cannot fail here: any funding error
@@ -578,28 +762,7 @@ impl<'a, 'id> SignableInput<'a, 'id> {
             }
         }
 
-        // For taproot, snapshot every input's spent output: the non-ANYONECANPAY sighash commits
-        // to all of them. The trusted accessor is used uniformly (attested funding data).
-        let spent_outputs = if matches!(output_type, OutputType::Tr) {
-            psbt.inputs
-                .iter()
-                .map(|i| i.funding_utxo().cloned())
-                .collect::<Result<_, _>>()
-                .map_err(SignError::FundingUtxo)?
-        } else {
-            Vec::new()
-        };
-
-        Ok(Self {
-            index,
-            output_type,
-            prevout,
-            script_code,
-            sighash_ty,
-            spent_outputs,
-            psbt,
-            session_id: PhantomData,
-        })
+        Ok(Self { index, output_type, prevout, script_code, sighash_ty, session_id: PhantomData })
     }
 
     /// The input index this evidence refers to.
@@ -613,83 +776,46 @@ impl<'a, 'id> SignableInput<'a, 'id> {
     /// The declared type, or the per-output-type default (Default for taproot, ALL otherwise) when
     /// none is declared.
     pub fn sighash_type(&self) -> PsbtSighashType { self.sighash_ty }
+}
 
-    /// Computes the sighash a new signature over `input` commits to.
-    ///
-    /// The [`Sighash`] variant is determined by the input's [`OutputType`].
-    ///
-    /// This method is infallible, as its only called by [`SigningSession`], the [`SighashCache`]
-    /// and the [`Psbt`] and this same [`SignableInput`] are unchangeable, so the invariants ensured
-    /// by [`SignableInput`] stay true for the whole signing session.
-    pub(crate) fn sighash(&self, cache: &'a mut SighashCache<Transaction>) -> (Message, Sighash) {
-        match self.output_type {
-            OutputType::Tr => {
-                let tap_ty = self
-                    .sighash_ty
-                    .taproot_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = if matches!(
-                    tap_ty,
-                    TapSighashType::AllPlusAnyoneCanPay
-                        | TapSighashType::NonePlusAnyoneCanPay
-                        | TapSighashType::SinglePlusAnyoneCanPay
-                ) {
-                    // SIGHASH_ANYONECANPAY commits to only this input's prevout.
-                    cache
-                        .taproot_key_spend_signature_hash(
-                            self.index,
-                            &Prevouts::One(self.index, &self.prevout),
-                            tap_ty,
-                        )
-                        .expect("input index in bounds (checked above)")
-                } else {
-                    cache
-                        .taproot_key_spend_signature_hash(
-                            self.index,
-                            &Prevouts::All(&self.spent_outputs),
-                            tap_ty,
-                        )
-                        .expect("prevouts size matched, input index in bounds (checked above)")
-                };
-                (Message::from(sighash), Sighash::Schnorr(tap_ty))
-            }
-            _ => {
-                let ecdsa_ty = self
-                    .sighash_ty
-                    .ecdsa_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = match self.output_type {
-                    OutputType::Bare | OutputType::Sh => Message::from(
-                        cache
-                            .legacy_signature_hash(self.index, &self.script_code, ecdsa_ty.to_u32())
-                            .expect("input index in bounds (checked above)"),
-                    ),
-                    OutputType::Wpkh | OutputType::ShWpkh => Message::from(
-                        cache
-                            .p2wpkh_signature_hash(
-                                self.index,
-                                &self.script_code,
-                                self.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Wsh | OutputType::ShWsh => Message::from(
-                        cache
-                            .p2wsh_signature_hash(
-                                self.index,
-                                &self.script_code,
-                                self.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
-                };
-                (sighash, Sighash::Ecdsa(ecdsa_ty))
+impl<'a, 'id> AllSignableInputs<'a, 'id> {
+    /// Builds the complete set from already-validated inputs, collecting their prevouts once.
+    fn new(
+        psbt: &'a Psbt,
+        check: impl Fn(&Psbt, usize) -> Result<SignableInput<'id>, SignError>,
+    ) -> Result<Self, BTreeMap<usize, SignError>> {
+        let mut signable_inputs = Vec::new();
+        let mut prevouts = Vec::new();
+        let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
+        for index in 0..psbt.global.input_count {
+            match check(psbt, index) {
+                Ok(input) => {
+                    signable_inputs.push(input);
+                    prevouts.push(
+                        psbt.checked_input(index)
+                            .expect("input inside bounds, checked above")
+                            .funding_utxo()
+                            .expect("input inside bounds, checked above"),
+                    );
+                }
+                Err(e) => {
+                    errors.insert(index, e);
+                }
             }
         }
+
+        if errors.is_empty() {
+            Ok(Self { inputs: signable_inputs, prevouts })
+        } else {
+            Err(errors)
+        }
     }
+
+    /// The number of signable inputs in the set.
+    pub fn len(&self) -> usize { self.inputs.len() }
+
+    /// Whether the set has no signable inputs.
+    pub fn is_empty(&self) -> bool { self.inputs.is_empty() }
 }
 
 /// Data required to call [`GetKey`] to get the private key to sign an input.
@@ -1176,9 +1302,9 @@ mod test {
     fn sighash_matches_direct_computation() {
         // The signer's sighash must equal an independent SighashCache computation for the input.
         let mut signer = Signer::new(wpkh_psbt()).unwrap();
-        let (msg, ty) = signer.session(|provider| {
-            let input = provider.signable_input(0).unwrap();
-            input.sighash(provider.cache)
+        let (msg, ty) = signer.session(|mut session| {
+            let input = session.signable_input(0).unwrap();
+            session.sighash(&input, &[])
         });
 
         // Recompute independently from the input's (validated) funding UTXO.
@@ -1218,9 +1344,10 @@ mod test {
             })],
         };
         let mut signer = Signer::new(psbt).unwrap();
-        let (msg, ty) = signer.session(|provider| {
-            let input = provider.signable_input(0).expect("taproot passes signer checks");
-            input.sighash(provider.cache)
+        let (msg, ty) = signer.session(|mut session| {
+            let inputs = session.signable_inputs().expect("taproot passes signer checks");
+            let input = &inputs.inputs[0];
+            session.sighash(input, &inputs.prevouts)
         });
 
         // Recompute independently: key-path spend over the single prevout.
@@ -1234,15 +1361,61 @@ mod test {
     }
 
     #[test]
+    fn signable_input_rejects_taproot_but_signable_inputs_accepts_it() {
+        // A standalone signable input is never taproot: a taproot sighash commits to every
+        // input's prevout, so taproot inputs are only created for a complete input set.
+        let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2tr(&Secp256k1::verification_only(), xonly, None);
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+
+        let mut signer = Signer::new(psbt.clone()).unwrap();
+        assert_eq!(
+            signer.session(|p| p.signable_input(0).map(|input| input.index())),
+            Err(SignError::AllPrevoutsRequired)
+        );
+        assert_eq!(
+            signer.session(|p| p.assume_checked_input(0).map(|input| input.index())),
+            Err(SignError::AllPrevoutsRequired)
+        );
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let len = signer
+            .session(|p| p.signable_inputs().map(|inputs| inputs.len()))
+            .expect("complete set accepts taproot");
+        assert_eq!(len, 1);
+    }
+
+    #[test]
+    fn get_some_signs_a_subset_of_standalone_inputs() {
+        let secp = Secp256k1::new();
+        let (mut psbt, key_map) = keyed_psbt();
+        // Duplicate the keyed input so the PSBT has two signable standalone inputs.
+        psbt.inputs.push(psbt.inputs[0].clone());
+        psbt.global.input_count = 2;
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(|mut session| {
+            let first = session.signable_input(0).unwrap();
+            let second = session.signable_input(1).unwrap();
+            session.get_some(&[first, second], &key_map, &secp)
+        });
+
+        assert_eq!(sigs.len(), 2);
+        assert_eq!(sigs.iter().map(|s| s.index).collect::<alloc::vec::Vec<_>>(), vec![0, 1]);
+        assert!(sigs.iter().all(|s| s.signatures.len() == 1));
+    }
+
+    #[test]
     fn sign_input_produces_partial_sig() {
         let secp = Secp256k1::new();
         let (psbt, key_map) = keyed_psbt();
         let pubkey = *key_map.keys().next().unwrap();
 
         let mut signer = Signer::new(psbt).unwrap();
-        let sigs = signer.session(|mut provider| {
-            let input = provider.signable_input(0).unwrap();
-            provider.get_input_sigs(&input, &key_map, &secp)
+        let sigs = signer.session(|mut session| {
+            let input = session.signable_input(0).unwrap();
+            session.get_input_sigs(&input, &key_map, &secp)
         });
         let used: Vec<PublicKey> = sigs.signatures.iter().map(|(pk, _)| *pk).collect();
         let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
