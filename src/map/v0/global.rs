@@ -16,9 +16,9 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
 };
 
-use super::super::global::XpubKeyValueIter;
 #[cfg(feature = "silent-payments")]
 use super::super::global::{DleqKeyValueIter, EcdhKeyValueIter};
+use super::super::global::{VersionValueDecoder, XpubKeyValueIter};
 use super::super::SeparatorEncoder;
 use super::unsigned_tx::{UnsignedTx, UnsignedTxEncoder};
 use crate::consts::{
@@ -33,7 +33,7 @@ use crate::map::framing::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
-use crate::version::{Version, VersionDecoderError, VersionValueDecoder};
+use crate::version::{Version, VersionDecoderError};
 use crate::{V0, V2};
 
 pub(crate) struct GlobalMapEncoder<'e> {

@@ -2,7 +2,7 @@
 
 //! Delegates to consensus encoders for PSBT types.
 //!
-//! This module contains PSBT codec implementations for types ! that have no PSBT-specific encoding
+//! This module contains PSBT codec implementations for types that have no PSBT-specific encoding
 //! logic and can delegate directly to their consensus implementations.
 
 use bitcoin::locktime::absolute;
@@ -35,24 +35,17 @@ impl<T: PsbtDelegate> PsbtDecode for T {
 
 /// [`absolute::LockTime`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for absolute::LockTime {}
-
 /// [`Amount`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Amount {}
-
 /// [`Sequence`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Sequence {}
-
 /// [`transaction::Version`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for transaction::Version {}
-
 /// [`OutPoint`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for OutPoint {}
-
 /// [`Transaction`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Transaction {}
-
 /// [`TxOut`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for TxOut {}
-
 /// [`Witness`] uses its consensus encoding and decoding for PSBT.
 impl PsbtDelegate for Witness {}

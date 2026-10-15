@@ -34,7 +34,7 @@ use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::tx_modifiable_flags::TxModifiableFlags;
-use crate::version::{Version, VersionDecoderError, VersionKeyValueEncoder, VersionValueDecoder};
+use crate::version::{Version, VersionDecoderError, VersionEncoder};
 use crate::{InconsistentKeySourcesError, V2};
 
 /// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
@@ -840,32 +840,37 @@ impl std::error::Error for CombineError {
 
 /// Encoder for an input or output count key-value pair (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
 pub(crate) type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
-/// Encoder for the tx-modifiable‑flags key-value pair (PSBT_GLOBAL_TX_MODIFIABLE).
+/// Encoder for the tx modifiable flags key-value pair (PSBT_GLOBAL_TX_MODIFIABLE).
 pub(crate) type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
 /// Decoder for a count value (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
 pub(crate) type CountValueDecoder = ValueDecoder<Count>;
-/// Decoder for the tx-modifiable‑flags value (PSBT_GLOBAL_TX_MODIFIABLE).
+/// Decoder for the tx modifiable flags value (PSBT_GLOBAL_TX_MODIFIABLE).
 pub(crate) type FlagsValueDecoder = ValueDecoder<TxModifiableFlags>;
+/// Encoder for the version key-value pair (PSBT_GLOBAL_VERSION).
+pub(crate) type VersionKeyValueEncoder<'e> =
+    KeyValueEncoder<CompactSizeEncoder, VersionEncoder<'e>>;
+/// Decoder for the version value (PSBT_GLOBAL_VERSION).
+pub(crate) type VersionValueDecoder = ValueDecoder<Version>;
 /// Iterator yielding xpub key-value encoders (PSBT_GLOBAL_XPUB).
 pub(crate) type XpubKeyValueIter<'e> =
     KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
-/// Encoder for the fallback‑locktime key-value pair (PSBT_GLOBAL_FALLBACK_LOCKTIME).
+/// Encoder for the fallback locktime key-value pair (PSBT_GLOBAL_FALLBACK_LOCKTIME).
 pub(crate) type FallbackLockTimePair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::LockTime as PsbtEncode>::Encoder<'e>>;
-/// Decoder for the fallback‑locktime value (PSBT_GLOBAL_FALLBACK_LOCKTIME).
+/// Decoder for the fallback locktime value (PSBT_GLOBAL_FALLBACK_LOCKTIME).
 pub(crate) type FallbackLockTimeValueDecoder = ValueDecoder<absolute::LockTime>;
-/// Encoder for the transaction‑version key-value pair (PSBT_GLOBAL_TX_VERSION).
+/// Encoder for the transaction version key-value pair (PSBT_GLOBAL_TX_VERSION).
 pub(crate) type TxVersionPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <bitcoin::transaction::Version as PsbtEncode>::Encoder<'e>>;
-/// Decoder for the transaction‑version value (PSBT_GLOBAL_TX_VERSION).
+/// Decoder for the transaction version value (PSBT_GLOBAL_TX_VERSION).
 pub(crate) type TxVersionValueDecoder = ValueDecoder<bitcoin::transaction::Version>;
-/// Iterator yielding ECDH‑share key-value encoders (PSBT_GLOBAL_SP_ECDH_SHARE).
+/// Iterator yielding ECDH share key-value encoders (PSBT_GLOBAL_SP_ECDH_SHARE).
 #[cfg(feature = "silent-payments")]
 pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
     btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
     PSBT_GLOBAL_SP_ECDH_SHARE,
 >;
-/// Iterator yielding DLEQ‑proof key-value encoders (PSBT_GLOBAL_SP_DLEQ).
+/// Iterator yielding DLEQ proof key-value encoders (PSBT_GLOBAL_SP_DLEQ).
 #[cfg(feature = "silent-payments")]
 pub(crate) type DleqKeyValueIter<'e> =
     KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;

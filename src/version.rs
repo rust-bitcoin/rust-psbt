@@ -4,11 +4,10 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, CompactSizeEncoder, Decoder, DecoderStatus, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
 use crate::encoding::{PsbtDecode, PsbtEncode};
-use crate::map::framing::{KeyValueEncoder, ValueDecoder};
 
 /// The PSBT version.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -26,10 +25,6 @@ impl Version {
     /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
     pub const TWO: Self = Self(2);
 }
-
-pub(crate) type VersionKeyValueEncoder<'e> =
-    KeyValueEncoder<CompactSizeEncoder, VersionEncoder<'e>>;
-pub(crate) type VersionValueDecoder = ValueDecoder<Version>;
 
 impl Version {
     /// Returns the version number as a `u32`.
@@ -160,6 +155,7 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+    use crate::map::global::VersionValueDecoder;
 
     #[test]
     fn version_as_u32() {
