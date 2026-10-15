@@ -213,11 +213,10 @@ impl TestCase {
                     let inputs_len = base64_psbt.inputs.len();
                     let mut signer =
                         Signer::new(base64_psbt).expect("lock time must be determinable");
-                    let session = signer.session();
-                    assert!(
-                        (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err()),
-                        "expected sign() to fail"
-                    );
+                    let any_err = signer.session(|session| {
+                        (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
+                    });
+                    assert!(any_err, "expected sign() to fail");
                 }
             }
             Supplementary::FailStrictSign { psbts } => {
@@ -238,11 +237,10 @@ impl TestCase {
                     // getting the signable inputs.
                     let mut signer =
                         Signer::new(base64_psbt).expect("lock time must be determinable");
-                    let session = signer.session();
-                    assert!(
-                        (0..input_len).any(|idx| session.signable_input(idx).is_err()),
-                        "expected signable_input() to fail"
-                    );
+                    let any_err = signer.session(|session| {
+                        (0..input_len).any(|idx| session.signable_input(idx).is_err())
+                    });
+                    assert!(any_err, "expected signable_input() to fail");
                 }
             }
             // Deserialize: the PSBT must parse successfully.
@@ -392,15 +390,14 @@ impl TestCase {
 
                 let inputs_len = psbt.inputs.len();
                 let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                let sigs = {
-                    let mut session = signer.session();
+                let sigs = signer.session(|mut session| {
                     let signable_inputs: Vec<SignableInput> = (0..inputs_len)
                         .map(|x| {
                             session.signable_input(x).expect("input is well formed and verifiable")
                         })
                         .collect();
                     session.get_all(&signable_inputs, &key_map, &secp)
-                };
+                });
                 let psbt = signer.apply(sigs).unwrap();
 
                 assert_eq!(psbt, expected_psbt);
@@ -438,8 +435,7 @@ impl TestCase {
 
                 let inputs_len = psbt.inputs.len();
                 let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                let sigs = {
-                    let mut session = signer.session();
+                let sigs = signer.session(|mut session| {
                     let mut inputs: Vec<SignableInput> = vec![];
                     for idx in 0..inputs_len {
                         match session.assume_checked_input(idx) {
@@ -448,7 +444,7 @@ impl TestCase {
                         }
                     }
                     session.get_all(&inputs, &key_map, &secp)
-                };
+                });
                 let psbt = signer.apply(sigs).unwrap();
 
                 assert_eq!(psbt, expected_psbt);

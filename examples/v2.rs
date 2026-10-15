@@ -236,13 +236,12 @@ impl Bob {
         let xpriv = self.0.master.derive_priv(&self.0.secp, &path)?;
 
         let mut signer = Signer::new(psbt)?;
-        let sigs = {
-            let mut session = signer.session();
+        let sigs = signer.session(|mut session| {
             let inputs: SignableInput = session
                 .signable_input(1)
                 .expect("owned input with full tx prevout should be verifiable");
             session.get_all(&[inputs], &xpriv, &self.0.secp)
-        };
+        });
         let psbt = signer.apply(sigs).unwrap();
         Ok(psbt)
     }
@@ -326,8 +325,7 @@ impl Entity {
 
         let inputs_len = psbt.inputs.len();
         let mut signer = Signer::new(psbt)?;
-        let sigs = {
-            let mut session = signer.session();
+        let sigs = signer.session(|mut session| {
             let mut inputs: Vec<SignableInput> = vec![];
             for index in 0..inputs_len {
                 match session.assume_checked_input(index) {
@@ -336,7 +334,7 @@ impl Entity {
                 }
             }
             session.get_all(&inputs, &xpriv, &self.secp)
-        };
+        });
         let psbt = signer.apply(sigs).unwrap();
         Ok(psbt)
     }

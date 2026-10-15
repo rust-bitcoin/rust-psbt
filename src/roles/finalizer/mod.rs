@@ -244,8 +244,7 @@ mod tests {
         let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
         let inputs_len = psbt.inputs.len();
         let mut signer = Signer::new(psbt).expect("test env, psbt should be well formed");
-        let sigs = {
-            let mut session = signer.session();
+        let sigs = signer.session(|mut session| {
             let inputs: Vec<SignableInput> = (0..inputs_len)
                 .map(|x| {
                     session.assume_checked_input(x).expect(
@@ -255,7 +254,7 @@ mod tests {
                 })
                 .collect();
             session.get_all(&inputs, &xpriv, &secp)
-        };
+        });
         signer
             .apply(sigs)
             .expect("signature created in this same function, should be within bounds")

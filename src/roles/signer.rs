@@ -5,6 +5,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::fmt;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 #[cfg(feature = "std")]
 use std::collections::{HashMap, HashSet};
 
@@ -29,11 +30,12 @@ use crate::{IndexOutOfBoundsError, OutputType, PsbtSighashType, SignError};
 /// transaction stays valid for the lifetime of the [`Signer`]; the cache is reused across signing
 /// calls so the shared sighash intermediates are computed once.
 ///
-/// The session is split into two phases. [`Signer::session`] hands out a [`SigningSession`]
-/// that borrows the [`Psbt`] immutably and creates [`SignableInput`]s tied to that borrow.
+/// The session is split into two phases. [`Signer::session`] lends the [`Psbt`] and the cache to a
+/// [`SigningSession`] for the duration of a closure; the session creates [`SignableInput`]s that
+/// are bound to it, so a signable input can never be used by (or escape) any other session.
 ///
 /// The session produces signatures without writing them; [`Signer::apply`] writes them afterwards,
-/// once the session and its signable inputs are dropped.
+/// once the session closure and its signable inputs are dropped.
 #[derive(Debug)]
 pub struct Signer {
     psbt: Psbt,
@@ -58,16 +60,69 @@ impl Signer {
         self.psbt.unsigned_tx().expect("Signer guarantees lock time can be determined")
     }
 
-    /// Returns a reference to the inner [`Psbt`], e.g. to produce [`SignableInput`]s against it.
+    /// Returns a reference to the inner [`Psbt`].
     pub fn as_psbt(&self) -> &Psbt { &self.psbt }
 
     /// Lends the [`Psbt`] and sighash cache to a [`SigningSession`] for the frozen signing window.
     ///
-    /// The provider creates [`SignableInput`] inputs (tied to the borrow, so the [`Psbt`] cannot be
-    /// mutated while any signable input is alive) and produces signatures without writing them. Call
-    /// [`Signer::apply`] afterwards to write the signatures into the [`Psbt`].
-    pub fn session(&mut self) -> SigningSession<'_> {
-        SigningSession { psbt: &self.psbt, cache: &mut self.cache }
+    /// The session creates [`SignableInput`]s that are bound to it: a signable input can only be
+    /// signed by the session that created it, and cannot outlive the closure. The session produces
+    /// signatures without writing them; call [`Signer::apply`] afterwards to write the signatures
+    /// into the [`Psbt`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use psbt_v2::{Global, Input, Output, Psbt, Signer};
+    /// # use psbt_v2::bitcoin::{absolute, transaction, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Transaction, TxIn, TxOut};
+    /// # use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey};
+    /// # use std::collections::BTreeMap;
+    /// # fn psbt() -> Psbt {
+    /// #     let secp = Secp256k1::new();
+    /// #     let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+    /// #     let pk = key.public_key(&secp);
+    /// #     let prevout = TxOut {
+    /// #         value: Amount::from_sat(1_000),
+    /// #         script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+    /// #     };
+    /// #     let funding = Transaction {
+    /// #         version: transaction::Version::TWO,
+    /// #         lock_time: absolute::LockTime::ZERO,
+    /// #         input: vec![TxIn::default()],
+    /// #         output: vec![prevout.clone()],
+    /// #     };
+    /// #     let mut input = Input::new(&OutPoint { txid: funding.compute_txid(), vout: 0 });
+    /// #     input.witness_utxo = Some(prevout.clone());
+    /// #     input.non_witness_utxo = Some(funding);
+    /// #     input.bip32_derivations.insert(pk, Default::default());
+    /// #     Psbt {
+    /// #         global: Global { input_count: 1, output_count: 1, ..Global::default() },
+    /// #         inputs: vec![input],
+    /// #         outputs: vec![Output::new(TxOut {
+    /// #             value: Amount::from_sat(900),
+    /// #             script_pubkey: ScriptBuf::new(),
+    /// #         })],
+    /// #     }
+    /// # }
+    /// let secp = Secp256k1::new();
+    /// let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+    /// let keys = BTreeMap::from([(key.public_key(&secp), key)]);
+    ///
+    /// let mut signer = Signer::new(psbt()).unwrap();
+    /// let sigs = signer.session(|mut session| {
+    ///     let input = session.signable_input(0).unwrap();
+    ///     session.get_input_sigs(&input, &keys, &secp)
+    /// });
+    /// let psbt = signer.apply([sigs]).unwrap();
+    /// assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+    /// ```
+    ///
+    /// Signable inputs are bound to their issuing session and cannot escape it, so a signable input
+    /// created from one PSBT can never be presented to a session built from a different PSBT.
+    /// Returning one from the session closure is a type error.
+    ///
+    pub fn session<R>(&mut self, f: impl for<'a, 'id> FnOnce(SigningSession<'a, 'id>) -> R) -> R {
+        f(SigningSession { psbt: &self.psbt, cache: &mut self.cache, id: PhantomData })
     }
 
     /// Writes signatures produced by a [`SigningSession`] into the [`Psbt`].
@@ -112,12 +167,18 @@ impl Signer {
 /// While a [`SigningSession`] (or any [`SignableInput`] it created) is alive, the `Signer` is
 /// immutably borrowed, so the `Psbt` cannot be mutated.
 ///
+/// The session is bounded by an unforgeable lifetime `'id`: every [`SignableInput`] it creates
+/// carries the "session id", so a signable input can only be signed by the session that created it, and
+/// cannot outlive the session closure.
+///
 /// The [`SigningSession`] produces signatures without writing them; call [`Signer::apply`] to write them
 /// into the `Psbt` after the session and its signable inputs are dropped.
-pub struct SigningSession<'a> {
+pub struct SigningSession<'a, 'id> {
     psbt: &'a Psbt,
     /// The sighash cache the [`Signer`] is commited to.
     pub(crate) cache: &'a mut SighashCache<Transaction>,
+    /// The unforgeable id [`Signer::session`] uses for this session alone.
+    id: SessionId<'id>,
 }
 
 /// Signatures for one input, produced by [`SigningSession::get_input_sigs`] and written into
@@ -130,20 +191,19 @@ pub struct InputSigs {
     pub signatures: Vec<(PublicKey, ecdsa::Signature)>,
 }
 
-impl<'a> SigningSession<'a> {
+impl<'a, 'id> SigningSession<'a, 'id> {
     /// Strictly creates a [`SignableInput`] for `index` from the borrowed [`Psbt`].
     ///
-    /// See [`SignableInput::verify`].
-    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'a>, SignError> {
+    /// The signable input is bound to this session; see the [`SignableInput`] docs for the
+    /// checks that are run.
+    pub fn signable_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
         SignableInput::verify(self.psbt, index)
     }
 
     /// Creates a [`SignableInput`] for `index` against the [`Psbt`], without verifying data.
     ///
     /// This method assumes the caller verified data offline.
-    ///
-    /// See [`SignableInput::assume_checked`].
-    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'a>, SignError> {
+    pub fn assume_checked_input(&self, index: usize) -> Result<SignableInput<'a, 'id>, SignError> {
         SignableInput::assume_checked(self.psbt, index)
     }
 
@@ -151,7 +211,9 @@ impl<'a> SigningSession<'a> {
     ///
     /// All-or-nothing: if any input fails its checks, returns the per-input errors and no signable
     /// inputs.
-    pub fn signable_inputs(&self) -> Result<Vec<SignableInput<'a>>, BTreeMap<usize, SignError>> {
+    pub fn signable_inputs(
+        &self,
+    ) -> Result<Vec<SignableInput<'a, 'id>>, BTreeMap<usize, SignError>> {
         let mut signable_inputs = Vec::new();
         let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
         for index in 0..self.psbt.global.input_count {
@@ -175,10 +237,13 @@ impl<'a> SigningSession<'a> {
     /// holds no key are silently skipped (normal for partial/multisig signing flows). Taproot
     /// inputs sign nothing (schnorr signing is as yet unsupported).
     ///
+    /// The signable input must have been created by this session (enforced by the type system), so
+    /// its sighash policy, script, and amount always agree with this session's [`Psbt`].
+    ///
     /// This method is infallible, all input-validation ran when the signable input was created.
     pub fn get_input_sigs<C, K>(
         &mut self,
-        input: &SignableInput<'a>,
+        input: &SignableInput<'a, 'id>,
         k: &K,
         secp: &Secp256k1<C>,
     ) -> InputSigs
@@ -223,7 +288,7 @@ impl<'a> SigningSession<'a> {
     /// Produces the signatures for every signable input for which the key is available without writing them.
     pub fn get_all<C, K>(
         &mut self,
-        inputs: &[SignableInput<'a>],
+        inputs: &[SignableInput<'a, 'id>],
         k: &K,
         secp: &Secp256k1<C>,
     ) -> Vec<InputSigs>
@@ -235,15 +300,131 @@ impl<'a> SigningSession<'a> {
     }
 }
 
+/// Returns a session body that strictly verifies and signs the single input at `index` with
+/// every key `keys` yields for it.
+///
+/// Binds `keys` and `secp` now, runs inside a [`Signer::session`] closure later:
+///
+/// ```ignore
+/// let sigs = signer.session(sign_input(0, &keys, &secp))?;
+/// let psbt = signer.apply([sigs?])?;
+/// ```
+///
+/// The input is strictly verified first; see [`SignableInput`] for the checks. For the
+/// caller-attested path use [`sign_input_unchecked`].
+pub fn sign_input<'k, K, C>(
+    index: usize,
+    keys: &'k K,
+    secp: &'k Secp256k1<C>,
+) -> impl for<'a, 'id> FnOnce(SigningSession<'a, 'id>) -> Result<InputSigs, SignError> + 'k
+where
+    K: GetKey,
+    C: Signing,
+{
+    move |mut session| {
+        let input = session.signable_input(index)?;
+        Ok(session.get_input_sigs(&input, keys, secp))
+    }
+}
+
+/// Returns a session body that strictly verifies every input and signs each one with every key
+/// `keys` yields for it.
+///
+/// All-or-nothing: if any input fails its checks, the per-input errors are returned and nothing
+/// is signed. See [`sign_input`] for binding a single input and [`sign_all_unchecked`] for the
+/// caller-attested path.
+pub fn sign_all<'k, K, C>(
+    keys: &'k K,
+    secp: &'k Secp256k1<C>,
+) -> impl for<'a, 'id> FnOnce(
+    SigningSession<'a, 'id>,
+) -> Result<Vec<InputSigs>, BTreeMap<usize, SignError>>
+       + 'k
+where
+    K: GetKey,
+    C: Signing,
+{
+    move |mut session| {
+        let inputs = session.signable_inputs()?;
+        Ok(session.get_all(&inputs, keys, secp))
+    }
+}
+
+/// Returns a session body that signs the single input at `index` with every key `keys` yields
+/// for it, trusting the caller to have verified the input's funding UTXO data out-of-band.
+///
+/// Signing with an unattested amount enables the fee-inflation attack: a crafted `witness_utxo`
+/// can overstate an input's value, so the resulting transaction overpays the fee. For the
+/// strictly verified path use [`sign_input`].
+pub fn sign_input_unchecked<'k, K, C>(
+    index: usize,
+    keys: &'k K,
+    secp: &'k Secp256k1<C>,
+) -> impl for<'a, 'id> FnOnce(SigningSession<'a, 'id>) -> Result<InputSigs, SignError> + 'k
+where
+    K: GetKey,
+    C: Signing,
+{
+    move |mut session| {
+        let input = session.assume_checked_input(index)?;
+        Ok(session.get_input_sigs(&input, keys, secp))
+    }
+}
+
+/// Returns a session body that signs every input with every key `keys` yields for it, trusting
+/// the caller to have verified the inputs' funding UTXO data out-of-band.
+///
+/// All-or-nothing: if any input is malformed, the per-input errors are returned and nothing is
+/// signed. Signing with an unattested amount enables the fee-inflation attack: a crafted
+/// `witness_utxo` can overstate an input's value, so the resulting transaction overpays the fee.
+/// For the strictly verified path use [`sign_all`].
+pub fn sign_all_unchecked<'k, K, C>(
+    keys: &'k K,
+    secp: &'k Secp256k1<C>,
+) -> impl for<'a, 'id> FnOnce(
+    SigningSession<'a, 'id>,
+) -> Result<Vec<InputSigs>, BTreeMap<usize, SignError>>
+       + 'k
+where
+    K: GetKey,
+    C: Signing,
+{
+    move |mut session| {
+        let mut inputs = Vec::new();
+        let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
+        for index in 0..session.psbt.global.input_count {
+            match session.assume_checked_input(index) {
+                Ok(input) => inputs.push(input),
+                Err(e) => {
+                    errors.insert(index, e);
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(session.get_all(&inputs, keys, secp))
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+/// An unforgeable id binding a [`SignableInput`] to the [`SigningSession`] that created it.
+///
+/// `'id` is a higher-ranked lifetime created by [`Signer::session`] on each call. The fn-pointer
+/// `PhantomData` makes it invariant, so a identified value can never be coerced to a different
+/// identifier: only the session that created a signable input can sign with it.
+type SessionId<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
+
 /// Evidence that an input is fit to sign.
 ///
-/// Produced by [`SignableInput::verify`] (the untrusted path) or [`SignableInput::assume_checked`]
-/// (the caller-attested path); both borrow the [`Psbt`] for the signable input's lifetime, so the borrow
-/// checker forbids mutating the [`Psbt`] while the struct is alive.
+/// Produced only by a [`SigningSession`], strictly ([`SigningSession::signable_input`]) or trusting
+/// the caller ([`SigningSession::assume_checked_input`]); it borrows the [`Psbt`] for the signable
+/// input's lifetime, so the borrow checker forbids mutating the [`Psbt`] while the struct is alive.
 ///
-/// A signable input is a snapshot of the input's verified signing data.
+/// A signable input is identified by the session that created it and is a snapshot of the input's
+/// verified signing data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SignableInput<'a> {
+pub struct SignableInput<'a, 'id> {
     /// The input index this validated input refers to.
     index: usize,
     /// The output type of this input's spent output.
@@ -261,6 +442,8 @@ pub struct SignableInput<'a> {
     /// Ties the signable input's lifetime to a shared borrow of the [`Psbt`], so the borrow checker
     /// forbids mutating the [`Psbt`] while the signable input is alive.
     psbt: &'a Psbt,
+    /// The id of the [`SigningSession`] that created this signable input.
+    session_id: SessionId<'id>,
 }
 
 /// The sighash type a new signature over a [`SignableInput`] commits to.
@@ -272,14 +455,14 @@ pub enum Sighash {
     Schnorr(TapSighashType),
 }
 
-impl<'a> SignableInput<'a> {
+impl<'a, 'id> SignableInput<'a, 'id> {
     /// Runs the full BIP-174 signer checks and returns evidence of success.
     ///
     /// This is the untrusted path: in addition to the structural checks of
     /// [`Self::assume_checked`], it verifies the funding UTXO against a full transaction (rejecting
     /// witness-only non-P2TR inputs), checks that the redeem/witness scripts match the
     /// scriptPubKey, and that any existing signatures' sighash types agree with the declared one.
-    pub fn verify(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn verify(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
         let input = Self::check_data(psbt, index)?;
 
         // Strict funding UTXO: a witness-only UTXO cannot be verified for a non-P2TR input.
@@ -335,7 +518,7 @@ impl<'a> SignableInput<'a> {
     ///
     /// Signing with an unattested amount enables the fee-inflation attack: a crafted `witness_utxo`
     /// can overstate an input's value, so the resulting transaction overpays the fee.
-    pub fn assume_checked(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
+    fn assume_checked(psbt: &'a Psbt, index: usize) -> Result<Self, SignError> {
         Self::check_data(psbt, index)
     }
 
@@ -407,7 +590,16 @@ impl<'a> SignableInput<'a> {
             Vec::new()
         };
 
-        Ok(Self { index, output_type, prevout, script_code, sighash_ty, spent_outputs, psbt })
+        Ok(Self {
+            index,
+            output_type,
+            prevout,
+            script_code,
+            sighash_ty,
+            spent_outputs,
+            psbt,
+            session_id: PhantomData,
+        })
     }
 
     /// The input index this evidence refers to.
@@ -415,6 +607,12 @@ impl<'a> SignableInput<'a> {
 
     /// The input's prevout script type, which selects the signing algorithm and the sighash engine path.
     pub fn output_type(&self) -> OutputType { self.output_type }
+
+    /// The sighash type a new signature over this input will commit to.
+    ///
+    /// The declared type, or the per-output-type default (Default for taproot, ALL otherwise) when
+    /// none is declared.
+    pub fn sighash_type(&self) -> PsbtSighashType { self.sighash_ty }
 
     /// Computes the sighash a new signature over `input` commits to.
     ///
@@ -744,6 +942,43 @@ mod test {
     /// Strip the non-witness UTXO to simulate a witness-only input (untrusted-inflatable).
     fn witness_only(psbt: &mut Psbt) { psbt.inputs[0].non_witness_utxo = None; }
 
+    /// A strictly-verifiable single-input P2WPKH PSBT whose input's key is recorded in
+    /// `bip32_derivations`, plus the matching key map (the PSBT's pubkey -> its private key).
+    fn keyed_psbt() -> (Psbt, BTreeMap<PublicKey, PrivateKey>) {
+        use bitcoin::key::PrivateKey;
+        use bitcoin::secp256k1::SecretKey;
+        use bitcoin::Network;
+
+        let secp = Secp256k1::new();
+        let priv_key =
+            PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+        let pubkey = priv_key.public_key(&secp);
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+        let tx_out = TxOut { value: Amount::from_sat(1_000), script_pubkey };
+        let funding_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![tx_out.clone()],
+        };
+        let out_point = OutPoint { txid: funding_tx.compute_txid(), vout: 0 };
+        let mut input = Input::new(&out_point);
+        input.witness_utxo = Some(tx_out);
+        input.non_witness_utxo = Some(funding_tx);
+        input.bip32_derivations.insert(pubkey, bitcoin::bip32::KeySource::default());
+        let psbt = Psbt {
+            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            inputs: vec![input],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(900),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        };
+        let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
+        key_map.insert(pubkey, priv_key);
+        (psbt, key_map)
+    }
+
     /// Builds a single-input PSBT funding `tx_out`, with both witness and non-witness UTXOs set
     /// consistently.
     fn funded_psbt(tx_out: TxOut) -> Psbt {
@@ -941,11 +1176,10 @@ mod test {
     fn sighash_matches_direct_computation() {
         // The signer's sighash must equal an independent SighashCache computation for the input.
         let mut signer = Signer::new(wpkh_psbt()).unwrap();
-        let (msg, ty) = {
-            let provider = signer.session();
+        let (msg, ty) = signer.session(|provider| {
             let input = provider.signable_input(0).unwrap();
             input.sighash(provider.cache)
-        };
+        });
 
         // Recompute independently from the input's (validated) funding UTXO.
         let tx = signer.unsigned_tx();
@@ -984,11 +1218,10 @@ mod test {
             })],
         };
         let mut signer = Signer::new(psbt).unwrap();
-        let (msg, ty) = {
-            let provider = signer.session();
+        let (msg, ty) = signer.session(|provider| {
             let input = provider.signable_input(0).expect("taproot passes signer checks");
             input.sighash(provider.cache)
-        };
+        });
 
         // Recompute independently: key-path spend over the single prevout.
         let tx = signer.unsigned_tx();
@@ -1002,50 +1235,87 @@ mod test {
 
     #[test]
     fn sign_input_produces_partial_sig() {
-        use alloc::collections::BTreeMap;
-
-        use bitcoin::key::PrivateKey;
-        use bitcoin::secp256k1::SecretKey;
-        use bitcoin::Network;
-
         let secp = Secp256k1::new();
-        let priv_key =
-            PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
-        let pubkey = priv_key.public_key(&secp);
-        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
-        let tx_out = TxOut { value: Amount::from_sat(1_000), script_pubkey };
-        let funding_tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![tx_out.clone()],
-        };
-        let out_point = OutPoint { txid: funding_tx.compute_txid(), vout: 0 };
-        let mut input = Input::new(&out_point);
-        input.witness_utxo = Some(tx_out);
-        input.non_witness_utxo = Some(funding_tx);
-        input.bip32_derivations.insert(pubkey, bitcoin::bip32::KeySource::default());
-        let psbt = Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
-            inputs: vec![input],
-            outputs: vec![Output::new(TxOut {
-                value: Amount::from_sat(900),
-                script_pubkey: ScriptBuf::new(),
-            })],
-        };
+        let (psbt, key_map) = keyed_psbt();
+        let pubkey = *key_map.keys().next().unwrap();
 
         let mut signer = Signer::new(psbt).unwrap();
-        let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
-        key_map.insert(pubkey, priv_key);
-        let sigs = {
-            let mut provider = signer.session();
+        let sigs = signer.session(|mut provider| {
             let input = provider.signable_input(0).unwrap();
             provider.get_input_sigs(&input, &key_map, &secp)
-        };
+        });
         let used: Vec<PublicKey> = sigs.signatures.iter().map(|(pk, _)| *pk).collect();
         let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
         assert_eq!(used, vec![pubkey]);
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+    }
+
+    #[test]
+    fn bindable_sign_input_signs_the_bound_input() {
+        let secp = Secp256k1::new();
+        let (psbt, key_map) = keyed_psbt();
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_input(0, &key_map, &secp)).unwrap();
+        assert_eq!(sigs.index, 0);
+        assert_eq!(sigs.signatures.len(), 1);
+        let psbt = signer.apply([sigs]).unwrap();
+        assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+    }
+
+    #[test]
+    fn bindable_sign_all_signs_every_input() {
+        let secp = Secp256k1::new();
+        let (psbt, key_map) = keyed_psbt();
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
+        assert_eq!(sigs.len(), 1);
+        let psbt = signer.apply(sigs).unwrap();
+        assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+    }
+
+    #[test]
+    fn sign_input_is_strict_while_sign_input_unchecked_signs_witness_only() {
+        let secp = Secp256k1::new();
+        let (mut psbt, key_map) = keyed_psbt();
+        witness_only(&mut psbt);
+
+        // Strict: a witness-only non-P2TR input cannot be verified.
+        let mut signer = Signer::new(psbt.clone()).unwrap();
+        assert_eq!(
+            signer.session(sign_input(0, &key_map, &secp)),
+            Err(SignError::FundingUtxo(FundingUtxoError::UnverifiableUtxo))
+        );
+
+        // Unchecked: the caller attests the funding data out-of-band.
+        let sigs = signer.session(sign_input_unchecked(0, &key_map, &secp)).unwrap();
+        assert_eq!(sigs.signatures.len(), 1);
+        let psbt = signer.apply([sigs]).unwrap();
+        assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+    }
+
+    #[test]
+    fn bindable_sign_all_unchecked_signs_witness_only() {
+        let secp = Secp256k1::new();
+        let (mut psbt, key_map) = keyed_psbt();
+        witness_only(&mut psbt);
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all_unchecked(&key_map, &secp)).unwrap();
+        assert_eq!(sigs.len(), 1);
+    }
+
+    #[test]
+    fn bindable_sign_input_reports_out_of_bounds() {
+        let secp = Secp256k1::new();
+        let (psbt, key_map) = keyed_psbt();
+
+        let mut signer = Signer::new(psbt).unwrap();
+        assert_eq!(
+            signer.session(sign_input(1, &key_map, &secp)),
+            Err(SignError::IndexOutOfBounds(IndexOutOfBoundsError::Inputs { index: 1, length: 1 }))
+        );
     }
 
     #[cfg(all(feature = "rand", feature = "std"))]

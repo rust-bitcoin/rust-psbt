@@ -256,8 +256,7 @@ fn sign_then_convert_preserves_signatures() {
 
     let inputs_len = psbt.inputs.len();
     let mut signer = Signer::new(psbt).unwrap();
-    let sigs = {
-        let mut session = signer.session();
+    let sigs = signer.session(|mut session| {
         let inputs: Vec<SignableInput> = (0..inputs_len)
             .map(|x| {
                 session
@@ -266,7 +265,7 @@ fn sign_then_convert_preserves_signatures() {
             })
             .collect();
         session.get_all(&inputs, &xpriv, &secp)
-    };
+    });
     let signed = signer.apply(sigs).unwrap();
 
     let parsed = round_trip_v0(&signed);
