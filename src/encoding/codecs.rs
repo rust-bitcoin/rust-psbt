@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
-//! This module contains [`PsbtEncode`] implementations for types which live outside of rust-psbt
-//! but are not consensus encodable.
+//! This module contains PSBT codec implementations for types which live upstream and whose PSBT
+//! codecs are different from their consensus codecs.
 
 use alloc::borrow::ToOwned as _;
 use alloc::vec::Vec;

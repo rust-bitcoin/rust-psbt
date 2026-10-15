@@ -2,9 +2,8 @@
 
 //! Delegates to consensus encoders for PSBT types.
 //!
-//! This module contains [`PsbtEncode`] implementations for types
-//! that have no PSBT-specific encoding logic and can delegate directly to their
-//! consensus [`bitcoin_consensus_encoding::Encode`] implementations.
+//! This module contains PSBT codec implementations for types ! that have no PSBT-specific encoding
+//! logic and can delegate directly to their consensus implementations.
 
 use bitcoin::locktime::absolute;
 use bitcoin::{transaction, Amount, OutPoint, Sequence, Transaction, TxOut, Witness};

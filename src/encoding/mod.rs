@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: CC0-1.0
 
-//! PSBT encoding using the sans-I/O Encoder trait.
+//! PSBT encoding (an extension of [`bitcoin_consensus_encoding`]).
 //!
-//! This module provides PSBT-specific encoding that leverages the
-//! [`bitcoin_consensus_encoding::Encoder`] trait for a sans-I/O approach. Unlike consensus
-//! encoding, PSBT encoding is specific to the PSBT key-value map format and related structures.
+//! Bitcoin consensus encoding defines how types are serialized for the P2P network
+//! and block chain. PSBT encoding defines how those same types, and a few
+//! PSBT-specific additions, are serialized inside key-value map entries.
+//!
+//! # Traits
+//!
+//! [`PsbtEncode`] and [`PsbtDecode`] mirror [`bitcoin_consensus_encoding::Encode`]
+//! and [`Decode`](bitcoin_consensus_encoding::Decode). They follow the same
+//! sans-I/O pattern (the caller drives a [`bitcoin_consensus_encoding::Encoder`]
+//! or [`Decoder`](bitcoin_consensus_encoding::Decoder)) but produce PSBT-shaped
+//! output rather than consensus-shaped output.
+//!
+//! # Upstream Types
+//!
+//! This module also contains PSBT codec definition for upstream types. These are split into two
+//! groups: [`delegates`] whose PSBT codecs defer to their consensus implementations, and [`codecs`]
+//! whose PSBT codecs differ (or they don't have a consensus implementation to begin with).
 
 pub mod codecs;
 pub mod delegates;
