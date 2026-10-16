@@ -12,7 +12,7 @@ use psbt_v2::bitcoin::key::XOnlyPublicKey;
 use psbt_v2::bitcoin::locktime::absolute;
 use psbt_v2::bitcoin::taproot::TapNodeHash;
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Global, Input, Key, Output, ProprietaryKey, Psbt, PsbtSighashType};
+use psbt_v2::{Count, Global, Input, Key, Output, ProprietaryKey, Psbt, PsbtSighashType};
 
 /// A populated PSBT survives a JSON serialize-deserialize round-trip.
 #[test]
@@ -65,8 +65,8 @@ fn round_trip_json() {
 
     let global = Global {
         version: psbt_v2::V2,
-        input_count: 1,
-        output_count: 1,
+        input_count: Count::from(1),
+        output_count: Count::from(1),
         unknowns: BTreeMap::from([(Key { type_value: 0xfb, key: vec![0x03; 2] }, vec![0xaa; 4])]),
         proprietaries: BTreeMap::from([(
             ProprietaryKey { prefix: b"rust".to_vec(), subtype: 0x02u64, key: vec![0x04; 1] },

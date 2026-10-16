@@ -11,14 +11,13 @@ use bitcoin::transaction;
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin_consensus_encoding::{
-    ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder,
-    EncoderStatus, IterEncoder,
+    ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
 };
 
+use super::count::{Count, CountEncoder};
 use super::framing::{KeyValueEncoder, KeyValueIter, ValueDecoder, ValueDecoderError};
 use super::{
-    Count, Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder,
-    UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
@@ -33,7 +32,7 @@ use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
-use crate::tx_modifiable_flags::TxModifiableFlags;
+use crate::tx_modifiable_flags::{TxModifiableFlags, TxModifiableFlagsEncoder};
 use crate::version::{Version, VersionDecoderError, VersionEncoder};
 use crate::{InconsistentKeySourcesError, V2};
 
@@ -50,9 +49,9 @@ pub struct Global {
     /// A bitfield for various transaction modification flags.
     pub tx_modifiable_flags: TxModifiableFlags,
     /// The number of inputs in this PSBT.
-    pub input_count: usize,
+    pub input_count: Count,
     /// The number of outputs in this PSBT.
-    pub output_count: usize,
+    pub output_count: Count,
     /// A map from xpub to the used key fingerprint and derivation path as defined by BIP 32.
     pub xpubs: BTreeMap<Xpub, KeySource>,
     /// BIP-375: Map from scan public key to ECDH share.
@@ -79,8 +78,8 @@ impl Global {
             tx_version: transaction::Version::TWO,
             fallback_lock_time: None,
             tx_modifiable_flags: TxModifiableFlags::new(),
-            input_count: 0,
-            output_count: 0,
+            input_count: Count::from(0),
+            output_count: Count::from(0),
             xpubs: Default::default(),
             #[cfg(feature = "silent-payments")]
             sp_ecdh_shares: Default::default(),
@@ -246,8 +245,8 @@ pub struct GlobalDecoder {
     /// Required fields.
     version: Option<Version>,
     tx_version: Option<transaction::Version>,
-    input_count: Option<usize>,
-    output_count: Option<usize>,
+    input_count: Option<Count>,
+    output_count: Option<Count>,
     /// Optional / accumulating fields.
     fallback_lock_time: Option<absolute::LockTime>,
     tx_modifiable_flags: Option<TxModifiableFlags>,
@@ -412,7 +411,7 @@ impl Decoder for GlobalDecoder {
                     if self.input_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.input_count = Some(count.0);
+                    self.input_count = Some(count);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingOutputCount { key, decoder } => {
@@ -420,7 +419,7 @@ impl Decoder for GlobalDecoder {
                     if self.output_count.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.output_count = Some(count.0);
+                    self.output_count = Some(count);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTxModifiable { key, decoder } => {
@@ -555,9 +554,9 @@ enum State<'e> {
     Version(VersionKeyValueEncoder<'e>),
     TxVersion(TxVersionPair<'e>),
     FallbackLockTime(FallbackLockTimePair<'e>),
-    InputCount(CountPair),
-    OutputCount(CountPair),
-    Flags(FlagsPair),
+    InputCount(CountPair<'e>),
+    OutputCount(CountPair<'e>),
+    Flags(FlagsPair<'e>),
     Xpubs(IterEncoder<XpubKeyValueIter<'e>>),
     #[cfg(feature = "silent-payments")]
     Ecdh(IterEncoder<EcdhKeyValueIter<'e>>),
@@ -623,21 +622,21 @@ impl<'e> GlobalMapEncoder<'e> {
         )
     }
 
-    fn input_count_key_value(&self) -> CountPair {
+    fn input_count_key_value(&self) -> CountPair<'e> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_INPUT_COUNT),
-            CompactSizeEncoder::new(self.global.input_count),
+            self.global.input_count.psbt_encoder(),
         )
     }
 
-    fn output_count_key_value(&self) -> CountPair {
+    fn output_count_key_value(&self) -> CountPair<'e> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_OUTPUT_COUNT),
-            CompactSizeEncoder::new(self.global.output_count),
+            self.global.output_count.psbt_encoder(),
         )
     }
 
-    fn flags_key_value(&self) -> FlagsPair {
+    fn flags_key_value(&self) -> FlagsPair<'e> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_TX_MODIFIABLE),
             self.global.tx_modifiable_flags.psbt_encoder(),
@@ -791,9 +790,9 @@ impl std::error::Error for CombineError {
 }
 
 /// Encoder for an input or output count key-value pair (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
-pub(crate) type CountPair = KeyValueEncoder<CompactSizeEncoder, CompactSizeEncoder>;
+pub(crate) type CountPair<'e> = KeyValueEncoder<CompactSizeEncoder, CountEncoder<'e>>;
 /// Encoder for the tx modifiable flags key-value pair (PSBT_GLOBAL_TX_MODIFIABLE).
-pub(crate) type FlagsPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<1>>;
+pub(crate) type FlagsPair<'e> = KeyValueEncoder<CompactSizeEncoder, TxModifiableFlagsEncoder<'e>>;
 /// Decoder for a count value (PSBT_GLOBAL_INPUT_COUNT / PSBT_GLOBAL_OUTPUT_COUNT).
 pub(crate) type CountValueDecoder = ValueDecoder<Count>;
 /// Decoder for the tx modifiable flags value (PSBT_GLOBAL_TX_MODIFIABLE).

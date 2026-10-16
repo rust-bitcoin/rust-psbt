@@ -22,8 +22,8 @@ use psbt_v2::bitcoin::{
     Txid,
 };
 use psbt_v2::{
-    sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, Creator, FundingUtxoError,
-    Global, Input, Output, OutputType, Psbt, PsbtSighashType, SignError, Signer,
+    sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, Count, Creator,
+    FundingUtxoError, Global, Input, Output, OutputType, Psbt, PsbtSighashType, SignError, Signer,
 };
 
 thread_local! {
@@ -81,7 +81,11 @@ fn strict_validation_allocations(input_count: u32) -> usize {
         })
         .collect();
     let psbt = Psbt {
-        global: Global { input_count: input_count as usize, output_count: 1, ..Global::default() },
+        global: Global {
+            input_count: Count::from(input_count as usize),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
         inputs,
         outputs: vec![Output::new(TxOut { value: Amount::from_sat(500), script_pubkey: script })],
     };

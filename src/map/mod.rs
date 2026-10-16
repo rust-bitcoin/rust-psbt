@@ -38,6 +38,9 @@ macro_rules! v2_combine_map {
     };
 }
 
+/// PSBT count value (`PSBT_GLOBAL_INPUT_COUNT` / `PSBT_GLOBAL_OUTPUT_COUNT`).
+pub mod count;
+pub use count::Count;
 /// Error types shared by map decoders.
 pub mod error;
 /// Map-level framing: key-value framing and per-field encoder/decoder aliases.
@@ -54,7 +57,8 @@ pub(crate) mod serde;
 pub(crate) mod taproot;
 /// PSBT v0 (BIP-174) map encoders.
 pub mod v0;
-
+/// PSBT output index (`PSBT_IN_OUTPUT_INDEX`).
+pub mod vout;
 use alloc::collections::btree_map;
 use alloc::vec::Vec;
 use core::convert::TryFrom;
@@ -64,10 +68,11 @@ use bitcoin::hex::DisplayHex;
 use bitcoin::key::XOnlyPublicKey;
 use bitcoin::ScriptBuf;
 use bitcoin_consensus_encoding::{
-    ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeDecoder, CompactSizeDecoderError,
-    CompactSizeEncoder, CompactSizeU64Decoder, Decoder, Decoder2, DecoderStatus, Encoder, Encoder2,
-    Encoder3, EncoderStatus, ExactSizeEncoder, PrefixedBytesEncoder,
+    ArrayEncoder, ByteVecDecoder, BytesEncoder, CompactSizeEncoder, CompactSizeU64Decoder, Decoder,
+    Decoder2, DecoderStatus, Encoder, Encoder2, Encoder3, EncoderStatus, ExactSizeEncoder,
+    PrefixedBytesEncoder,
 };
+pub use vout::Vout;
 
 use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};
 use crate::encoding::{PsbtDecode, PsbtEncode};
@@ -99,31 +104,6 @@ impl ExactSizeEncoder for SeparatorEncoder {
     // Preferred constant over `self.0.len()` because the second generates a mutant variant and the
     // former does not
     fn len(&self) -> usize { 1 }
-}
-
-/// A PSBT count value, encoded as a compact-size integer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Count(pub usize);
-
-/// Decoder for a PSBT count value.
-#[derive(Debug, Default)]
-pub(crate) struct CountDecoder(CompactSizeDecoder);
-
-impl Decoder for CountDecoder {
-    type Output = Count;
-    type Error = CompactSizeDecoderError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.0.push_bytes(bytes)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> { self.0.end().map(Count) }
-
-    fn read_limit(&self) -> usize { self.0.read_limit() }
-}
-
-impl PsbtDecode for Count {
-    type Decoder = CountDecoder;
 }
 
 /// The key of a key-value PSBT pair, in its raw byte form.

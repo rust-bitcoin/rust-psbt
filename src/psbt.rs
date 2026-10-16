@@ -180,8 +180,10 @@ impl Decoder for PsbtV2Decoder {
                 DecoderStage::Global(decoder) => {
                     let global = decoder.end().map_err(DeserializeError::DecodeGlobal)?;
                     let input_count = global.input_count;
-                    self.stage =
-                        DecoderStage::Inputs(global, input::InputsDecoder::new(input_count));
+                    self.stage = DecoderStage::Inputs(
+                        global,
+                        input::InputsDecoder::new(usize::from(input_count)),
+                    );
                 }
                 DecoderStage::Inputs(global, decoder) => {
                     let inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
@@ -189,7 +191,7 @@ impl Decoder for PsbtV2Decoder {
                     self.stage = DecoderStage::Outputs(
                         global,
                         inputs,
-                        output::OutputsDecoder::new(output_count),
+                        output::OutputsDecoder::new(usize::from(output_count)),
                     );
                 }
                 DecoderStage::Outputs(global, inputs, decoder) => {
@@ -415,8 +417,11 @@ impl Psbt {
         if index >= self.inputs.len() {
             return Err(IndexOutOfBoundsError::Inputs { index, length: self.inputs.len() });
         }
-        if index >= self.global.input_count {
-            return Err(IndexOutOfBoundsError::Count { index, count: self.global.input_count });
+        if index >= usize::from(self.global.input_count) {
+            return Err(IndexOutOfBoundsError::Count {
+                index,
+                count: usize::from(self.global.input_count),
+            });
         }
         Ok(&self.inputs[index])
     }
@@ -634,11 +639,15 @@ mod tests {
 
     use super::*;
     use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable, Signer};
-    use crate::PsbtSighashType;
+    use crate::{Count, PsbtSighashType};
 
     fn single_input_psbt() -> Psbt {
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(1_000),
@@ -651,7 +660,11 @@ mod tests {
         use crate::bitcoin::hashes::Hash as _;
 
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![Input::new(&OutPoint {
                 txid: Txid::hash(b"some arbitrary bytes"),
                 vout: 0x15,
@@ -718,7 +731,11 @@ mod tests {
     fn deserialize_one_input_no_outputs() {
         use crate::bitcoin::hashes::Hash as _;
         let psbt = Psbt {
-            global: Global { input_count: 1, output_count: 0, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(0),
+                ..Global::default()
+            },
             inputs: vec![Input::new(&OutPoint {
                 txid: Txid::hash(b"some arbitrary bytes"),
                 vout: 0x15,
@@ -846,13 +863,13 @@ mod tests {
             .output(output_with_script())
             .expect("output must be valid");
         assert_eq!(constructor.0.outputs.len(), 1);
-        assert_eq!(constructor.0.global.output_count, 1);
+        assert_eq!(usize::from(constructor.0.global.output_count), 1);
 
         let constructor = Constructor::<OutputsOnlyModifiable>::default()
             .output(output_with_script())
             .expect("output must be valid");
         assert_eq!(constructor.0.outputs.len(), 1);
-        assert_eq!(constructor.0.global.output_count, 1);
+        assert_eq!(usize::from(constructor.0.global.output_count), 1);
     }
 
     #[test]

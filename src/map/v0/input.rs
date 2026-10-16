@@ -27,6 +27,7 @@ use super::super::input::{
 };
 #[cfg(feature = "silent-payments")]
 use super::super::input::{DleqPairIter, EcdhPairIter};
+use super::super::vout::Vout;
 use super::super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
     TapInternalKeyPair, UnknownKeyValueIter,
@@ -1110,7 +1111,7 @@ impl InputMapDecoder {
         let sequence = self.sequence;
         Ok(Input {
             previous_txid: txid,
-            spent_output_index: vout,
+            spent_output_index: Vout::from(vout),
             sequence: Some(sequence),
             min_time: None,
             min_height: None,

@@ -128,11 +128,18 @@ impl From<u8> for TxModifiableFlags {
 
 impl PsbtEncode for TxModifiableFlags {
     type Encoder<'e>
-        = ArrayEncoder<1>
+        = TxModifiableFlagsEncoder<'e>
     where
         Self: 'e;
 
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { ArrayEncoder::without_length_prefix([self.0]) }
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        TxModifiableFlagsEncoder::new(ArrayEncoder::without_length_prefix([self.0]))
+    }
+}
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a single-byte modifiable-flags value.
+    pub struct TxModifiableFlagsEncoder<'e>(ArrayEncoder<1>);
 }
 
 /// Decoder for the single-byte modifiable-flags value.

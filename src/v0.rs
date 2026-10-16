@@ -19,6 +19,7 @@ use crate::encoding::{encode_to_vec, PsbtEncode};
 use crate::error::DeserializeError;
 use crate::map::global::Global;
 use crate::map::input::Input;
+use crate::map::vout::Vout;
 #[cfg(feature = "base64")]
 use crate::psbt::ParsePsbtError;
 use crate::psbt::{MagicEncoder, Psbt, PSBT_MAGIC, PSBT_MAGIC_BYTES, PSBT_SEPARATOR};
@@ -106,12 +107,12 @@ impl PsbtV0 {
     /// # use psbt_v2::Psbt;
     /// # use psbt_v2::PsbtV0;
     /// # use psbt_v2::PsbtV0Decoder;
-    /// # use psbt_v2::{Global, Input, DeserializeError};
+    /// # use psbt_v2::{Count, Global, Input, DeserializeError};
     /// # use psbt_v2::bitcoin::hashes::Hash as _;
     /// # use psbt_v2::bitcoin::{OutPoint, Txid};
     /// # use bitcoin_consensus_encoding::decode_from_slice_unbounded_with_decoder;
     /// # let psbt = Psbt {
-    /// #     global: Global { input_count: 1, output_count: 0, ..Global::default() },
+    /// #     global: Global { input_count: Count::from(1), output_count: Count::from(0), ..Global::default() },
     /// #     inputs: vec![Input::new(&OutPoint { txid: Txid::hash(b"x"), vout: 0 })],
     /// #     outputs: vec![],
     /// # };
@@ -317,7 +318,7 @@ impl Decoder for PsbtV0Decoder {
                     let mut inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
                     for (input, (txid, vout, seq)) in inputs.iter_mut().zip(&tx_inputs) {
                         input.previous_txid = *txid;
-                        input.spent_output_index = *vout;
+                        input.spent_output_index = Vout::from(*vout);
                         input.sequence = Some(*seq);
                     }
                     let out_count = tx_outputs.len();
