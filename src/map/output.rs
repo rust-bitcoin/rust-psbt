@@ -9,13 +9,17 @@ use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf, TxOut};
+#[cfg(feature = "silent-payments")]
+use bitcoin_consensus_encoding::ArrayEncoder;
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
     ExactVecDecoderWith, IterEncoder,
 };
 
+use super::framing::{KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_OUT_AMOUNT, PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
@@ -24,15 +28,10 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::delegates::AmountPair;
-use crate::encoding::native::{
-    KeySourceDecoder, OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair,
-};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::codecs::{KeySourceDecoder, TapTreeDecoder, TapTreeEncoder};
+use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
+use crate::map::taproot::TapKeyOriginDecoder;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
 
@@ -163,7 +162,7 @@ impl Output {
 }
 
 /// Push-based decoder for a single PSBT output map.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct OutputDecoder {
     stage: DecoderStage,
     amount: Option<Amount>,
@@ -182,9 +181,10 @@ pub struct OutputDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingAmount {
@@ -269,28 +269,6 @@ impl DecoderStage {
             PSBT_OUT_PROPRIETARY =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
-        }
-    }
-}
-
-impl Default for OutputDecoder {
-    fn default() -> Self {
-        Self {
-            stage: DecoderStage::DecodingSeparator,
-            amount: None,
-            script_pubkey: None,
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_tree: None,
-            tap_key_origins: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_info: None,
-            #[cfg(feature = "silent-payments")]
-            sp_v0_label: None,
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
         }
     }
 }
@@ -884,6 +862,27 @@ impl std::error::Error for CombineError {
         }
     }
 }
+
+/// Encoder for the tap-script-tree key-value pair (PSBT_OUT_TAP_TREE).
+pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
+/// Encoder for the amount key-value pair (PSBT_OUT_AMOUNT).
+pub(crate) type AmountPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Amount as PsbtEncode>::Encoder<'e>>;
+#[cfg(feature = "silent-payments")]
+/// Encoder for the silent-payments v0 key-value pair (PSBT_OUT_SP_V0_INFO).
+pub(crate) type SpV0InfoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
+#[cfg(feature = "silent-payments")]
+/// Encoder for the silent-payments v0 label key-value pair (PSBT_OUT_SP_V0_LABEL).
+pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+/// Iterator yielding bip-32 derivation entries (PSBT_OUT_BIP32_DERIVATION).
+pub(crate) type OutBip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
+/// Iterator yielding tap-key-origin entries (PSBT_OUT_TAP_BIP32_DERIVATION).
+pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_OUT_TAP_BIP32_DERIVATION,
+>;
 
 #[cfg(test)]
 #[cfg(feature = "std")]

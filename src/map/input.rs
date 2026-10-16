@@ -21,8 +21,10 @@ use bitcoin_consensus_encoding::{
     Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
 };
 
+use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
@@ -35,21 +37,11 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-use crate::encoding::delegates::{
-    FinalScriptWitnessPair, NonWitnessUtxoPair, SequencePair, WitnessUtxoPair,
-};
-use crate::encoding::native::{
-    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
-    MinHeightPair, MinTimePair, PartialSigIter, PreviousTxidPair, Ripemd160Iter, ScriptPair,
-    Sha256Iter, SighashPair, TapInternalKeyPair, TapKeyOriginDecoder, TapKeyOriginIter,
-    TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair, TapScriptIter, TapScriptSigIter,
-    TaprootSignatureDecoder,
-};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqPairIter, EcdhPairIter};
-use crate::encoding::{ExactLenEncoder, KeyValueEncoder, PsbtDecode, PsbtEncode, ValueDecoder};
+use crate::encoding::codecs::{EcdsaSignatureDecoder, KeySourceDecoder, TaprootSignatureDecoder};
+use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
+use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
@@ -575,7 +567,7 @@ impl Input {
 /// Decoder for a single PSBT input map.
 ///
 /// Incrementally decodes `<keypair>* <PSBT_SEPARATOR>`.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InputDecoder {
     stage: DecoderStage,
     previous_txid: Option<Txid>,
@@ -610,9 +602,10 @@ pub struct InputDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum DecoderStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     /// Decoding the previous txid.
@@ -823,44 +816,6 @@ impl DecoderStage {
             PSBT_IN_SP_DLEQ =>
                 Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
-        }
-    }
-}
-
-impl Default for InputDecoder {
-    fn default() -> Self {
-        Self {
-            stage: DecoderStage::DecodingSeparator,
-            previous_txid: None,
-            spent_output_index: None,
-            sequence: None,
-            min_time: None,
-            min_height: None,
-            non_witness_utxo: None,
-            witness_utxo: None,
-            partial_sigs: BTreeMap::default(),
-            sighash_type: None,
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            final_script_sig: None,
-            final_script_witness: None,
-            ripemd160_preimages: BTreeMap::default(),
-            sha256_preimages: BTreeMap::default(),
-            hash160_preimages: BTreeMap::default(),
-            hash256_preimages: BTreeMap::default(),
-            tap_key_sig: None,
-            tap_script_sigs: BTreeMap::default(),
-            tap_scripts: BTreeMap::default(),
-            tap_key_origins: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_merkle_root: None,
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
         }
     }
 }
@@ -1402,12 +1357,10 @@ impl Decoder for InputDecoder {
 /// Decodes a sequence of input maps, one per input.
 pub(crate) type InputsDecoder = ExactVecDecoderWith<InputDecoder>;
 
-type OutputIndexPair = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
-
 /// State of the input map encoder, one key-value pair per variant.
 enum EncoderState<'e> {
     PreviousTxid(PreviousTxidPair<'e>),
-    OutputIndex(OutputIndexPair),
+    OutputIndex(OutputIndexPair<'e>),
     Sequence(SequencePair<'e>),
     MinTime(MinTimePair<'e>),
     MinHeight(MinHeightPair<'e>),
@@ -1505,7 +1458,7 @@ impl<'e> InputMapEncoder<'e> {
         }
     }
 
-    fn output_index_pair(&self) -> OutputIndexPair {
+    fn output_index_pair(&self) -> OutputIndexPair<'_> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_IN_OUTPUT_INDEX),
             ArrayEncoder::without_length_prefix(self.input.spent_output_index.to_le_bytes()),
@@ -1926,6 +1879,82 @@ impl std::error::Error for CombineError {
         }
     }
 }
+
+/// Encoder for the spent-output-index key-value pair (PSBT_IN_OUTPUT_INDEX).
+pub(crate) type OutputIndexPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+/// Encoder for the previous-txid key-value pair (PSBT_IN_PREVIOUS_TXID).
+pub(crate) type PreviousTxidPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Txid as PsbtEncode>::Encoder<'e>>;
+/// Encoder for the sequence key-value pair (PSBT_IN_SEQUENCE).
+pub(crate) type SequencePair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <Sequence as PsbtEncode>::Encoder<'e>>;
+/// Encoder for the required-time-locktime key-value pair (PSBT_IN_REQUIRED_TIME_LOCKTIME).
+pub(crate) type MinTimePair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::Time as PsbtEncode>::Encoder<'e>>;
+/// Encoder for the required-height-locktime key-value pair (PSBT_IN_REQUIRED_HEIGHT_LOCKTIME).
+pub(crate) type MinHeightPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
+/// Encoder for the sighash-type key-value pair (PSBT_IN_SIGHASH_TYPE).
+pub(crate) type SighashPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
+/// Iterator yielding ripemd-160 pre-image entries (PSBT_IN_RIPEMD160).
+pub(crate) type Ripemd160Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
+/// Iterator yielding hash-160 pre-image entries (PSBT_IN_HASH160).
+pub(crate) type Hash160Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
+/// Iterator yielding sha-256 pre-image entries (PSBT_IN_SHA256).
+pub(crate) type Sha256Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
+/// Iterator yielding double-sha-256 pre-image entries (PSBT_IN_HASH256).
+pub(crate) type Hash256Iter<'e> =
+    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
+/// Iterator yielding partial-signature entries (PSBT_IN_PARTIAL_SIG).
+pub(crate) type PartialSigIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, bitcoin::ecdsa::Signature>, PSBT_IN_PARTIAL_SIG>;
+/// Encoder for the taproot key-sig key-value pair (PSBT_IN_TAP_KEY_SIG).
+pub(crate) type TapKeySigPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <bitcoin::taproot::Signature as PsbtEncode>::Encoder<'e>>;
+/// Iterator yielding tap-script-sig entries (PSBT_IN_TAP_SCRIPT_SIG).
+pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, (XOnlyPublicKey, TapLeafHash), bitcoin::taproot::Signature>,
+    PSBT_IN_TAP_SCRIPT_SIG,
+>;
+/// Iterator yielding tap-leaf-script entries (PSBT_IN_TAP_LEAF_SCRIPT).
+pub(crate) type TapScriptIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, ControlBlock, (ScriptBuf, LeafVersion)>,
+    PSBT_IN_TAP_LEAF_SCRIPT,
+>;
+/// Iterator yielding bip-32 derivation entries (PSBT_IN_BIP32_DERIVATION).
+pub(crate) type Bip32DerivationIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_IN_BIP32_DERIVATION>;
+/// Iterator yielding tap-key-origin entries (PSBT_IN_TAP_BIP32_DERIVATION).
+pub(crate) type TapKeyOriginIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    PSBT_IN_TAP_BIP32_DERIVATION,
+>;
+/// Encoder for the non-witness-utxo key-value pair (PSBT_IN_NON_WITNESS_UTXO).
+pub(crate) type NonWitnessUtxoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Transaction>>;
+/// Encoder for the witness-utxo key-value pair (PSBT_IN_WITNESS_UTXO).
+pub(crate) type WitnessUtxoPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <TxOut as PsbtEncode>::Encoder<'e>>;
+/// Encoder for the final-script-witness key-value pair (PSBT_IN_FINAL_SCRIPT_WITNESS).
+pub(crate) type FinalScriptWitnessPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Witness>>;
+#[cfg(feature = "silent-payments")]
+/// Iterator yielding ECDH-share entries for silent payments (PSBT_IN_SP_ECDH_SHARE).
+pub(crate) type EcdhPairIter<'e> = KeyValueIter<
+    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
+    PSBT_IN_SP_ECDH_SHARE,
+>;
+#[cfg(feature = "silent-payments")]
+/// Iterator yielding DLEQ-proof entries for silent payments (PSBT_IN_SP_DLEQ).
+pub(crate) type DleqPairIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_IN_SP_DLEQ>;
+/// Encoder for the tap-merkle-root key-value pair (PSBT_IN_TAP_MERKLE_ROOT).
+pub(crate) type TapMerkleRootPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <TapNodeHash as PsbtEncode>::Encoder<'e>>;
 
 #[cfg(test)]
 #[cfg(feature = "std")]

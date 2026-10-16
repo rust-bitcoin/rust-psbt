@@ -20,8 +20,16 @@ use bitcoin_consensus_encoding::{
     ExactVecDecoderWith, IterEncoder,
 };
 
+use super::super::input::{
+    Bip32DerivationIter, FinalScriptWitnessPair, Hash160Iter, Hash256Iter, PartialSigIter,
+    Ripemd160Iter, Sha256Iter, SighashPair, TapKeyOriginIter, TapKeySigPair, TapMerkleRootPair,
+    TapScriptIter, TapScriptSigIter, WitnessUtxoPair,
+};
+#[cfg(feature = "silent-payments")]
+use super::super::input::{DleqPairIter, EcdhPairIter};
 use super::super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
@@ -33,18 +41,12 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
-use crate::encoding::delegates::{FinalScriptWitnessPair, WitnessUtxoPair};
-use crate::encoding::native::{
-    Bip32DerivationIter, EcdsaSignatureDecoder, Hash160Iter, Hash256Iter, KeySourceDecoder,
-    PartialSigIter, Ripemd160Iter, ScriptPair, Sha256Iter, SighashPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapKeyOriginIter, TapKeySigPair, TapLeafScriptDecoder, TapMerkleRootPair,
-    TapScriptIter, TapScriptSigIter, TaprootSignatureDecoder,
-};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{DleqPairIter, EcdhPairIter};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::codecs::{EcdsaSignatureDecoder, KeySourceDecoder, TaprootSignatureDecoder};
+use crate::encoding::PsbtEncode;
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
+use crate::map::framing::{KeyValueEncoder, ValueDecoder};
+use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
@@ -451,9 +453,10 @@ impl<'e> From<core::slice::Iter<'e, crate::input::Input>> for Inputs<'e> {
 }
 
 /// Internal stages of the v0 input map decoder.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum InputStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingNonWitnessUtxo {
@@ -670,7 +673,7 @@ pub(crate) struct InputMapDecoder {
 impl Default for InputMapDecoder {
     fn default() -> Self {
         Self {
-            stage: InputStage::DecodingSeparator,
+            stage: InputStage::default(),
             txid: Txid::all_zeros(),
             vout: 0,
             sequence: Sequence::MAX,

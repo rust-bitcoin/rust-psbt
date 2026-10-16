@@ -16,8 +16,12 @@ use bitcoin_consensus_encoding::{
     ExactVecDecoderWith, IterEncoder,
 };
 
+use super::super::output::{OutBip32DerivationIter, OutTapKeyOriginIter, TapTreePair};
+#[cfg(feature = "silent-payments")]
+use super::super::output::{SpV0InfoPair, SpV0LabelPair};
 use super::super::{
-    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, SeparatorEncoder, UnknownKeyValueIter,
+    Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
+    TapInternalKeyPair, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
@@ -26,14 +30,11 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
-use crate::encoding::native::{
-    KeySourceDecoder, OutBip32DerivationIter, OutTapKeyOriginIter, ScriptPair, TapInternalKeyPair,
-    TapKeyOriginDecoder, TapTreeDecoder, TapTreePair,
-};
-#[cfg(feature = "silent-payments")]
-use crate::encoding::native::{SpV0InfoPair, SpV0LabelPair};
-use crate::encoding::{KeyValueEncoder, PsbtEncode, ValueDecoder};
+use crate::encoding::codecs::{KeySourceDecoder, TapTreeDecoder};
+use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
+use crate::map::framing::{KeyValueEncoder, ValueDecoder};
+use crate::map::taproot::TapKeyOriginDecoder;
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
@@ -244,9 +245,10 @@ impl<'e> From<core::slice::Iter<'e, crate::Output>> for Outputs<'e> {
 }
 
 /// Internal stages of the v0 output map decoder.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[allow(clippy::large_enum_variant)]
 enum OutputStage {
+    #[default]
     DecodingSeparator,
     DecodingKey(KeyDecoder),
     DecodingRedeemScript {
@@ -339,7 +341,7 @@ impl OutputStage {
 }
 
 /// Decoder for a single v0 output map.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct OutputMapDecoder {
     stage: OutputStage,
     amount: Amount,
@@ -356,28 +358,6 @@ pub(crate) struct OutputMapDecoder {
     sp_v0_label: Option<u32>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     unknowns: BTreeMap<Key, Vec<u8>>,
-}
-
-impl Default for OutputMapDecoder {
-    fn default() -> Self {
-        Self {
-            stage: OutputStage::DecodingSeparator,
-            amount: Amount::from_sat(0),
-            script_pubkey: ScriptBuf::new(),
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_tree: None,
-            tap_key_origins: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_info: None,
-            #[cfg(feature = "silent-payments")]
-            sp_v0_label: None,
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-        }
-    }
 }
 
 impl OutputMapDecoder {

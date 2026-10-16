@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: CC0-1.0
 
-//! This module contains [`PsbtEncode`] implementations for types which live outside of rust-psbt
-//! but are not consensus encodable.
+//! This module contains PSBT codec implementations for types which live upstream and whose PSBT
+//! codecs are different from their consensus codecs.
 
 use alloc::borrow::ToOwned as _;
-use alloc::collections::btree_map;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::BitOr as _;
@@ -23,23 +22,7 @@ use bitcoin_consensus_encoding::{
     EncoderStatus, ExactSizeEncoder, IterEncoder, UnexpectedEofError,
 };
 
-use super::{
-    BytesKeyValueIter, KeyValueIter, PrefixedSliceEncoder, PsbtDecode, PsbtEncode, SliceEncoder,
-};
-#[cfg(feature = "silent-payments")]
-use crate::consts::{
-    PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE, PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE,
-};
-use crate::consts::{
-    PSBT_GLOBAL_XPUB, PSBT_IN_BIP32_DERIVATION, PSBT_IN_HASH160, PSBT_IN_HASH256,
-    PSBT_IN_PARTIAL_SIG, PSBT_IN_RIPEMD160, PSBT_IN_SHA256, PSBT_IN_TAP_BIP32_DERIVATION,
-    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_OUT_BIP32_DERIVATION,
-    PSBT_OUT_TAP_BIP32_DERIVATION,
-};
-use crate::encoding::KeyValueEncoder;
-use crate::sighash_type::PsbtSighashType;
-#[cfg(feature = "silent-payments")]
-use crate::silent_payments::{DleqProof, SpV0Info};
+use super::{PsbtDecode, PsbtEncode, SliceEncoder};
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`Xpub`].
@@ -56,9 +39,6 @@ impl PsbtEncode for Xpub {
         XpubEncoder::new(ArrayEncoder::without_length_prefix(self.encode()))
     }
 }
-
-pub(crate) type XpubKeyValueIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, Xpub, KeySource>, PSBT_GLOBAL_XPUB>;
 
 /// Decoder for a serialized [`Xpub`].
 #[derive(Debug, Default)]
@@ -239,9 +219,6 @@ impl PsbtEncode for absolute::Time {
     }
 }
 
-pub(crate) type MinTimePair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::Time as PsbtEncode>::Encoder<'e>>;
-
 impl PsbtEncode for absolute::Height {
     type Encoder<'e>
         = ArrayEncoder<4>
@@ -253,12 +230,6 @@ impl PsbtEncode for absolute::Height {
     }
 }
 
-pub(crate) type MinHeightPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
-
-pub(crate) type SighashPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
-
 impl PsbtEncode for XOnlyPublicKey {
     type Encoder<'e>
         = ArrayEncoder<32>
@@ -269,9 +240,6 @@ impl PsbtEncode for XOnlyPublicKey {
         ArrayEncoder::without_length_prefix(self.serialize())
     }
 }
-
-pub(crate) type TapInternalKeyPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <XOnlyPublicKey as PsbtEncode>::Encoder<'e>>;
 
 /// Decoder for an [`XOnlyPublicKey`] value (32 bytes).
 #[derive(Debug, Default)]
@@ -560,34 +528,16 @@ macro_rules! impl_hash_encoder {
 
 impl_hash_encoder!(Txid, 32);
 
-pub(crate) type PreviousTxidPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <Txid as PsbtEncode>::Encoder<'e>>;
-
 impl_hash_encoder!(ripemd160::Hash, 20);
-
-pub(crate) type Ripemd160Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, ripemd160::Hash, Vec<u8>>, PSBT_IN_RIPEMD160>;
 
 impl_hash_encoder!(hash160::Hash, 20);
 
-pub(crate) type Hash160Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, hash160::Hash, Vec<u8>>, PSBT_IN_HASH160>;
-
 impl_hash_encoder!(sha256::Hash, 32);
-
-pub(crate) type Sha256Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, sha256::Hash, Vec<u8>>, PSBT_IN_SHA256>;
 
 impl_hash_encoder!(sha256d::Hash, 32);
 
-pub(crate) type Hash256Iter<'e> =
-    BytesKeyValueIter<btree_map::Iter<'e, sha256d::Hash, Vec<u8>>, PSBT_IN_HASH256>;
-
 impl_hash_encoder!(TapLeafHash, 32);
 impl_hash_encoder!(TapNodeHash, 32);
-
-pub(crate) type TapMerkleRootPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <TapNodeHash as PsbtEncode>::Encoder<'e>>;
 
 impl PsbtEncode for LeafVersion {
     type Encoder<'e>
@@ -610,9 +560,6 @@ impl PsbtEncode for ScriptBuf {
         BytesEncoder::without_length_prefix(self.as_bytes())
     }
 }
-
-pub(crate) type ScriptPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <ScriptBuf as PsbtEncode>::Encoder<'e>>;
 
 /// Encoder for a [`PublicKey`].
 pub enum PublicKeyEncoder {
@@ -688,25 +635,6 @@ impl PsbtEncode for ecdsa::Signature {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
 }
 
-pub(crate) type PartialSigIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, ecdsa::Signature>, PSBT_IN_PARTIAL_SIG>;
-
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a `(XOnlyPublicKey, TapLeafHash)` composite (32 byte + 32 byte).
-    pub struct XOnlyLeafHashPairEncoder<'e>(Encoder2<ArrayEncoder<32>, ArrayEncoder<32>>);
-}
-
-impl PsbtEncode for (XOnlyPublicKey, TapLeafHash) {
-    type Encoder<'e>
-        = XOnlyLeafHashPairEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        XOnlyLeafHashPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
-    }
-}
-
 /// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
 pub struct TapSigEncoder(taproot::serialized_signature::SerializedSignature);
 
@@ -728,30 +656,6 @@ impl PsbtEncode for taproot::Signature {
     type Encoder<'e> = TapSigEncoder;
 
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
-}
-
-pub(crate) type TapKeySigPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <taproot::Signature as PsbtEncode>::Encoder<'e>>;
-
-pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, (XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    PSBT_IN_TAP_SCRIPT_SIG,
->;
-
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a `(ScriptBuf, LeafVersion)` composite (`script bytes + 1 byte for version tag`).
-    pub struct ScriptBufLeafPairEncoder<'e>(Encoder2<BytesEncoder<'e>, ArrayEncoder<1>>);
-}
-
-impl PsbtEncode for (ScriptBuf, LeafVersion) {
-    type Encoder<'e>
-        = ScriptBufLeafPairEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        ScriptBufLeafPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
-    }
 }
 
 /// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
@@ -841,8 +745,6 @@ impl PsbtEncode for TapTree {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { TapTreeEncoder::new(self) }
 }
 
-pub(crate) type TapTreePair<'e> = KeyValueEncoder<CompactSizeEncoder, TapTreeEncoder<'e>>;
-
 /// Decoder for a [`TapTree`] value.
 #[derive(Debug, Default)]
 pub struct TapTreeDecoder {
@@ -914,27 +816,6 @@ impl std::error::Error for TapTreeDecodeError {
 }
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a `(Vec<TapLeafHash>, KeySource)` composite: `count <hash*a> <key source>` where `count` is a compact-size prefix.
-    pub struct LeafHashVecKeySourceEncoder<'e>(
-        Encoder2<PrefixedSliceEncoder<'e, TapLeafHash>, KeySourceEncoder<'e>>
-    );
-}
-
-impl PsbtEncode for (Vec<TapLeafHash>, KeySource) {
-    type Encoder<'e>
-        = LeafHashVecKeySourceEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        LeafHashVecKeySourceEncoder::new(Encoder2::new(
-            <PrefixedSliceEncoder<'_, TapLeafHash>>::new(self.0.as_slice()),
-            self.1.psbt_encoder(),
-        ))
-    }
-}
-
-bitcoin_consensus_encoding::encoder_newtype_exact! {
     /// Encoder for a serialized [`ControlBlock`] (1 byte parity/version, 32 bytes key, then 32 bytes per merkle node, borrowed without copies).
     pub struct ControlBlockEncoder<'e>(Encoder2<Encoder2<ArrayEncoder<1>, ArrayEncoder<32>>, SliceEncoder<'e, TapNodeHash>>);
 }
@@ -957,19 +838,6 @@ impl PsbtEncode for ControlBlock {
         ControlBlockEncoder::new(Encoder2::new(head, nodes))
     }
 }
-
-pub(crate) type TapScriptIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, ControlBlock, (ScriptBuf, LeafVersion)>,
-    PSBT_IN_TAP_LEAF_SCRIPT,
->;
-
-pub(crate) type Bip32DerivationIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_IN_BIP32_DERIVATION>;
-
-pub(crate) type TapKeyOriginIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    PSBT_IN_TAP_BIP32_DERIVATION,
->;
 
 impl PsbtEncode for CompressedPublicKey {
     type Encoder<'e>
@@ -1036,33 +904,6 @@ impl std::error::Error for CompressedPublicKeyDecodeError {
         }
     }
 }
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type EcdhKeyValueIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
-    PSBT_GLOBAL_SP_ECDH_SHARE,
->;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type EcdhPairIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, CompressedPublicKey, CompressedPublicKey>,
-    PSBT_IN_SP_ECDH_SHARE,
->;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type SpV0InfoPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <SpV0Info as PsbtEncode>::Encoder<'e>>;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type SpV0LabelPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
-
-pub(crate) type OutBip32DerivationIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_OUT_BIP32_DERIVATION>;
-
-pub(crate) type OutTapKeyOriginIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    PSBT_OUT_TAP_BIP32_DERIVATION,
->;
 
 /// Decoder for a [`taproot::Signature`] value.
 #[derive(Debug, Default)]
@@ -1163,151 +1004,6 @@ impl std::error::Error for EcdsaSignatureDecodeError {
         }
     }
 }
-
-/// Decoder for a tap leaf script value: `(ScriptBuf, LeafVersion)`.
-#[derive(Debug, Default)]
-pub struct TapLeafScriptDecoder {
-    inner: ByteVecDecoder,
-}
-
-impl Decoder for TapLeafScriptDecoder {
-    type Output = (ScriptBuf, LeafVersion);
-    type Error = TapLeafScriptDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(TapLeafScriptDecodeError::ByteVec)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(TapLeafScriptDecodeError::ByteVec)?;
-        if value.is_empty() {
-            return Err(TapLeafScriptDecodeError::Empty);
-        }
-        let last = value.len() - 1;
-        let script = ScriptBuf::from_bytes(value[..last].to_vec());
-        let ver = LeafVersion::from_consensus(value[last])
-            .map_err(|_| TapLeafScriptDecodeError::InvalidLeafVersion)?;
-        Ok((script, ver))
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-/// Error decoding a tap leaf script.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TapLeafScriptDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is empty (needs at least a leaf version byte).
-    Empty,
-    /// The last byte is not a valid leaf version.
-    InvalidLeafVersion,
-}
-
-impl fmt::Display for TapLeafScriptDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding tap leaf script: {e}"),
-            Self::Empty => write!(f, "tap leaf script value is empty"),
-            Self::InvalidLeafVersion => write!(f, "invalid leaf version in tap leaf script"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for TapLeafScriptDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::Empty | Self::InvalidLeafVersion => None,
-        }
-    }
-}
-
-/// Decoder for an output tap key origin value: `(Vec<TapLeafHash>, KeySource)`.
-#[derive(Debug, Default)]
-pub struct TapKeyOriginDecoder {
-    inner: ByteVecDecoder,
-}
-
-impl Decoder for TapKeyOriginDecoder {
-    type Output = (Vec<TapLeafHash>, KeySource);
-    type Error = TapKeyOriginDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(TapKeyOriginDecodeError::ByteVec)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(TapKeyOriginDecodeError::ByteVec)?;
-
-        if value.is_empty() {
-            return Err(TapKeyOriginDecodeError::MissingFingerprint);
-        }
-
-        let count = value[0] as usize;
-        let hash_end = 1 + count * 32;
-        let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
-            .chunks_exact(32)
-            .map(|chunk| TapLeafHash::from_slice(chunk).expect("32 bytes"))
-            .collect();
-
-        if value.len() < hash_end + 4 {
-            return Err(TapKeyOriginDecodeError::MissingFingerprint);
-        }
-
-        let fprint = bip32::Fingerprint::from(
-            <[u8; 4]>::try_from(&value[hash_end..hash_end + 4]).expect("4 bytes"),
-        );
-
-        let mut dpath: Vec<ChildNumber> = Default::default();
-        for chunk in value[hash_end + 4..].chunks_exact(4) {
-            let index = u32::from_le_bytes(chunk.try_into().expect("4 bytes"));
-            dpath.push(ChildNumber::from(index));
-        }
-
-        let ks = (fprint, bip32::DerivationPath::from(dpath));
-        Ok((leaf_hashes, ks))
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-/// Error decoding an output tap key origin value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TapKeyOriginDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value does not contain a valid fingerprint.
-    MissingFingerprint,
-}
-
-impl fmt::Display for TapKeyOriginDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding tap key origin: {e}"),
-            Self::MissingFingerprint => write!(f, "tap key origin missing fingerprint"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for TapKeyOriginDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::MissingFingerprint => None,
-        }
-    }
-}
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type DleqKeyValueIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_GLOBAL_SP_DLEQ>;
-
-#[cfg(feature = "silent-payments")]
-pub(crate) type DleqPairIter<'e> =
-    KeyValueIter<btree_map::Iter<'e, CompressedPublicKey, DleqProof>, PSBT_IN_SP_DLEQ>;
 
 #[cfg(test)]
 mod tests {
