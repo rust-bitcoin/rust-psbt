@@ -33,6 +33,7 @@ use crate::map::framing::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
+use crate::tx_modifiable_flags::TxModifiableFlags;
 use crate::version::{Version, VersionDecoderError};
 use crate::{V0, V2};
 
@@ -295,7 +296,7 @@ impl Decoder for GlobalMapDecoder {
                                 output_count: tx_outputs.len(),
                                 // v0 has no PSBT_GLOBAL_TX_MODIFIABLE key, but we are assuming
                                 // construction is over and setting all to unmodifiable.
-                                tx_modifiable_flags: 0,
+                                tx_modifiable_flags: TxModifiableFlags::new(),
                                 // The PSBT is now in v2 form.
                                 version: V2,
                                 xpubs: core::mem::take(&mut self.xpubs),
