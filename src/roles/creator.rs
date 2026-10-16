@@ -45,19 +45,19 @@ impl Creator {
 
     /// Sets the "has sighash single" flag in then transaction modifiable flags.
     pub fn sighash_single(mut self) -> Self {
-        self.0.global.set_sighash_single_flag();
+        self.0.global.tx_modifiable_flags.set_sighash_single();
         self
     }
 
     /// Sets the inputs modifiable bit in the transaction modifiable flags.
     pub fn inputs_modifiable(mut self) -> Self {
-        self.0.global.set_inputs_modifiable_flag();
+        self.0.global.tx_modifiable_flags.set_inputs_modifiable();
         self
     }
 
     /// Sets the outputs modifiable bit in the transaction modifiable flags.
     pub fn outputs_modifiable(mut self) -> Self {
-        self.0.global.set_outputs_modifiable_flag();
+        self.0.global.tx_modifiable_flags.set_outputs_modifiable();
         self
     }
 
@@ -93,8 +93,8 @@ impl Creator {
     /// ```
     pub fn constructor_modifiable(self) -> Constructor<Modifiable> {
         let mut psbt = self.0;
-        psbt.global.set_inputs_modifiable_flag();
-        psbt.global.set_outputs_modifiable_flag();
+        psbt.global.tx_modifiable_flags.set_inputs_modifiable();
+        psbt.global.tx_modifiable_flags.set_outputs_modifiable();
         Constructor(psbt, PhantomData)
     }
 
@@ -119,8 +119,8 @@ impl Creator {
     /// ```
     pub fn constructor_inputs_only_modifiable(self) -> Constructor<InputsOnlyModifiable> {
         let mut psbt = self.0;
-        psbt.global.set_inputs_modifiable_flag();
-        psbt.global.clear_outputs_modifiable_flag();
+        psbt.global.tx_modifiable_flags.set_inputs_modifiable();
+        psbt.global.tx_modifiable_flags.clear_outputs_modifiable();
         Constructor(psbt, PhantomData)
     }
 
@@ -145,8 +145,8 @@ impl Creator {
     /// ```
     pub fn constructor_outputs_only_modifiable(self) -> Constructor<OutputsOnlyModifiable> {
         let mut psbt = self.0;
-        psbt.global.clear_inputs_modifiable_flag();
-        psbt.global.set_outputs_modifiable_flag();
+        psbt.global.tx_modifiable_flags.clear_inputs_modifiable();
+        psbt.global.tx_modifiable_flags.set_outputs_modifiable();
         Constructor(psbt, PhantomData)
     }
 
@@ -178,19 +178,19 @@ mod tests {
     #[test]
     fn sighash_single_flag_is_set() {
         let psbt = Creator::new().sighash_single().psbt();
-        assert!(psbt.global.has_sighash_single());
+        assert!(psbt.global.tx_modifiable_flags.has_sighash_single());
     }
 
     #[test]
     fn inputs_modifiable_flag_is_set() {
         let psbt = Creator::new().inputs_modifiable().psbt();
-        assert!(psbt.global.is_inputs_modifiable());
+        assert!(psbt.global.tx_modifiable_flags.is_inputs_modifiable());
     }
 
     #[test]
     fn outputs_modifiable_flag_is_set() {
         let psbt = Creator::new().outputs_modifiable().psbt();
-        assert!(psbt.global.is_outputs_modifiable());
+        assert!(psbt.global.tx_modifiable_flags.is_outputs_modifiable());
     }
 
     #[test]

@@ -10,7 +10,9 @@
 use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer};
+use psbt_v2::{
+    Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer, TxModifiableFlags,
+};
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const TEST_XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
@@ -142,7 +144,8 @@ fn v2_only_fields_in_v0_encoding() {
         .expect("output must be valid")
         .psbt()
         .unwrap();
-    assert_eq!(psbt.global.tx_modifiable_flags & 0b11, 0b11);
+    assert!(psbt.global.tx_modifiable_flags.is_inputs_modifiable());
+    assert!(psbt.global.tx_modifiable_flags.is_outputs_modifiable());
 
     let v0 = PsbtV0::from_psbt(psbt).expect("well-formed v2 PSBT must have resolvable lock time");
     let v0_bytes = v0.serialize();
@@ -152,7 +155,7 @@ fn v2_only_fields_in_v0_encoding() {
 
     // Decoded PSBT has tx_modifiable_flags zero, the v0 encoding implied construction complete.
     let decoded = PsbtV0::deserialize(&v0_bytes).unwrap().into_psbt();
-    assert_eq!(decoded.global.tx_modifiable_flags, 0);
+    assert_eq!(decoded.global.tx_modifiable_flags, TxModifiableFlags::new());
 
     // Silent payment fields survive v0 encoding as unknown keys.
     #[cfg(feature = "silent-payments")]
