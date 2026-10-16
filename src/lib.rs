@@ -106,6 +106,7 @@ pub use crate::{
         Updater,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
+    tx_modifiable_flags::TxModifiableFlags,
     v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
     version::{UnsupportedVersionError, Version},
 };

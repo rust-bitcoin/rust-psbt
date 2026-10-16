@@ -44,13 +44,13 @@ pub struct Constructor<T>(pub(crate) Psbt, pub(crate) PhantomData<T>);
 impl<T: Mod> Constructor<T> {
     /// Marks that the `Psbt` can not have any more inputs added to it.
     pub fn no_more_inputs(mut self) -> Self {
-        self.0.global.clear_inputs_modifiable_flag();
+        self.0.global.tx_modifiable_flags.clear_inputs_modifiable();
         self
     }
 
     /// Marks that the `Psbt` can not have any more outputs added to it.
     pub fn no_more_outputs(mut self) -> Self {
-        self.0.global.clear_outputs_modifiable_flag();
+        self.0.global.tx_modifiable_flags.clear_outputs_modifiable();
         self
     }
 
@@ -77,9 +77,9 @@ impl Constructor<Modifiable> {
     /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
     /// e.g., `constructor_modifiable()`.
     pub fn new(psbt: Psbt) -> Result<Self, PsbtNotModifiableError> {
-        if !psbt.global.is_inputs_modifiable() {
+        if !psbt.global.tx_modifiable_flags.is_inputs_modifiable() {
             Err(InputsNotModifiableError.into())
-        } else if !psbt.global.is_outputs_modifiable() {
+        } else if !psbt.global.tx_modifiable_flags.is_outputs_modifiable() {
             Err(OutputsNotModifiableError.into())
         } else {
             Ok(Self(psbt, PhantomData))
@@ -117,7 +117,7 @@ impl Constructor<InputsOnlyModifiable> {
     /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
     /// e.g., `constructor_modifiable()`.
     pub fn new(psbt: Psbt) -> Result<Self, InputsNotModifiableError> {
-        if psbt.global.is_inputs_modifiable() {
+        if psbt.global.tx_modifiable_flags.is_inputs_modifiable() {
             Ok(Self(psbt, PhantomData))
         } else {
             Err(InputsNotModifiableError)
@@ -144,7 +144,7 @@ impl Constructor<OutputsOnlyModifiable> {
     /// performed by separate entities, if not use one of the builder functions on the [`Creator`]
     /// e.g., `constructor_modifiable()`.
     pub fn new(psbt: Psbt) -> Result<Self, OutputsNotModifiableError> {
-        if psbt.global.is_outputs_modifiable() {
+        if psbt.global.tx_modifiable_flags.is_outputs_modifiable() {
             Ok(Self(psbt, PhantomData))
         } else {
             Err(OutputsNotModifiableError)

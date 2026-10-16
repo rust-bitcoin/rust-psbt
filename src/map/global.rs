@@ -37,15 +37,6 @@ use crate::tx_modifiable_flags::TxModifiableFlags;
 use crate::version::{Version, VersionDecoderError, VersionEncoder};
 use crate::{InconsistentKeySourcesError, V2};
 
-/// The Inputs Modifiable Flag, set to 1 to indicate whether inputs can be added or removed.
-const INPUTS_MODIFIABLE: u8 = 0x01 << 0;
-/// The Outputs Modifiable Flag, set to 1 to indicate whether outputs can be added or removed.
-const OUTPUTS_MODIFIABLE: u8 = 0x01 << 1;
-/// The Has SIGHASH_SINGLE flag, set to 1 to indicate whether the transaction has a SIGHASH_SINGLE
-/// signature who's input and output pairing must be preserved. Essentially indicates that the
-/// Constructor must iterate the inputs to determine whether and how to add or remove an input.
-const SIGHASH_SINGLE: u8 = 0x01 << 2;
-
 /// The global key-value map.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -57,7 +48,7 @@ pub struct Global {
     /// The transaction locktime to use if no inputs specify a required locktime.
     pub fallback_lock_time: Option<absolute::LockTime>,
     /// A bitfield for various transaction modification flags.
-    pub tx_modifiable_flags: u8,
+    pub tx_modifiable_flags: TxModifiableFlags,
     /// The number of inputs in this PSBT.
     pub input_count: usize,
     /// The number of outputs in this PSBT.
@@ -87,7 +78,7 @@ impl Global {
             // TODO: Is this default correct?
             tx_version: transaction::Version::TWO,
             fallback_lock_time: None,
-            tx_modifiable_flags: 0x00,
+            tx_modifiable_flags: TxModifiableFlags::new(),
             input_count: 0,
             output_count: 0,
             xpubs: Default::default(),
@@ -98,46 +89,6 @@ impl Global {
             proprietaries: Default::default(),
             unknowns: Default::default(),
         }
-    }
-
-    pub(crate) fn set_inputs_modifiable_flag(&mut self) {
-        self.tx_modifiable_flags |= INPUTS_MODIFIABLE;
-    }
-
-    pub(crate) fn set_outputs_modifiable_flag(&mut self) {
-        self.tx_modifiable_flags |= OUTPUTS_MODIFIABLE;
-    }
-
-    // TODO: Handle SIGHASH_SINGLE correctly.
-    #[allow(dead_code)]
-    pub(crate) fn set_sighash_single_flag(&mut self) { self.tx_modifiable_flags |= SIGHASH_SINGLE; }
-
-    pub(crate) fn clear_inputs_modifiable_flag(&mut self) {
-        self.tx_modifiable_flags &= !INPUTS_MODIFIABLE;
-    }
-
-    pub(crate) fn clear_outputs_modifiable_flag(&mut self) {
-        self.tx_modifiable_flags &= !OUTPUTS_MODIFIABLE;
-    }
-
-    // TODO: Handle SIGHASH_SINGLE correctly.
-    #[allow(dead_code)]
-    pub(crate) fn clear_sighash_single_flag(&mut self) {
-        self.tx_modifiable_flags &= !SIGHASH_SINGLE;
-    }
-
-    pub(crate) fn is_inputs_modifiable(&self) -> bool {
-        self.tx_modifiable_flags & INPUTS_MODIFIABLE > 0
-    }
-
-    pub(crate) fn is_outputs_modifiable(&self) -> bool {
-        self.tx_modifiable_flags & OUTPUTS_MODIFIABLE > 0
-    }
-
-    // TODO: Investigate if we should be using this function?
-    #[allow(dead_code)]
-    pub(crate) fn has_sighash_single(&self) -> bool {
-        self.tx_modifiable_flags & SIGHASH_SINGLE > 0
     }
 
     /// Combines [`Global`] with `other`.
@@ -299,7 +250,7 @@ pub struct GlobalDecoder {
     output_count: Option<usize>,
     /// Optional / accumulating fields.
     fallback_lock_time: Option<absolute::LockTime>,
-    tx_modifiable_flags: Option<u8>,
+    tx_modifiable_flags: Option<TxModifiableFlags>,
     xpubs: BTreeMap<Xpub, (Fingerprint, DerivationPath)>,
     #[cfg(feature = "silent-payments")]
     sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
@@ -329,7 +280,8 @@ impl Decoder for GlobalDecoder {
                             self.version.take().ok_or(GlobalDecodeError::MissingVersion)?;
                         let tx_version =
                             self.tx_version.take().ok_or(GlobalDecodeError::MissingTxVersion)?;
-                        let tx_modifiable_flags = self.tx_modifiable_flags.take().unwrap_or(0_u8);
+                        let tx_modifiable_flags =
+                            self.tx_modifiable_flags.take().unwrap_or_default();
 
                         let input_count =
                             self.input_count.take().ok_or(GlobalDecodeError::MissingInputCount)?;
@@ -476,7 +428,7 @@ impl Decoder for GlobalDecoder {
                     if self.tx_modifiable_flags.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
-                    self.tx_modifiable_flags = Some(flags.0);
+                    self.tx_modifiable_flags = Some(flags);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingXpub { key, decoder } => {
@@ -688,7 +640,7 @@ impl<'e> GlobalMapEncoder<'e> {
     fn flags_key_value(&self) -> FlagsPair {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_GLOBAL_TX_MODIFIABLE),
-            ArrayEncoder::without_length_prefix([self.global.tx_modifiable_flags]),
+            self.global.tx_modifiable_flags.psbt_encoder(),
         )
     }
 
