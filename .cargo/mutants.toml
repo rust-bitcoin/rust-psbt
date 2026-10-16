@@ -1,15 +1,11 @@
 additional_cargo_args = ["--all-features"]
 
-exclude_globs = [
-    "src/v0/**", # Deprecated and slated for removal.
-]
-
 exclude_re = [
-    # Standard
+    # Errors
     "<impl fmt::Display for .*Error>::fmt", # Error message for display not worth squashing.
     "std::error::Error for",                # Source is generally for display, not squashing.
     "<impl From<[^>]+> for .*Error>::from", # Single line, zero logic transformations not worth squashing.
     # Encoding
     "PsbtDecode::psbt_decoder.*with Default::default",          # Default mutant is equivalent to implementation, can't squash.
-    "needs_more.*with true.*<impl Decoder for .*>::push_bytes", # Causes an infinite loop timeout.
+    "needs_more.*with true.*<impl Decoder for .*>::push_bytes", # Replacing `needs_more` with true causes an infinite loop timeout.
 ]

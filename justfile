@@ -1,8 +1,7 @@
 set quiet := true
 
 alias ulf := update-lock-files
-alias ms := mutants-since
-alias mi := mutants-in
+alias m := mutants
 
 export RBMT_LOG_LEVEL := env("RBMT_LOG_LEVEL", "progress")
 
@@ -53,12 +52,10 @@ prerelease: (rbmt "prerelease --force")
 [group('ci')]
 integration: (rbmt "integration")
 
-# Check mutants in code changed since baseline
-[group('mutants')]
-mutants-since baseline="master": tools
-  git diff {{baseline}} | cargo +$(cargo rbmt toolchains --nightly) mutants --in-diff /dev/stdin -- -- -Z unstable-options --fail-fast
-
-# Run mutants in a file or glob
-[group('mutants')]
-mutants-in glob: tools
-  cargo +$(cargo rbmt toolchains --nightly) mutants --file '{{glob}}' -- -- -Z unstable-options --fail-fast
+# Check mutants, filter by given git ref baseline or file glob
+[group('ci')]
+mutants baseline="" file="": tools
+  cargo +$(cargo rbmt toolchains --nightly) mutants \
+    {{ if baseline == "" { "" } else { "--in-diff <(git diff " + baseline + ")" } }} \
+    {{ if file == "" { "" } else { "--file " + file } }} \
+    -- -- -Z unstable-options --fail-fast
