@@ -10,16 +10,17 @@ use core::marker::PhantomData;
 use std::collections::{HashMap, HashSet};
 
 use bitcoin::bip32::{self, KeySource, Xpriv};
+use bitcoin::key::{Keypair, TapTweak};
 use bitcoin::secp256k1::{Message, Secp256k1, Signing};
 use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache};
 use bitcoin::{
-    ecdsa, PrivateKey, PublicKey, ScriptBuf, TapSighashType, Transaction, TxOut, Txid,
-    XOnlyPublicKey,
+    ecdsa, taproot, PrivateKey, PublicKey, ScriptBuf, TapLeafHash, TapSighashType, Transaction,
+    TxOut, Txid, XOnlyPublicKey,
 };
 
 use crate::error::{write_err, DetermineLockTimeError};
 use crate::psbt::Psbt;
-use crate::{IndexOutOfBoundsError, OutputType, PsbtSighashType, SignError};
+use crate::{OutputType, PsbtSighashType, SignError};
 
 /// Implements the BIP-370 Signer role.
 ///
@@ -131,20 +132,49 @@ impl Signer {
     /// Clears `PSBT_GLOBAL_TX_MODIFIABLE` for each input signed.
     ///
     /// Fails on the first entry whose index is out of bounds (only possible for signatures created
-    /// for a different [`Psbt`].
+    /// for a different [`Psbt`]).
     pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Psbt, SignError> {
         for InputSigs { index, signatures } in sigs {
-            let length = self.psbt.inputs.len();
-            let psbt_input = self.psbt.inputs.get_mut(index).ok_or(SignError::IndexOutOfBounds(
-                IndexOutOfBoundsError::Inputs { index, length },
-            ))?;
-            // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
-            let sighash_ty = signatures.first().map(|(_, sig)| sig.sighash_type);
-            for (pk, sig) in signatures {
-                psbt_input.partial_sigs.insert(pk, sig);
+            let psbt_input = self.psbt.checked_input_mut(index)?;
+
+            if signatures.is_empty() {
+                continue;
             }
-            if let Some(ty) = sighash_ty {
-                self.psbt.clear_tx_modifiable(PsbtSighashType::from(ty));
+
+            match signatures {
+                TypedSigs::Ecdsa(signatures) => {
+                    // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
+                    let sighash_ty = signatures
+                        .first()
+                        .expect("signatures emptiness checked above")
+                        .1
+                        .sighash_type;
+                    for (pk, sig) in signatures {
+                        psbt_input.partial_sigs.insert(pk, sig);
+                    }
+
+                    self.psbt.clear_tx_modifiable(PsbtSighashType::from(sighash_ty));
+                }
+                TypedSigs::Taproot(signatures) => {
+                    // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
+                    let sighash_ty = signatures
+                        .first()
+                        .expect("signatures emptiness checked above")
+                        .1
+                        .sighash_type;
+                    for (tap_key_material, sig) in signatures {
+                        match tap_key_material {
+                            TapKeyMaterial::KeyPath(_) => {
+                                let _ = psbt_input.tap_key_sig.insert(sig);
+                            }
+                            TapKeyMaterial::ScriptPath(key_material) => {
+                                psbt_input.tap_script_sigs.insert(key_material, sig);
+                            }
+                        }
+                    }
+
+                    self.psbt.clear_tx_modifiable(PsbtSighashType::from(sighash_ty));
+                }
             }
         }
 
@@ -176,20 +206,64 @@ impl Signer {
 /// into the `Psbt` after the session and its signable inputs are dropped.
 pub struct SigningSession<'a, 'id> {
     psbt: &'a Psbt,
-    /// The sighash cache the [`Signer`] is commited to.
+    /// The sighash cache the [`Signer`] is committed to.
     pub(crate) cache: &'a mut SighashCache<Transaction>,
     /// The unforgeable id [`Signer::session`] uses for this session alone.
     id: SessionId<'id>,
 }
 
-/// Signatures for one input, produced by [`SigningSession::get_input_sigs`] and written into
-/// the [`Psbt`] by [`Signer::apply`].
+/// The taproot key material the signature is associated with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TapKeyMaterial {
+    /// The signature was created for key path spending.
+    KeyPath(XOnlyPublicKey),
+    /// The signature was created for script path spending.
+    ScriptPath((XOnlyPublicKey, TapLeafHash)),
+}
+
+/// The signatures, with the public key material associated with it, differentiated by algorithm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TypedSigs {
+    /// ECDSA (legacy and segwit v0) inputs.
+    Ecdsa(Vec<(PublicKey, ecdsa::Signature)>),
+    /// Taproot inputs.
+    Taproot(Vec<(TapKeyMaterial, taproot::Signature)>),
+}
+
+/// Signatures for one input, produced by the signing methods of a [`SigningSession`]
+/// ([`SigningSession::get_input_sigs`], [`SigningSession::get_some`], [`SigningSession::get_all`])
+/// and written into the [`Psbt`] by [`Signer::apply`].
+///
+/// An `InputSigs` can be empty: an input whose keys the key provider holds none of produces no
+/// signatures (normal for partial/multisig signing flows).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSigs {
     /// The input index these signatures are for.
     pub index: usize,
-    /// The `(pubkey, signature)` pairs, one per key the key provider held for this input.
-    pub signatures: Vec<(PublicKey, ecdsa::Signature)>,
+    /// The `(key material, signature)` pairs, one per key the key provider held for this input.
+    pub signatures: TypedSigs,
+}
+
+impl TypedSigs {
+    /// Returns `true` if there are no signatures.
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Returns the number of signatures produced. Can be zero.
+    pub fn len(&self) -> usize {
+        match &self {
+            Self::Ecdsa(items) => items.len(),
+            Self::Taproot(items) => items.len(),
+        }
+    }
+}
+
+impl InputSigs {
+    /// Returns `true` if this input produced no signatures.
+    pub fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Returns the number of signatures produced for this input. Can be zero.
+    pub fn len(&self) -> usize { self.signatures.len() }
 }
 
 impl<'a, 'id> SigningSession<'a, 'id> {
@@ -266,7 +340,8 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// its sighash policy, script, and amount always agree with this session's [`Psbt`]. A signable
     /// input created by [`Self::signable_input`] or [`Self::assume_checked_input`] cannot ever be a
     /// non-ANYONECANPAY taproot input, these inputs only exist inside an [`AllSignableInputs`], and
-    /// are signed through [`Self::get_all`], so this method never signs a taproot input.
+    /// are signed through [`Self::get_all`]. An ANYONECANPAY taproot input commits only to its own
+    /// prevout and is signed here.
     ///
     /// This method is infallible, all input-validation ran when the signable input was created.
     pub fn get_input_sigs<C, K>(
@@ -312,8 +387,6 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// proves every input of the [`Psbt`] was validated, so the complete prevout slice the taproot
     /// sighash commits to was collected once at creation.
     ///
-    /// Taproot inputs themselves sign nothing (schnorr signing is as yet unsupported).
-    ///
     /// This method is infallible, all input-validation ran when the signable inputs were created.
     pub fn get_all<C, K>(
         &mut self,
@@ -347,23 +420,116 @@ impl<'a, 'id> SigningSession<'a, 'id> {
         C: Signing,
         K: GetKey,
     {
-        // Taproot inputs sign nothing (schnorr signing is as yet unsupported). Check before
-        // computing the sighash: a taproot sighash commits to every input's prevout, so
-        // computing then discarding it per input is quadratic in the input count.
-        if matches!(input.output_type, OutputType::Tr) {
-            return InputSigs { index: input.index, signatures: Vec::new() };
+        match input.output_type() {
+            OutputType::Tr => self.taproot_signatures(input, all_prevouts, k, secp),
+            _ => self.ecdsa_signatures(input, k, secp),
         }
+    }
 
-        let (msg, sighash) = self.sighash(input, all_prevouts);
-        let Sighash::Ecdsa(sighash_ty) = sighash else {
-            unreachable!("taproot inputs sign nothing and return early above")
-        };
-
+    fn taproot_signatures<C, K>(
+        &mut self,
+        input: &SignableInput<'id>,
+        all_prevouts: &[&'a TxOut],
+        k: &K,
+        secp: &Secp256k1<C>,
+    ) -> InputSigs
+    where
+        C: Signing,
+        K: GetKey,
+    {
+        let mut signatures = Vec::new();
         let psbt_input = self
             .psbt
             .checked_input(input.index)
             .expect("the index is already checked by SignableInput");
+        for (&xonly, (leaf_hashes, key_source)) in psbt_input.tap_key_origins.iter() {
+            let sk = if let Ok(Some(secret_key)) =
+                k.get_key(&KeyRequest::Bip32(key_source.clone()), secp)
+            {
+                secret_key
+            } else if let Ok(Some(sk)) = k.get_key(&KeyRequest::XOnlyPubkey(xonly), secp) {
+                sk
+            } else {
+                continue;
+            };
+
+            // Considering the responsibility of the PSBT's finalizer to extract valid signatures,
+            // the goal of this algorithm is to provide signatures to the best of our ability:
+            // 1) If the conditions for key path spend are met, proceed to provide the signature for key path spend
+            // 2) If the conditions for script path spend are met, proceed to provide the signature for script path spend
+
+            // key path spend
+            if let Some(internal_key) = psbt_input.tap_internal_key {
+                // BIP-0371: The internal key does not have leaf hashes, so can be indicated with a hashes len of 0.
+
+                // Based on input.tap_internal_key.is_some() alone, it is not sufficient to determine whether it is a key path spend.
+                // According to BIP-0371, we also need to consider the condition leaf_hashes.is_empty() for a more accurate determination.
+                if internal_key == xonly
+                    && leaf_hashes.is_empty()
+                    && psbt_input.tap_key_sig.is_none()
+                {
+                    let secp = &Secp256k1::new();
+                    let key_pair = Keypair::from_secret_key(secp, &sk.inner)
+                        .tap_tweak(secp, psbt_input.tap_merkle_root)
+                        .to_keypair();
+
+                    let (msg, sighash_type) = self.taproot_sighash(input, all_prevouts, None);
+                    #[cfg(feature = "rand")]
+                    let signature = secp.sign_schnorr(&msg, &key_pair);
+                    #[cfg(not(feature = "rand"))]
+                    let signature = secp.sign_schnorr_no_aux_rand(&msg, &key_pair);
+
+                    let sig = taproot::Signature { signature, sighash_type };
+
+                    signatures.push((TapKeyMaterial::KeyPath(internal_key), sig));
+                }
+            }
+
+            // script path spend
+            if let Some((leaf_hashes, _)) = psbt_input.tap_key_origins.get(&xonly) {
+                let leaf_hashes = leaf_hashes
+                    .iter()
+                    .filter(|lh| !psbt_input.tap_script_sigs.contains_key(&(xonly, **lh)))
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if !leaf_hashes.is_empty() {
+                    let key_pair = Keypair::from_secret_key(secp, &sk.inner);
+
+                    for lh in leaf_hashes {
+                        let (msg, sighash_type) =
+                            self.taproot_sighash(input, all_prevouts, Some(lh));
+
+                        #[cfg(feature = "rand")]
+                        let signature = secp.sign_schnorr(&msg, &key_pair);
+                        #[cfg(not(feature = "rand"))]
+                        let signature = secp.sign_schnorr_no_aux_rand(&msg, &key_pair);
+
+                        let sig = taproot::Signature { signature, sighash_type };
+                        signatures.push((TapKeyMaterial::ScriptPath((xonly, lh)), sig));
+                    }
+                }
+            }
+        }
+        InputSigs { index: input.index, signatures: TypedSigs::Taproot(signatures) }
+    }
+
+    fn ecdsa_signatures<C, K>(
+        &mut self,
+        input: &SignableInput<'id>,
+        k: &K,
+        secp: &Secp256k1<C>,
+    ) -> InputSigs
+    where
+        C: Signing,
+        K: GetKey,
+    {
         let mut signatures = Vec::new();
+        let psbt_input = self
+            .psbt
+            .checked_input(input.index)
+            .expect("the index is already checked by SignableInput");
+        let (msg, sighash_type) = self.ecdsa_sighash(input);
         for (pk, key_source) in psbt_input.bip32_derivations.iter() {
             // Try BIP-32 derivation first, then raw pubkey. Key-provider errors are swallowed
             // per-key; an input we hold no key for is simply skipped (partial signing is a normal
@@ -376,15 +542,46 @@ impl<'a, 'id> SigningSession<'a, 'id> {
                 continue;
             };
 
-            let sig = ecdsa::Signature {
-                signature: secp.sign_ecdsa(&msg, &sk.inner),
-                sighash_type: sighash_ty,
-            };
+            let sig =
+                ecdsa::Signature { signature: secp.sign_ecdsa(&msg, &sk.inner), sighash_type };
 
             let pk = sk.public_key(secp);
             signatures.push((pk, sig));
         }
-        InputSigs { index: input.index, signatures }
+        InputSigs { index: input.index, signatures: TypedSigs::Ecdsa(signatures) }
+    }
+
+    fn taproot_sighash(
+        &mut self,
+        input: &SignableInput<'id>,
+        all_prevouts: &[&'a TxOut],
+        leaf_hash: Option<TapLeafHash>,
+    ) -> (Message, TapSighashType) {
+        let tap_ty = input
+            .sighash_ty
+            .taproot_hash_ty()
+            .expect("sighash type validated when the signable input was created");
+        let prev_outs = if matches!(
+            tap_ty,
+            TapSighashType::AllPlusAnyoneCanPay
+                | TapSighashType::NonePlusAnyoneCanPay
+                | TapSighashType::SinglePlusAnyoneCanPay
+        ) {
+            Prevouts::One(input.index, &input.prevout)
+        } else {
+            Prevouts::All(all_prevouts)
+        };
+
+        let sighash = if let Some(leaf_hash) = leaf_hash {
+            self.cache
+                .taproot_script_spend_signature_hash(input.index, &prev_outs, leaf_hash, tap_ty)
+                .expect("input index in bounds (checked above)")
+        } else {
+            self.cache
+                .taproot_key_spend_signature_hash(input.index, &prev_outs, tap_ty)
+                .expect("prevout slice is complete, input index in bounds (checked above)")
+        };
+        (Message::from(sighash), tap_ty)
     }
 
     /// Computes the sighash a new signature over `input` commits to.
@@ -399,82 +596,40 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// This method is infallible: the [`SighashCache`] and the [`SignableInput`] are unchangeable,
     /// so the invariants ensured when the signable input was created stay true for the whole
     /// signing session.
-    fn sighash(
-        &mut self,
-        input: &SignableInput<'id>,
-        all_prevouts: &[&'a TxOut],
-    ) -> (Message, Sighash) {
-        match input.output_type {
-            OutputType::Tr => {
-                let tap_ty = input
-                    .sighash_ty
-                    .taproot_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = if matches!(
-                    tap_ty,
-                    TapSighashType::AllPlusAnyoneCanPay
-                        | TapSighashType::NonePlusAnyoneCanPay
-                        | TapSighashType::SinglePlusAnyoneCanPay
-                ) {
-                    // SIGHASH_ANYONECANPAY commits to only this input's prevout.
-                    self.cache
-                        .taproot_key_spend_signature_hash(
-                            input.index,
-                            &Prevouts::One(input.index, &input.prevout),
-                            tap_ty,
-                        )
-                        .expect("input index in bounds (checked above)")
-                } else {
-                    self.cache
-                        .taproot_key_spend_signature_hash(
-                            input.index,
-                            &Prevouts::All(all_prevouts),
-                            tap_ty,
-                        )
-                        .expect("prevout slice is complete, input index in bounds (checked above)")
-                };
-                (Message::from(sighash), Sighash::Schnorr(tap_ty))
-            }
-            _ => {
-                let ecdsa_ty = input
-                    .sighash_ty
-                    .ecdsa_hash_ty()
-                    .expect("sighash type validated when the signable input was created");
-                let sighash = match input.output_type {
-                    OutputType::Bare | OutputType::Sh => Message::from(
-                        self.cache
-                            .legacy_signature_hash(
-                                input.index,
-                                &input.script_code,
-                                ecdsa_ty.to_u32(),
-                            )
-                            .expect("input index in bounds (checked above)"),
-                    ),
-                    OutputType::Wpkh | OutputType::ShWpkh => Message::from(
-                        self.cache
-                            .p2wpkh_signature_hash(
-                                input.index,
-                                &input.script_code,
-                                input.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Wsh | OutputType::ShWsh => Message::from(
-                        self.cache
-                            .p2wsh_signature_hash(
-                                input.index,
-                                &input.script_code,
-                                input.prevout.value,
-                                ecdsa_ty,
-                            )
-                            .expect("standard sighash type validated at creation"),
-                    ),
-                    OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
-                };
-                (sighash, Sighash::Ecdsa(ecdsa_ty))
-            }
-        }
+    fn ecdsa_sighash(&mut self, input: &SignableInput<'id>) -> (Message, EcdsaSighashType) {
+        let ecdsa_ty = input
+            .sighash_ty
+            .ecdsa_hash_ty()
+            .expect("sighash type validated when the signable input was created");
+        let sighash = match input.output_type {
+            OutputType::Bare | OutputType::Sh => Message::from(
+                self.cache
+                    .legacy_signature_hash(input.index, &input.script_code, ecdsa_ty.to_u32())
+                    .expect("input index in bounds (checked above)"),
+            ),
+            OutputType::Wpkh | OutputType::ShWpkh => Message::from(
+                self.cache
+                    .p2wpkh_signature_hash(
+                        input.index,
+                        &input.script_code,
+                        input.prevout.value,
+                        ecdsa_ty,
+                    )
+                    .expect("standard sighash type validated at creation"),
+            ),
+            OutputType::Wsh | OutputType::ShWsh => Message::from(
+                self.cache
+                    .p2wsh_signature_hash(
+                        input.index,
+                        &input.script_code,
+                        input.prevout.value,
+                        ecdsa_ty,
+                    )
+                    .expect("standard sighash type validated at creation"),
+            ),
+            OutputType::Tr => unreachable!("Tr handled in the Schnorr arm above"),
+        };
+        (sighash, ecdsa_ty)
     }
 }
 
@@ -628,15 +783,6 @@ pub struct SignableInput<'id> {
 pub struct AllSignableInputs<'a, 'id> {
     inputs: Vec<SignableInput<'id>>,
     prevouts: Vec<&'a TxOut>,
-}
-
-/// The sighash type a new signature over a [`SignableInput`] commits to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Sighash {
-    /// ECDSA (legacy and segwit v0) inputs.
-    Ecdsa(EcdsaSighashType),
-    /// Schnorr (taproot) inputs.
-    Schnorr(TapSighashType),
 }
 
 impl<'id> SignableInput<'id> {
@@ -1025,6 +1171,7 @@ mod test {
     use alloc::vec;
 
     use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
     use bitcoin::key::PublicKey;
     use bitcoin::script::Builder;
     use bitcoin::sighash::EcdsaSighashType;
@@ -1038,7 +1185,7 @@ mod test {
     use crate::global::Global;
     use crate::map::input::Input;
     use crate::map::output::Output;
-    use crate::Count;
+    use crate::{Count, IndexOutOfBoundsError};
 
     /// Builds a single-input PSBT spending a P2WPKH output, with both witness and non-witness
     /// UTXOs set. Used as the base for the strict/trusted matrix below.
@@ -1097,6 +1244,51 @@ mod test {
         input.witness_utxo = Some(tx_out);
         input.non_witness_utxo = Some(funding_tx);
         input.bip32_derivations.insert(pubkey, bitcoin::bip32::KeySource::default());
+        let psbt = Psbt {
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
+            inputs: vec![input],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(900),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        };
+        let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
+        key_map.insert(pubkey, priv_key);
+        (psbt, key_map)
+    }
+
+    /// A witness-only single-input P2TR key-path PSBT whose internal key is recorded in
+    /// `tap_key_origins`, plus the matching key map (the PSBT's pubkey -> its private key).
+    ///
+    /// A witness-only P2TR UTXO is strictly verifiable: the taproot sighash commits to the
+    /// prevout's amount and scriptPubKey.
+    fn tr_psbt() -> (Psbt, BTreeMap<PublicKey, PrivateKey>) {
+        use bitcoin::key::PrivateKey;
+        use bitcoin::secp256k1::SecretKey;
+        use bitcoin::Network;
+
+        let secp = Secp256k1::new();
+        let priv_key =
+            PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+        let pubkey = priv_key.public_key(&secp);
+        let xonly = pubkey.inner.x_only_public_key().0;
+        let script_pubkey = ScriptBuf::new_p2tr(&Secp256k1::verification_only(), xonly, None);
+        let tx_out = TxOut { value: Amount::from_sat(1_000), script_pubkey };
+        let funding_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![tx_out.clone()],
+        };
+        let out_point = OutPoint { txid: funding_tx.compute_txid(), vout: 0 };
+        let mut input = Input::new(&out_point);
+        input.witness_utxo = Some(tx_out);
+        input.tap_internal_key = Some(xonly);
+        input.tap_key_origins.insert(xonly, (vec![], KeySource::default()));
         let psbt = Psbt {
             global: Global {
                 input_count: Count::from(1),
@@ -1325,7 +1517,7 @@ mod test {
         let mut signer = Signer::new(wpkh_psbt()).unwrap();
         let (msg, ty) = signer.session(|mut session| {
             let input = session.signable_input(0).unwrap();
-            session.sighash(&input, &[])
+            session.ecdsa_sighash(&input)
         });
 
         // Recompute independently from the input's (validated) funding UTXO.
@@ -1336,7 +1528,7 @@ mod test {
             .p2wpkh_signature_hash(0, &utxo.script_pubkey, utxo.value, EcdsaSighashType::All)
             .unwrap();
         assert_eq!(msg, Message::from(expected));
-        assert_eq!(ty, Sighash::Ecdsa(EcdsaSighashType::All));
+        assert_eq!(ty, EcdsaSighashType::All);
     }
 
     #[test]
@@ -1372,7 +1564,7 @@ mod test {
         let (msg, ty) = signer.session(|mut session| {
             let inputs = session.signable_inputs().expect("taproot passes signer checks");
             let input = &inputs.inputs[0];
-            session.sighash(input, &inputs.prevouts)
+            session.taproot_sighash(input, &inputs.prevouts, None)
         });
 
         // Recompute independently: key-path spend over the single prevout.
@@ -1382,7 +1574,7 @@ mod test {
             .taproot_key_spend_signature_hash(0, &Prevouts::All(&[tx_out]), TapSighashType::Default)
             .unwrap();
         assert_eq!(msg, Message::from(expected));
-        assert_eq!(ty, Sighash::Schnorr(TapSighashType::Default));
+        assert_eq!(ty, TapSighashType::Default);
     }
 
     #[test]
@@ -1412,6 +1604,128 @@ mod test {
     }
 
     #[test]
+    fn sign_all_signs_taproot_script_path() {
+        let secp = Secp256k1::new();
+        let (mut psbt, key_map) = tr_psbt();
+
+        // Turn the key-path input into a script-path input: the key is recorded for one leaf, so
+        // the key-path branch (which requires empty leaf hashes) is skipped and the signature is
+        // produced for the leaf.
+        let xonly = psbt.inputs[0].tap_internal_key.unwrap();
+        let leaf_hash = TapLeafHash::from_byte_array([1u8; 32]);
+        psbt.inputs[0].tap_key_origins.insert(xonly, (vec![leaf_hash], KeySource::default()));
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].len(), 1);
+
+        let psbt = signer.apply(sigs).unwrap();
+        let sig = psbt.inputs[0].tap_script_sigs.get(&(xonly, leaf_hash)).expect("script-path sig");
+        assert_eq!(sig.sighash_type, TapSighashType::Default);
+    }
+
+    #[test]
+    fn verify_rejects_tap_script_sig_sighash_mismatch() {
+        // A taproot script-path signature whose sighash type disagrees with the input's declared
+        // sighash type, with no other signatures present.
+        let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2tr(&Secp256k1::verification_only(), xonly, None);
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[0].sighash_type = Some(PsbtSighashType::ALL);
+        psbt.inputs[0].tap_script_sigs.insert(
+            (xonly, TapLeafHash::from_byte_array([1u8; 32])),
+            taproot::Signature {
+                signature: bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+                sighash_type: TapSighashType::None,
+            },
+        );
+
+        assert_eq!(SignableInput::verify(&psbt, 0), Err(SignError::SighashMismatch));
+    }
+
+    #[test]
+    fn get_input_sigs_signs_anyonecanpay_taproot_standalone() {
+        let secp = Secp256k1::new();
+        let (mut psbt, key_map) = tr_psbt();
+        // An ANYONECANPAY taproot sighash commits only to this input's prevout, so it is signable
+        // standalone (SIGHASH_ALL plus ANYONECANPAY avoids the SINGLE output bound).
+        psbt.inputs[0].sighash_type =
+            Some(PsbtSighashType::from(TapSighashType::AllPlusAnyoneCanPay));
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(|mut session| {
+            let input = session.signable_input(0).expect("ACP taproot is signable standalone");
+            assert_eq!(input.output_type(), OutputType::Tr);
+            session.get_input_sigs(&input, &key_map, &secp)
+        });
+        assert_eq!(sigs.len(), 1);
+
+        let psbt = signer.apply([sigs]).unwrap();
+        assert!(psbt.inputs[0].tap_key_sig.is_some());
+    }
+
+    #[test]
+    fn taproot_key_path_signature_verifies() {
+        use bitcoin::sighash::Prevouts;
+
+        let secp = Secp256k1::new();
+        let (psbt, key_map) = tr_psbt();
+        let tx_out = psbt.inputs[0].witness_utxo.clone().unwrap();
+
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
+        assert_eq!(sigs.len(), 1);
+        let signature = match &sigs[0].signatures {
+            TypedSigs::Taproot(sigs) => &sigs[0].1.signature,
+            TypedSigs::Ecdsa(_) => panic!("taproot input must produce schnorr signatures"),
+        };
+
+        // Recompute the sighash independently and verify the signature against the tweaked output
+        // key committed to by the prevout scriptPubKey.
+        let spk = tx_out.script_pubkey.clone();
+        let tx = signer.unsigned_tx();
+        let mut cache = SighashCache::new(&tx);
+        let sighash = cache
+            .taproot_key_spend_signature_hash(0, &Prevouts::All(&[tx_out]), TapSighashType::Default)
+            .unwrap();
+        let output_key = XOnlyPublicKey::from_slice(&spk.as_bytes()[2..34]).unwrap();
+        secp.verify_schnorr(signature, &Message::from(sighash), &output_key)
+            .expect("key-path signature verifies against the tweaked output key");
+    }
+
+    #[test]
+    fn signing_skips_existing_taproot_signatures() {
+        let secp = Secp256k1::new();
+
+        // An existing key-path signature is not replaced.
+        let (psbt, key_map) = tr_psbt();
+        let existing = bitcoin::secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap();
+        let mut psbt = psbt;
+        psbt.inputs[0].tap_key_sig =
+            Some(taproot::Signature { signature: existing, sighash_type: TapSighashType::Default });
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
+        assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
+        let psbt = signer.apply(sigs).unwrap();
+        assert_eq!(psbt.inputs[0].tap_key_sig.unwrap().signature, existing);
+
+        // An existing script-path signature for a leaf is not duplicated.
+        let (mut psbt, key_map) = tr_psbt();
+        let xonly = psbt.inputs[0].tap_internal_key.unwrap();
+        let leaf_hash = TapLeafHash::from_byte_array([1u8; 32]);
+        psbt.inputs[0].tap_key_origins.insert(xonly, (vec![leaf_hash], KeySource::default()));
+        psbt.inputs[0].tap_script_sigs.insert(
+            (xonly, leaf_hash),
+            taproot::Signature { signature: existing, sighash_type: TapSighashType::Default },
+        );
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
+        assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
+    }
+
+    #[test]
     fn get_some_signs_a_subset_of_standalone_inputs() {
         let secp = Secp256k1::new();
         let (mut psbt, key_map) = keyed_psbt();
@@ -1428,7 +1742,7 @@ mod test {
 
         assert_eq!(sigs.len(), 2);
         assert_eq!(sigs.iter().map(|s| s.index).collect::<alloc::vec::Vec<_>>(), vec![0, 1]);
-        assert!(sigs.iter().all(|s| s.signatures.len() == 1));
+        assert!(sigs.iter().all(|s| s.len() == 1));
     }
 
     #[test]
@@ -1442,10 +1756,14 @@ mod test {
             let input = session.signable_input(0).unwrap();
             session.get_input_sigs(&input, &key_map, &secp)
         });
-        let used: Vec<PublicKey> = sigs.signatures.iter().map(|(pk, _)| *pk).collect();
-        let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
-        assert_eq!(used, vec![pubkey]);
-        assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+        if let TypedSigs::Ecdsa(signatures) = &sigs.signatures {
+            let used: Vec<PublicKey> = signatures.iter().map(|(pk, _)| *pk).collect();
+            let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
+            assert_eq!(used, vec![pubkey]);
+            assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+        } else {
+            panic!("no ECDSA signatures were generated")
+        }
     }
 
     #[test]
@@ -1456,7 +1774,7 @@ mod test {
         let mut signer = Signer::new(psbt).unwrap();
         let sigs = signer.session(sign_input(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.index, 0);
-        assert_eq!(sigs.signatures.len(), 1);
+        assert_eq!(sigs.len(), 1);
         let psbt = signer.apply([sigs]).unwrap();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
@@ -1488,7 +1806,7 @@ mod test {
 
         // Unchecked: the caller attests the funding data out-of-band.
         let sigs = signer.session(sign_input_unchecked(0, &key_map, &secp)).unwrap();
-        assert_eq!(sigs.signatures.len(), 1);
+        assert_eq!(sigs.len(), 1);
         let psbt = signer.apply([sigs]).unwrap();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
