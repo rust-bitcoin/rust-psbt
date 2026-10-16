@@ -12,7 +12,6 @@ use crate::input::Input;
 use crate::output::{self, Output};
 use crate::psbt::Psbt;
 use crate::roles::{Creator, Updater};
-use crate::Count;
 
 /// Marker for a `Constructor` with both inputs and outputs modifiable.
 pub enum Modifiable {}
@@ -90,7 +89,7 @@ impl Constructor<Modifiable> {
     /// Adds an input to the PSBT.
     pub fn input(mut self, input: Input) -> Self {
         self.0.inputs.push(input);
-        self.0.global.input_count = Count::from(usize::from(self.0.global.input_count) + 1);
+        self.0.global.input_count += 1;
         self
     }
 
@@ -102,7 +101,7 @@ impl Constructor<Modifiable> {
     pub fn output(mut self, output: Output) -> Result<Self, output::ValidationError> {
         output.validate()?;
         self.0.outputs.push(output);
-        self.0.global.output_count = Count::from(usize::from(self.0.global.output_count) + 1);
+        self.0.global.output_count += 1;
         Ok(self)
     }
 }
@@ -128,7 +127,7 @@ impl Constructor<InputsOnlyModifiable> {
     /// Adds an input to the PSBT.
     pub fn input(mut self, input: Input) -> Self {
         self.0.inputs.push(input);
-        self.0.global.input_count = Count::from(usize::from(self.0.global.input_count) + 1);
+        self.0.global.input_count += 1;
         self
     }
 }
@@ -160,7 +159,7 @@ impl Constructor<OutputsOnlyModifiable> {
     pub fn output(mut self, output: Output) -> Result<Self, output::ValidationError> {
         output.validate()?;
         self.0.outputs.push(output);
-        self.0.global.output_count = Count::from(usize::from(self.0.global.output_count) + 1);
+        self.0.global.output_count += 1;
         Ok(self)
     }
 }

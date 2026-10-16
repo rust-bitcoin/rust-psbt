@@ -33,6 +33,10 @@ impl From<Count> for usize {
     fn from(count: Count) -> Self { count.0 }
 }
 
+impl core::ops::AddAssign<usize> for Count {
+    fn add_assign(&mut self, rhs: usize) { self.0 += rhs; }
+}
+
 impl fmt::Display for Count {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::Display::fmt(&self.0, f) }
 }
