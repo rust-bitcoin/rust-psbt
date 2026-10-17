@@ -110,6 +110,16 @@ mod tests {
     }
 
     #[test]
+    fn read_limit_lifecycle() {
+        let mut decoder = VoutDecoder::default();
+        assert_eq!(decoder.read_limit(), 4, "fresh decoder should request 4 bytes");
+
+        let mut bytes: &[u8] = &[0x04, 0x03, 0x02, 0x01];
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0, "completed decoder should request no bytes");
+    }
+
+    #[test]
     fn encode_le_bytes() {
         let encoded = encode_to_vec(&Vout::from(0x01020304));
         assert_eq!(encoded, alloc::vec![0x04, 0x03, 0x02, 0x01]);

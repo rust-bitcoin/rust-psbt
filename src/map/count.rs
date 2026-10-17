@@ -108,6 +108,16 @@ mod tests {
     }
 
     #[test]
+    fn read_limit_lifecycle() {
+        let mut decoder = CountDecoder::default();
+        assert_eq!(decoder.read_limit(), 1, "fresh decoder should request the size prefix byte");
+
+        let mut bytes: &[u8] = &[0x2a];
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0, "completed decoder should request no bytes");
+    }
+
+    #[test]
     fn encode_zero() {
         let encoded = encode_to_vec(&Count::from(0));
         assert_eq!(encoded, alloc::vec![0x00]);
