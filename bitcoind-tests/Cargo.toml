@@ -7,7 +7,7 @@ edition = "2021"
 publish = false
 
 [package.metadata.rbmt.toolchains]
-stable = "1.99.0"
+stable = "1.99.1"
 
 [dependencies]
 bitcoind = { version = "0.41.0", features = ["download"] }
