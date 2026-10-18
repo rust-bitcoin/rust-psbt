@@ -3,6 +3,7 @@
 //! This module contains PSBT codec implementations for types which live upstream and whose PSBT
 //! codecs are different from their consensus codecs.
 
+pub mod ecdsa_signature;
 pub mod taproot_signature;
 
 use alloc::borrow::ToOwned as _;
@@ -17,7 +18,7 @@ use bitcoin::locktime::absolute;
 use bitcoin::taproot::{
     self, ControlBlock, LeafVersion, ScriptLeaves, TapLeafHash, TapNodeHash, TapTree,
 };
-use bitcoin::{ecdsa, CompressedPublicKey, ScriptBuf, Txid, VarInt};
+use bitcoin::{CompressedPublicKey, ScriptBuf, Txid, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, BytesEncoder,
     CompactSizeDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4,
@@ -616,29 +617,6 @@ impl PsbtEncode for PublicKey {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { PublicKeyEncoder::new(self) }
 }
 
-/// Encoder for a [`ecdsa::SerializedSignature`].
-pub struct EcdsaSigEncoder(ecdsa::SerializedSignature);
-
-impl EcdsaSigEncoder {
-    fn new(sig: ecdsa::SerializedSignature) -> Self { Self(sig) }
-}
-
-impl Encoder for EcdsaSigEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0 }
-
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
-}
-
-impl ExactSizeEncoder for EcdsaSigEncoder {
-    fn len(&self) -> usize { self.0.len() }
-}
-
-impl PsbtEncode for ecdsa::Signature {
-    type Encoder<'e> = EcdsaSigEncoder;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
-}
-
 /// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
 /// `leaf version u8`, then compact-size-prefixed script per leaf, in DFS order.
 pub struct TapTreeEncoder<'e> {
@@ -887,56 +865,6 @@ impl std::error::Error for CompressedPublicKeyDecodeError {
     }
 }
 
-/// Decoder for an [`ecdsa::Signature`] value.
-#[derive(Debug, Default)]
-pub struct EcdsaSignatureDecoder {
-    inner: ByteVecDecoder,
-}
-
-impl Decoder for EcdsaSignatureDecoder {
-    type Output = ecdsa::Signature;
-    type Error = EcdsaSignatureDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(EcdsaSignatureDecodeError::ByteVec)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(EcdsaSignatureDecodeError::ByteVec)?;
-        ecdsa::Signature::from_slice(&value).map_err(EcdsaSignatureDecodeError::Invalid)
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-/// Error decoding an [`ecdsa::Signature`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EcdsaSignatureDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is not a valid ECDSA signature.
-    Invalid(ecdsa::Error),
-}
-
-impl fmt::Display for EcdsaSignatureDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding ECDSA signature: {e}"),
-            Self::Invalid(e) => write!(f, "invalid ECDSA signature: {e}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for EcdsaSignatureDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::Invalid(e) => Some(e),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -1056,81 +984,6 @@ mod tests {
         assert_eq!(pk_uc.psbt_encoder().len(), 65, "uncompressed public key");
     }
 
-    // Exercises `PsbtEncode for bitcoin::ecdsa::SerializedSignature` (the `BytesEncoder` impl).
-    // DER is variable-length: strict DER pads a scalar with a leading 0x00 when its high bit is
-    // set, so differently-sized signatures must encode to differently-sized values.
-    #[test]
-    fn serialized_ecdsa_signature_encoded_size_varies_with_der_size() {
-        // Builds a `SerializedSignature` (DER bytes + the SIGHASH_ALL byte) from raw DER.
-        fn serialized(der: &[u8]) -> bitcoin::ecdsa::Signature {
-            let sig = bitcoin::secp256k1::ecdsa::Signature::from_der(der).unwrap();
-            ecdsa::Signature { signature: sig, sighash_type: bitcoin::EcdsaSighashType::All }
-        }
-
-        // r = 1, s = 1 -> minimal DER (8 bytes), +1 sighash byte = 9.
-        let minimal = serialized(&[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
-
-        // r, s each 32 bytes, high bits clear -> no padding (70-byte DER), +1 = 71.
-        let mid = serialized(&der_with_scalars(&[0x01; 32], &[0x01; 32]));
-
-        // r padded (high bit set), s not -> 71-byte DER, +1 = 72.
-        let one_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x01; 32]));
-
-        // r, s both padded -> 72-byte DER, +1 = 73.
-        let both_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x80; 32]));
-
-        // Use encoder to check len and remove mutants
-        let minimal_enc = EcdsaSigEncoder::new(minimal.serialize());
-        let minimal_len = minimal_enc.len();
-        let mid_enc = EcdsaSigEncoder::new(mid.serialize());
-        let mid_len = mid_enc.len();
-        // Use encode_to_vec for the rest to also exercise PsbtEncode interface
-        let one_pad_len = encode_to_vec(&one_pad).len();
-        let both_pad_len = encode_to_vec(&both_pad).len();
-
-        assert_eq!(minimal_len, 9, "minimal r=s=1 signature");
-        assert_eq!(mid_len, 71, "two unpadded 32-byte scalars");
-        assert_eq!(one_pad_len, 72, "one padded scalar");
-        assert_eq!(both_pad_len, 73, "two padded scalars");
-
-        // The core claim: differently-sized signatures encode to differently-sized values.
-        let mut sizes = vec![minimal_len, mid_len, one_pad_len, both_pad_len];
-        sizes.sort_unstable();
-        sizes.dedup();
-        assert_eq!(sizes.len(), 4, "encoded sizes must all be distinct");
-    }
-
-    // Encodes two big-endian scalars as strict DER: `0x30 <len> 0x02 <rlen> <r> 0x02 <slen> <s>`,
-    // prepending a 0x00 to either scalar whose high bit is set (strict DER minimal encoding).
-    fn der_with_scalars(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
-        let r = padded(r);
-        let s = padded(s);
-        let mut body = Vec::with_capacity(2 + r.len() + 2 + s.len());
-        body.push(0x02);
-        body.push(r.len() as u8);
-        body.extend_from_slice(&r);
-        body.push(0x02);
-        body.push(s.len() as u8);
-        body.extend_from_slice(&s);
-        let mut der = Vec::with_capacity(2 + body.len());
-        der.push(0x30);
-        der.push(body.len() as u8);
-        der.extend_from_slice(&body);
-        der
-    }
-
-    // Prepends a 0x00 byte iff the scalar's high bit is set, per strict DER.
-    fn padded(scalar: &[u8; 32]) -> Vec<u8> {
-        if scalar[0] & 0x80 != 0 {
-            let mut v = Vec::with_capacity(33);
-            v.push(0x00);
-            v.extend_from_slice(scalar);
-            v
-        } else {
-            scalar.to_vec()
-        }
-    }
-
     #[test]
     fn separator_encoder_len_is_always_1() {
         let mut enc = SeparatorEncoder::new();
@@ -1149,10 +1002,6 @@ mod tests {
         assert_eq!(bytes, vec![lv.to_consensus()]);
     }
 
-    // Taproot signatures are fixed-size: 64 bytes for the default sighash (no trailing
-    // sighash byte), 65 bytes for any explicit sighash type. Mirrors
-    // `serialized_ecdsa_signature_encoded_size_varies_with_der_size` for the schnorr case,
-    // pinning both the `ExactSizeEncoder`-reported length and the actual encoded byte length.
     #[test]
     fn taproot_signature_encoded_size_matches_sighash_type() {
         let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
