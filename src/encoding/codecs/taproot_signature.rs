@@ -4,40 +4,54 @@ use core::fmt;
 
 use bitcoin::taproot;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, CompactSizeDecoder, CompactSizeDecoderError, Decoder, DecoderStatus, Encoder,
-    EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
+    ArrayDecoder, ArrayEncoder, ArrayRefEncoder, CompactSizeDecoder, CompactSizeDecoderError,
+    Decoder, DecoderStatus, Encoder, Encoder2, EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
 };
 
 use crate::encoding::PsbtEncode;
 
-/// Size of a Schnorr signature without the sighash type byte (BIP-340).
+/// Size of a Schnorr signature in bytes (BIP-340).
 const SIG_SIZE: usize = 64;
-/// Size of a Schnorr signature including the optional sighash type byte (BIP-341).
-const MAX_SIG_SIZE: usize = 65;
+/// Size of a single sighash type byte.
+const SIGHASH_SIZE: usize = 1;
+/// Maximum size of a Schnorr signature including the optional sighash type byte (BIP-341).
+const MAX_SIG_SIZE: usize = SIG_SIZE + SIGHASH_SIZE;
 
-/// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
+/// Encoder for a [`taproot::Signature`].
+///
+/// Composes a borrowed signature encoder (64 bytes) with an optional 1-byte sighash encoder.
+/// When the sighash type is [`bitcoin::TapSighashType::Default`], the sighash bytes
+/// are suppressed (encoded as `Option::None`).
 #[derive(Debug)]
-pub struct TaprootSignatureEncoder(taproot::serialized_signature::SerializedSignature);
-
-impl TaprootSignatureEncoder {
-    /// Creates a new taproot signature encoder.
-    pub fn new(sig: taproot::serialized_signature::SerializedSignature) -> Self { Self(sig) }
+pub struct TaprootSignatureEncoder<'e> {
+    inner: Encoder2<ArrayRefEncoder<'e, SIG_SIZE>, Option<ArrayEncoder<SIGHASH_SIZE>>>,
 }
 
-impl Encoder for TaprootSignatureEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0 }
-
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+impl<'e> TaprootSignatureEncoder<'e> {
+    fn new(sig: &'e taproot::Signature) -> Self {
+        let sig_enc = ArrayRefEncoder::without_length_prefix(sig.signature.as_ref());
+        let sighash_enc = if sig.sighash_type == bitcoin::TapSighashType::Default {
+            None
+        } else {
+            Some(ArrayEncoder::without_length_prefix([sig.sighash_type as u8]))
+        };
+        Self { inner: Encoder2::new(sig_enc, sighash_enc) }
+    }
 }
 
-impl ExactSizeEncoder for TaprootSignatureEncoder {
-    fn len(&self) -> usize { self.0.len() }
+impl Encoder for TaprootSignatureEncoder<'_> {
+    fn current_chunk(&self) -> &[u8] { self.inner.current_chunk() }
+    fn advance(&mut self) -> EncoderStatus { self.inner.advance() }
+}
+
+impl ExactSizeEncoder for TaprootSignatureEncoder<'_> {
+    fn len(&self) -> usize { self.inner.len() }
 }
 
 impl PsbtEncode for taproot::Signature {
-    type Encoder<'e> = TaprootSignatureEncoder;
+    type Encoder<'e> = TaprootSignatureEncoder<'e>;
 
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { TaprootSignatureEncoder::new(self.serialize()) }
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { TaprootSignatureEncoder::new(self) }
 }
 
 /// Internal state for [`TaprootSignatureDecoder`].
@@ -46,9 +60,9 @@ enum DecoderState {
     /// Reading the compact-size length prefix.
     ReadingPrefix(CompactSizeDecoder),
     /// Reading a 64-byte signature (no sighash).
-    Reading64(ArrayDecoder<64>),
+    Reading64(ArrayDecoder<SIG_SIZE>),
     /// Reading a 65-byte signature (with sighash).
-    Reading65(ArrayDecoder<65>),
+    Reading65(ArrayDecoder<MAX_SIG_SIZE>),
     /// A previous [`Decoder::push_bytes`] call errored; the decoder is unusable.
     Errored,
 }
