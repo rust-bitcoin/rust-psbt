@@ -15,12 +15,12 @@ use bitcoin_consensus_encoding::{
 
 use super::framing::ValueDecoderError;
 use super::Key;
+use crate::encoding::codecs::taproot_signature::TaprootSignatureDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::codecs::CompressedPublicKeyDecodeError;
 use crate::encoding::codecs::{
     EcdsaSignatureDecodeError, HeightDecodeError, KeySourceDecodeError, TapNodeHashDecodeError,
-    TapTreeDecodeError, TaprootSignatureDecodeError, TimeDecodeError, TxidDecodeError,
-    XOnlyPublicKeyDecodeError,
+    TapTreeDecodeError, TimeDecodeError, TxidDecodeError, XOnlyPublicKeyDecodeError,
 };
 use crate::error::write_err;
 use crate::map::output::ValidationError;
@@ -87,8 +87,9 @@ impl fmt::Display for GlobalDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateKey(ref key) => write!(f, "duplicate key: {}", key),
-            Self::WrongVersion(v) =>
-                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v),
+            Self::WrongVersion(v) => {
+                write!(f, "PSBT_GLOBAL_VERSION: expected v2, got version {}", v)
+            }
             Self::Xpub(ref e) => write_err!(f, "xpub"; e),
             Self::KeyDecode(ref e) => write_err!(f, "error decoding key"; e),
             Self::EarlyEnd => write!(f, "called end() before completing global map decode"),
@@ -249,8 +250,9 @@ impl fmt::Display for OutputDecodeError {
             Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
             Self::TapInternalKey(ref e) => write_err!(f, "error decoding tap internal key"; e),
             Self::TapTree(ref e) => write_err!(f, "error decoding tap tree"; e),
-            Self::TapBip32Derivation(ref e) =>
-                write_err!(f, "error decoding tap BIP32 derivation"; e),
+            Self::TapBip32Derivation(ref e) => {
+                write_err!(f, "error decoding tap BIP32 derivation"; e)
+            }
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
             #[cfg(feature = "silent-payments")]
@@ -404,16 +406,18 @@ impl fmt::Display for InputDecodeError {
             Self::TapMerkleRoot(ref e) => write_err!(f, "error decoding tap merkle root"; e),
             Self::NonWitnessUtxo(ref e) => write_err!(f, "error decoding non-witness UTXO"; e),
             Self::WitnessUtxo(ref e) => write_err!(f, "error decoding witness UTXO"; e),
-            Self::FinalScriptWitness(ref e) =>
-                write_err!(f, "error decoding final script witness"; e),
+            Self::FinalScriptWitness(ref e) => {
+                write_err!(f, "error decoding final script witness"; e)
+            }
             Self::RedeemScript(ref e) => write_err!(f, "error decoding redeem script"; e),
             Self::WitnessScript(ref e) => write_err!(f, "error decoding witness script"; e),
             Self::FinalScriptSig(ref e) => write_err!(f, "error decoding final scriptSig"; e),
             Self::TapKeySig(ref e) => write_err!(f, "error decoding tap key signature"; e),
             Self::PartialSig(ref e) => write_err!(f, "error decoding partial signature"; e),
             Self::Bip32Derivation(ref e) => write_err!(f, "error decoding BIP32 derivation"; e),
-            Self::TapBip32Derivation(ref e) =>
-                write_err!(f, "error decoding tap BIP32 derivation"; e),
+            Self::TapBip32Derivation(ref e) => {
+                write_err!(f, "error decoding tap BIP32 derivation"; e)
+            }
             Self::Ripemd160Preimage(ref e) => write_err!(f, "error decoding RIPEMD160 preimage"; e),
             Self::Sha256Preimage(ref e) => write_err!(f, "error decoding SHA256 preimage"; e),
             Self::Hash160Preimage(ref e) => write_err!(f, "error decoding HASH160 preimage"; e),
@@ -523,8 +527,9 @@ impl fmt::Display for KeyDecodeError {
             Self::Empty => write!(f, "empty key (this is the map separator)"),
             Self::TypeValue(e) => write!(f, "failed to decode keytype: {}", e),
             Self::InvalidKeyData(ref key) => write!(f, "key data invalid for key: {}", key),
-            Self::ExcludedKey { key_type_value } =>
-                write!(f, "excluded key type 0x{:02x}", key_type_value),
+            Self::ExcludedKey { key_type_value } => {
+                write!(f, "excluded key type 0x{:02x}", key_type_value)
+            }
             Self::InvalidProprietaryKey => write!(f, "invalid proprietary key"),
         }
     }
