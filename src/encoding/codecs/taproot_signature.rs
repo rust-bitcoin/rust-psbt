@@ -49,7 +49,11 @@ impl Decoder for TaprootSignatureDecoder {
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
         use TaprootSigDecoderState::*;
 
-        if let ReadingPrefix(mut prefix) = core::mem::replace(&mut self.state, Errored) {
+        if matches!(self.state, ReadingPrefix(_)) {
+            let mut prefix = match core::mem::replace(&mut self.state, Errored) {
+                ReadingPrefix(p) => p,
+                _ => unreachable!(),
+            };
             if prefix
                 .push_bytes(bytes)
                 .map_err(TaprootSignatureDecodeError::LengthPrefix)?
@@ -144,5 +148,101 @@ impl std::error::Error for TaprootSignatureDecodeError {
             Self::InvalidLength(_) => None,
             Self::InvalidSignature(e) => Some(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use bitcoin::taproot;
+    use bitcoin_consensus_encoding::{
+        drain_to_vec, CompactSizeEncoder, Encoder2, ExactSizeEncoder,
+    };
+
+    use super::*;
+    use crate::encoding::PsbtEncode;
+
+    /// Build test data from a signature, prepending the compact-size prefix.
+    fn encode(sig: &taproot::Signature) -> Vec<u8> {
+        let psbt_enc = sig.psbt_encoder();
+        let mut enc = Encoder2::new(CompactSizeEncoder::new(psbt_enc.len()), psbt_enc);
+        drain_to_vec(&mut enc)
+    }
+
+    /// Exercise the decoder on a 64-byte signature (no sighash byte).
+    #[test]
+    fn decode_64_byte_signature() {
+        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        let sig =
+            taproot::Signature { signature: raw, sighash_type: bitcoin::TapSighashType::Default };
+        let encoded = encode(&sig);
+
+        let mut decoder = TaprootSignatureDecoder::default();
+        assert!(decoder.read_limit() > 0, "initial read_limit should be > 0 (prefix)");
+
+        let mut bytes: &[u8] = &encoded;
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+
+        let decoded = decoder.end().unwrap();
+        assert_eq!(decoded.sighash_type, bitcoin::TapSighashType::Default);
+    }
+
+    /// Exercise the decoder on a 65-byte signature (with sighash byte).
+    #[test]
+    fn decode_65_byte_signature() {
+        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        let sig = taproot::Signature { signature: raw, sighash_type: bitcoin::TapSighashType::All };
+        let encoded = encode(&sig);
+
+        let mut decoder = TaprootSignatureDecoder::default();
+        assert!(decoder.read_limit() > 0, "initial read_limit should be > 0 (prefix)");
+
+        let mut bytes: &[u8] = &encoded;
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+
+        let decoded = decoder.end().unwrap();
+        assert_eq!(decoded.sighash_type, bitcoin::TapSighashType::All);
+    }
+
+    #[test]
+    fn read_limit_lifecycle() {
+        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        let sig =
+            taproot::Signature { signature: raw, sighash_type: bitcoin::TapSighashType::Default };
+        let encoded = encode(&sig);
+
+        let mut decoder = TaprootSignatureDecoder::default();
+        // Prefix phase: compact-size(64) needs 1 byte.
+        assert_eq!(decoder.read_limit(), 1);
+
+        let mut remaining = encoded.as_slice();
+        // Feed the prefix byte (0x40 = 64).
+        let mut byte = &remaining[..1];
+        decoder.push_bytes(&mut byte).unwrap();
+        remaining = &remaining[1..];
+        assert_eq!(decoder.read_limit(), SIG_SIZE, "after prefix, read_limit jumps to value size");
+
+        // Value phase: count down to zero.
+        while decoder.read_limit() > 0 {
+            let mut byte = &remaining[..1];
+            let status = decoder.push_bytes(&mut byte).unwrap();
+            remaining = &remaining[1..];
+            if status.is_ready() {
+                assert_eq!(decoder.read_limit(), 0);
+            }
+        }
+    }
+
+    /// An invalid declared length is rejected early.
+    #[test]
+    fn reject_invalid_length() {
+        // compact_size(66) = 0x42 followed by any bytes.
+        let mut bytes: &[u8] = &[0x42, 0x00];
+        let mut decoder = TaprootSignatureDecoder::default();
+        let err = decoder.push_bytes(&mut bytes).unwrap_err();
+        assert!(matches!(err, TaprootSignatureDecodeError::InvalidLength(66)));
     }
 }
