@@ -8,6 +8,11 @@ use bitcoin_consensus_encoding::{
     UnexpectedEofError,
 };
 
+/// Size of a Schnorr signature without the sighash type byte (BIP-340).
+const SIG_SIZE: usize = 64;
+/// Size of a Schnorr signature including the optional sighash type byte (BIP-341).
+const MAX_SIG_SIZE: usize = 65;
+
 /// Internal state for [`TaprootSignatureDecoder`].
 #[derive(Debug)]
 enum TaprootSigDecoderState {
@@ -55,8 +60,8 @@ impl Decoder for TaprootSignatureDecoder {
             }
             let len = prefix.end().map_err(TaprootSignatureDecodeError::LengthPrefix)?;
             match len {
-                64 => self.state = Reading64(ArrayDecoder::new()),
-                65 => self.state = Reading65(ArrayDecoder::new()),
+                SIG_SIZE => self.state = Reading64(ArrayDecoder::new()),
+                MAX_SIG_SIZE => self.state = Reading65(ArrayDecoder::new()),
                 n => return Err(TaprootSignatureDecodeError::InvalidLength(n)),
             }
         }
@@ -123,7 +128,7 @@ impl fmt::Display for TaprootSignatureDecodeError {
             }
             Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding taproot signature: {e}"),
             Self::InvalidLength(len) => {
-                write!(f, "invalid taproot signature length ({len} bytes, expected 64 or 65)")
+                write!(f, "invalid taproot signature length ({len} bytes, expected {SIG_SIZE} or {MAX_SIG_SIZE})")
             }
             Self::InvalidSignature(e) => write!(f, "invalid taproot signature: {e}"),
         }
