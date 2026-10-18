@@ -639,29 +639,6 @@ impl PsbtEncode for ecdsa::Signature {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
 }
 
-/// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
-pub struct TapSigEncoder(taproot::serialized_signature::SerializedSignature);
-
-impl TapSigEncoder {
-    fn new(sig: taproot::serialized_signature::SerializedSignature) -> Self { Self(sig) }
-}
-
-impl Encoder for TapSigEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0 }
-
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
-}
-
-impl ExactSizeEncoder for TapSigEncoder {
-    fn len(&self) -> usize { self.0.len() }
-}
-
-impl PsbtEncode for taproot::Signature {
-    type Encoder<'e> = TapSigEncoder;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
-}
-
 /// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
 /// `leaf version u8`, then compact-size-prefixed script per leaf, in DFS order.
 pub struct TapTreeEncoder<'e> {

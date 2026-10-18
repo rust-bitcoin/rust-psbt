@@ -4,18 +4,45 @@ use core::fmt;
 
 use bitcoin::taproot;
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, CompactSizeDecoder, CompactSizeDecoderError, Decoder, DecoderStatus,
-    UnexpectedEofError,
+    ArrayDecoder, CompactSizeDecoder, CompactSizeDecoderError, Decoder, DecoderStatus, Encoder,
+    EncoderStatus, ExactSizeEncoder, UnexpectedEofError,
 };
+
+use crate::encoding::PsbtEncode;
 
 /// Size of a Schnorr signature without the sighash type byte (BIP-340).
 const SIG_SIZE: usize = 64;
 /// Size of a Schnorr signature including the optional sighash type byte (BIP-341).
 const MAX_SIG_SIZE: usize = 65;
 
+/// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
+#[derive(Debug)]
+pub struct TaprootSignatureEncoder(taproot::serialized_signature::SerializedSignature);
+
+impl TaprootSignatureEncoder {
+    /// Creates a new taproot signature encoder.
+    pub fn new(sig: taproot::serialized_signature::SerializedSignature) -> Self { Self(sig) }
+}
+
+impl Encoder for TaprootSignatureEncoder {
+    fn current_chunk(&self) -> &[u8] { &self.0 }
+
+    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
+}
+
+impl ExactSizeEncoder for TaprootSignatureEncoder {
+    fn len(&self) -> usize { self.0.len() }
+}
+
+impl PsbtEncode for taproot::Signature {
+    type Encoder<'e> = TaprootSignatureEncoder;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { TaprootSignatureEncoder::new(self.serialize()) }
+}
+
 /// Internal state for [`TaprootSignatureDecoder`].
 #[derive(Debug)]
-enum TaprootSigDecoderState {
+enum DecoderState {
     /// Reading the compact-size length prefix.
     ReadingPrefix(CompactSizeDecoder),
     /// Reading a 64-byte signature (no sighash).
@@ -33,13 +60,11 @@ enum TaprootSigDecoderState {
 /// on whether the sighash type byte is present. No heap allocation.
 #[derive(Debug)]
 pub struct TaprootSignatureDecoder {
-    state: TaprootSigDecoderState,
+    state: DecoderState,
 }
 
 impl Default for TaprootSignatureDecoder {
-    fn default() -> Self {
-        Self { state: TaprootSigDecoderState::ReadingPrefix(CompactSizeDecoder::new()) }
-    }
+    fn default() -> Self { Self { state: DecoderState::ReadingPrefix(CompactSizeDecoder::new()) } }
 }
 
 impl Decoder for TaprootSignatureDecoder {
@@ -47,7 +72,7 @@ impl Decoder for TaprootSignatureDecoder {
     type Error = TaprootSignatureDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        use TaprootSigDecoderState::*;
+        use DecoderState::*;
 
         if matches!(self.state, ReadingPrefix(_)) {
             let mut prefix = match core::mem::replace(&mut self.state, Errored) {
@@ -82,31 +107,31 @@ impl Decoder for TaprootSignatureDecoder {
 
     fn end(self) -> Result<Self::Output, Self::Error> {
         match self.state {
-            TaprootSigDecoderState::ReadingPrefix(p) => {
+            DecoderState::ReadingPrefix(p) => {
                 // Prefix never completed; end() surfaces the compact-size error.
                 let err = p.end().unwrap_err();
                 Err(TaprootSignatureDecodeError::LengthPrefix(err))
             }
-            TaprootSigDecoderState::Reading64(dec) => {
+            DecoderState::Reading64(dec) => {
                 let buf = dec.end().map_err(TaprootSignatureDecodeError::UnexpectedEof)?;
                 taproot::Signature::from_slice(&buf)
                     .map_err(TaprootSignatureDecodeError::InvalidSignature)
             }
-            TaprootSigDecoderState::Reading65(dec) => {
+            DecoderState::Reading65(dec) => {
                 let buf = dec.end().map_err(TaprootSignatureDecodeError::UnexpectedEof)?;
                 taproot::Signature::from_slice(&buf)
                     .map_err(TaprootSignatureDecodeError::InvalidSignature)
             }
-            TaprootSigDecoderState::Errored => panic!("use of failed decoder"),
+            DecoderState::Errored => panic!("use of failed decoder"),
         }
     }
 
     fn read_limit(&self) -> usize {
         match &self.state {
-            TaprootSigDecoderState::ReadingPrefix(dec) => dec.read_limit(),
-            TaprootSigDecoderState::Reading64(dec) => dec.read_limit(),
-            TaprootSigDecoderState::Reading65(dec) => dec.read_limit(),
-            TaprootSigDecoderState::Errored => 0,
+            DecoderState::ReadingPrefix(dec) => dec.read_limit(),
+            DecoderState::Reading64(dec) => dec.read_limit(),
+            DecoderState::Reading65(dec) => dec.read_limit(),
+            DecoderState::Errored => 0,
         }
     }
 }
