@@ -3,6 +3,8 @@
 //! This module contains PSBT codec implementations for types which live upstream and whose PSBT
 //! codecs are different from their consensus codecs.
 
+pub mod taproot_signature;
+
 use alloc::borrow::ToOwned as _;
 use alloc::vec::Vec;
 use core::fmt;
@@ -190,10 +192,12 @@ impl fmt::Display for KeySourceDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ByteVec(e) => write!(f, "error decoding key source: {e}"),
-            Self::TooShort(len) =>
-                write!(f, "key source too short ({} bytes, need at least 4)", len),
-            Self::InvalidPathLength(len) =>
-                write!(f, "key source path not aligned ({} bytes, not a multiple of 4)", len),
+            Self::TooShort(len) => {
+                write!(f, "key source too short ({} bytes, need at least 4)", len)
+            }
+            Self::InvalidPathLength(len) => {
+                write!(f, "key source path not aligned ({} bytes, not a multiple of 4)", len)
+            }
         }
     }
 }
@@ -635,29 +639,6 @@ impl PsbtEncode for ecdsa::Signature {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
 }
 
-/// Encoder for a [`taproot::serialized_signature::SerializedSignature`].
-pub struct TapSigEncoder(taproot::serialized_signature::SerializedSignature);
-
-impl TapSigEncoder {
-    fn new(sig: taproot::serialized_signature::SerializedSignature) -> Self { Self(sig) }
-}
-
-impl Encoder for TapSigEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0 }
-
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
-}
-
-impl ExactSizeEncoder for TapSigEncoder {
-    fn len(&self) -> usize { self.0.len() }
-}
-
-impl PsbtEncode for taproot::Signature {
-    type Encoder<'e> = TapSigEncoder;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { TapSigEncoder::new(self.serialize()) }
-}
-
 /// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
 /// `leaf version u8`, then compact-size-prefixed script per leaf, in DFS order.
 pub struct TapTreeEncoder<'e> {
@@ -888,8 +869,9 @@ pub enum CompressedPublicKeyDecodeError {
 impl fmt::Display for CompressedPublicKeyDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnexpectedEof(e) =>
-                write!(f, "unexpected EOF decoding compressed public key: {e}"),
+            Self::UnexpectedEof(e) => {
+                write!(f, "unexpected EOF decoding compressed public key: {e}")
+            }
             Self::Invalid(e) => write!(f, "invalid compressed public key: {e}"),
         }
     }
@@ -900,56 +882,6 @@ impl std::error::Error for CompressedPublicKeyDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::UnexpectedEof(e) => Some(e),
-            Self::Invalid(e) => Some(e),
-        }
-    }
-}
-
-/// Decoder for a [`taproot::Signature`] value.
-#[derive(Debug, Default)]
-pub struct TaprootSignatureDecoder {
-    inner: ByteVecDecoder,
-}
-
-impl Decoder for TaprootSignatureDecoder {
-    type Output = taproot::Signature;
-    type Error = TaprootSignatureDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(TaprootSignatureDecodeError::ByteVec)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(TaprootSignatureDecodeError::ByteVec)?;
-        taproot::Signature::from_slice(&value).map_err(TaprootSignatureDecodeError::Invalid)
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-/// Error decoding a [`taproot::Signature`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaprootSignatureDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is not a valid taproot signature.
-    Invalid(bitcoin::taproot::SigFromSliceError),
-}
-
-impl fmt::Display for TaprootSignatureDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding taproot signature: {e}"),
-            Self::Invalid(e) => write!(f, "invalid taproot signature: {e}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for TaprootSignatureDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
             Self::Invalid(e) => Some(e),
         }
     }
