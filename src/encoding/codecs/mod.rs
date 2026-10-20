@@ -4,14 +4,14 @@
 //! codecs are different from their consensus codecs.
 
 pub mod ecdsa_signature;
+pub mod key_source;
 pub mod taproot_signature;
 
 use alloc::borrow::ToOwned as _;
-use alloc::vec::Vec;
 use core::fmt;
 use core::ops::BitOr as _;
 
-use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+use bitcoin::bip32::{self, ChildNumber, Xpub};
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
@@ -120,97 +120,28 @@ impl PsbtEncode for ChildNumber {
     }
 }
 
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a serialized [`KeySource`].
-    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, SliceEncoder<'e, ChildNumber>>);
-}
-
-impl PsbtEncode for KeySource {
-    type Encoder<'e>
-        = KeySourceEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        KeySourceEncoder::new(Encoder2::new(
-            BytesEncoder::without_length_prefix(self.0.as_bytes()),
-            <SliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
-        ))
-    }
-}
-
-/// Decoder for a [`KeySource`] value (fingerprint + derivation path).
+/// Decoder for a [`ChildNumber`].
 #[derive(Debug, Default)]
-pub struct KeySourceDecoder {
-    inner: ByteVecDecoder,
-}
+pub struct ChildNumberDecoder(ArrayDecoder<4>);
 
-impl Decoder for KeySourceDecoder {
-    type Output = KeySource;
-    type Error = KeySourceDecodeError;
+impl Decoder for ChildNumberDecoder {
+    type Output = ChildNumber;
+    type Error = UnexpectedEofError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(KeySourceDecodeError::ByteVec)
+        self.0.push_bytes(bytes)
     }
 
     fn end(self) -> Result<Self::Output, Self::Error> {
-        use bitcoin::bip32::{DerivationPath, Fingerprint};
-
-        let bytes = self.inner.end().map_err(KeySourceDecodeError::ByteVec)?;
-        if bytes.len() < 4 {
-            return Err(KeySourceDecodeError::TooShort(bytes.len()));
-        }
-        if bytes.len() % 4 != 0 {
-            return Err(KeySourceDecodeError::InvalidPathLength(bytes.len()));
-        }
-        let fingerprint = Fingerprint::from(<[u8; 4]>::try_from(&bytes[..4]).expect("4 bytes"));
-        let path = bytes[4..]
-            .chunks_exact(4)
-            .map(|c| ChildNumber::from(u32::from_le_bytes(c.try_into().expect("4-byte chunks"))))
-            .collect::<Vec<_>>();
-        Ok((fingerprint, DerivationPath::from(path)))
+        let bytes = self.0.end()?;
+        Ok(ChildNumber::from(u32::from_le_bytes(bytes)))
     }
 
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
+    fn read_limit(&self) -> usize { self.0.read_limit() }
 }
 
-impl PsbtDecode for KeySource {
-    type Decoder = KeySourceDecoder;
-}
-
-/// Error decoding a [`KeySource`] (fingerprint + derivation path).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeySourceDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is shorter than the 4-byte fingerprint.
-    TooShort(usize),
-    /// The derivation path is not a multiple of 4 bytes.
-    InvalidPathLength(usize),
-}
-
-impl fmt::Display for KeySourceDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding key source: {e}"),
-            Self::TooShort(len) => {
-                write!(f, "key source too short ({} bytes, need at least 4)", len)
-            }
-            Self::InvalidPathLength(len) => {
-                write!(f, "key source path not aligned ({} bytes, not a multiple of 4)", len)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for KeySourceDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::TooShort(_) | Self::InvalidPathLength(_) => None,
-        }
-    }
+impl PsbtDecode for ChildNumber {
+    type Decoder = ChildNumberDecoder;
 }
 
 impl PsbtEncode for absolute::Time {
@@ -870,8 +801,6 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use bitcoin::bip32::Fingerprint;
-
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
     use crate::map::SeparatorEncoder;
@@ -935,39 +864,6 @@ mod tests {
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);
-    }
-
-    #[test]
-    fn key_source_encode_empty_path() {
-        use bitcoin::bip32::DerivationPath;
-
-        let key_source: KeySource =
-            (Fingerprint::from([0x42, 0x99, 0x69, 0xf0]), DerivationPath::default());
-        let bytes = encode_to_vec(&key_source);
-        assert_eq!(bytes.len(), 4);
-        assert_eq!(bytes, [0x42, 0x99, 0x69, 0xf0]);
-    }
-
-    #[test]
-    fn key_source_encode_multi_element_path() {
-        use bitcoin::bip32::DerivationPath;
-
-        let path: DerivationPath = [
-            ChildNumber::from_hardened_idx(84).unwrap(),
-            ChildNumber::from_normal_idx(1).unwrap(),
-            ChildNumber::from_hardened_idx(2).unwrap(),
-        ]
-        .into_iter()
-        .collect();
-        let key_source: KeySource = (Fingerprint::from([0x12, 0x34, 0x56, 0x78]), path);
-
-        let bytes = encode_to_vec(&key_source);
-        assert_eq!(bytes.len(), 4 + 3 * 4);
-        let mut expected = vec![0x12, 0x34, 0x56, 0x78];
-        for n in &key_source.1 {
-            expected.extend(u32::from(*n).to_le_bytes());
-        }
-        assert_eq!(bytes, expected);
     }
 
     #[test]
@@ -1061,63 +957,5 @@ mod tests {
         let leaf_encoder = iter.next().expect("one leaf");
         // 1 depth byte + 1 version byte + 1 compact-size byte + 3 script bytes.
         assert_eq!(leaf_encoder.len(), 6);
-    }
-
-    #[test]
-    fn key_source_decoder_read_limit_lifecycle() {
-        let mut decoder = KeySourceDecoder::default();
-        assert!(decoder.read_limit() > 0);
-
-        // Fingerprint-only value, compact_size(4) + 4 bytes.
-        let mut bytes: &[u8] = &[0x04, 0xde, 0xad, 0xbe, 0xef];
-        let status = decoder.push_bytes(&mut bytes).unwrap();
-        assert!(status.is_ready());
-        assert_eq!(decoder.read_limit(), 0);
-    }
-
-    #[test]
-    fn key_source_decoder_fingerprint_only() {
-        use bitcoin::bip32::{DerivationPath, Fingerprint};
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint without derivation, compact_size(4) + 4-byte fingerprint.
-        let mut bytes: &[u8] = &[0x04, 0xde, 0xad, 0xbe, 0xef];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let (fingerprint, derivation) = decoder.end().unwrap();
-        assert_eq!(fingerprint, Fingerprint::from([0xde, 0xad, 0xbe, 0xef]));
-        assert_eq!(derivation, DerivationPath::master());
-    }
-
-    #[test]
-    fn key_source_decoder_with_path() {
-        use bitcoin::bip32::Fingerprint;
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint + one child, compact_size(8) + 4-byte fingerprint + 4-byte child.
-        let mut bytes: &[u8] = &[0x08, 0xaa, 0xbb, 0xcc, 0xdd, 0x01, 0x00, 0x00, 0x00];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let (fingerprint, derivation) = decoder.end().unwrap();
-        assert_eq!(fingerprint, Fingerprint::from([0xaa, 0xbb, 0xcc, 0xdd]));
-        let children: Vec<ChildNumber> = derivation.into_iter().copied().collect();
-        assert_eq!(children.len(), 1);
-        assert_eq!(u32::from(children[0]), 1);
-    }
-
-    #[test]
-    fn key_source_decoder_too_short() {
-        let mut decoder = KeySourceDecoder::default();
-        // 3 bytes, shorter than the 4-byte fingerprint.
-        let mut bytes: &[u8] = &[0x03, 0xde, 0xad, 0xbe];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let err = decoder.end().unwrap_err();
-        assert_eq!(err, KeySourceDecodeError::TooShort(3));
-    }
-
-    #[test]
-    fn key_source_decoder_invalid_path_length() {
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint + 2 extra bytes, compact_size(6) but path is not 4-byte aligned.
-        let mut bytes: &[u8] = &[0x06, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x00];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let err = decoder.end().unwrap_err();
-        assert_eq!(err, KeySourceDecodeError::InvalidPathLength(6));
     }
 }

@@ -28,7 +28,7 @@ use crate::consts::{
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
-use crate::encoding::codecs::KeySourceDecoder;
+use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
