@@ -791,7 +791,8 @@ impl<'id> SignableInput<'id> {
     /// This is the untrusted path: in addition to the structural checks of
     /// [`Self::assume_checked`], it verifies the funding UTXO against a full transaction (rejecting
     /// witness-only non-P2TR inputs), checks that the redeem/witness scripts match the
-    /// scriptPubKey, and that any existing signatures' sighash types agree with the declared one.
+    /// scriptPubKey, that the declared taproot key material produces the prevout's output key, and
+    /// that any existing signatures' sighash types agree with the declared one.
     fn verify(psbt: &Psbt, index: usize) -> Result<Self, SignError> {
         let input = Self::check_data(psbt, index)?;
 
@@ -820,6 +821,20 @@ impl<'id> SignableInput<'id> {
                         }
                     },
                 _ => (),
+            }
+        }
+
+        // The declared taproot key material must produce the output key committed to by the
+        // prevout's scriptPubKey: a mismatching internal key would elicit signatures that do not
+        // verify on-chain. Script-path-only inputs (no internal key declared) cannot be checked.
+        if matches!(input.output_type, OutputType::Tr) {
+            if let Some(internal_key) = psbt_input.tap_internal_key {
+                let secp = Secp256k1::verification_only();
+                let output_key =
+                    ScriptBuf::new_p2tr(&secp, internal_key, psbt_input.tap_merkle_root);
+                if output_key != *spk {
+                    return Err(SignError::TaprootInternalKeyMismatch);
+                }
             }
         }
 
@@ -1693,6 +1708,24 @@ mod test {
         let output_key = XOnlyPublicKey::from_slice(&spk.as_bytes()[2..34]).unwrap();
         secp.verify_schnorr(signature, &Message::from(sighash), &output_key)
             .expect("key-path signature verifies against the tweaked output key");
+    }
+
+    #[test]
+    fn verify_rejects_mismatching_taproot_internal_key() {
+        // The declared internal key does not tweak to the output key committed to by the prevout's
+        // scriptPubKey: the strict path rejects, the attested path trusts the caller.
+        let secp = Secp256k1::verification_only();
+        use bitcoin::secp256k1::SecretKey;
+        let (other, _) = SecretKey::from_slice(&[9u8; 32])
+            .unwrap()
+            .x_only_public_key(&Secp256k1::signing_only());
+        let script_pubkey = ScriptBuf::new_p2tr(&secp, other, None);
+        let mut psbt = single_input_psbt();
+        psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[0].tap_internal_key = Some(XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap());
+
+        assert_eq!(SignableInput::verify(&psbt, 0), Err(SignError::TaprootInternalKeyMismatch));
+        assert!(SignableInput::assume_checked(&psbt, 0).is_ok());
     }
 
     #[test]
