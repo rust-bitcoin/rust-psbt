@@ -11,7 +11,7 @@ use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
 use psbt_v2::{
-    Constructor, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer, TxModifiableFlags,
+    Constructor, Count, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer, TxModifiableFlags,
 };
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -50,8 +50,8 @@ fn deserialize_v0_redistributes_unsigned_tx_fields() {
     assert_eq!(psbt.global.version, psbt_v2::V2);
     assert_eq!(psbt.global.tx_version, psbt_v2::bitcoin::transaction::Version::TWO);
     assert_eq!(psbt.global.fallback_lock_time, None); // lock time is zero
-    assert_eq!(psbt.global.input_count, 2);
-    assert_eq!(psbt.global.output_count, 2);
+    assert_eq!(psbt.global.input_count, Count::from(2));
+    assert_eq!(psbt.global.output_count, Count::from(2));
     assert_eq!(psbt.inputs.len(), 2);
     assert_eq!(psbt.outputs.len(), 2);
     assert_eq!(psbt.inputs[0].sequence, Some(Sequence::MAX));

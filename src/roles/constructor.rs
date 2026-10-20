@@ -185,6 +185,6 @@ mod tests {
             .input(dummy_input())
             .input(dummy_input());
         assert_eq!(constructor.0.inputs.len(), 2);
-        assert_eq!(constructor.0.global.input_count, 2);
+        assert_eq!(usize::from(constructor.0.global.input_count), 2);
     }
 }

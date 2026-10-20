@@ -290,7 +290,7 @@ mod tests {
     use bitcoin::{Amount, CompressedPublicKey, OutPoint, ScriptBuf, TxOut, Txid, Witness};
 
     use super::*;
-    use crate::{Global, Input, Output};
+    use crate::{Count, Global, Input, Output};
 
     fn finalized_input() -> Input {
         let mut input = Input::new(&OutPoint { txid: Txid::all_zeros(), vout: 0 });
@@ -311,7 +311,11 @@ mod tests {
 
     fn psbt_with(output: Output) -> Psbt {
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![finalized_input()],
             outputs: vec![output],
         }
@@ -365,7 +369,7 @@ mod fee_rate_tests {
     use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, Witness};
 
     use super::{ExtractTxFeeRateError, Extractor, Psbt};
-    use crate::{Global, Input, Output};
+    use crate::{Count, Global, Input, Output};
 
     fn finalized_input() -> Input {
         let mut input = Input::new(&OutPoint { txid: Txid::all_zeros(), vout: 0 });
@@ -383,7 +387,11 @@ mod fee_rate_tests {
 
     fn psbt_with(output: Output) -> Psbt {
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![finalized_input()],
             outputs: vec![output],
         }

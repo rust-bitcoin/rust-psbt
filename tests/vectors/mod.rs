@@ -315,7 +315,7 @@ impl TestCase {
                         .iter()
                         .position(|input| input.previous_txid == txid)
                         .expect("input_update previous_tx does not match any PSBT input");
-                    let vout = psbt.inputs[i].spent_output_index as usize;
+                    let vout = usize::from(psbt.inputs[i].spent_output_index);
                     if u.witness {
                         psbt.inputs[i].witness_utxo = Some(prev_tx.output[vout].clone());
                     } else {

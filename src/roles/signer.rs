@@ -73,7 +73,7 @@ impl Signer {
     /// # Examples
     ///
     /// ```rust
-    /// # use psbt_v2::{Global, Input, Output, Psbt, Signer};
+    /// # use psbt_v2::{Count, Global, Input, Output, Psbt, Signer};
     /// # use psbt_v2::bitcoin::{absolute, transaction, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Transaction, TxIn, TxOut};
     /// # use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey};
     /// # use std::collections::BTreeMap;
@@ -96,7 +96,7 @@ impl Signer {
     /// #     input.non_witness_utxo = Some(funding);
     /// #     input.bip32_derivations.insert(pk, Default::default());
     /// #     Psbt {
-    /// #         global: Global { input_count: 1, output_count: 1, ..Global::default() },
+    /// #         global: Global { input_count: Count::from(1), output_count: Count::from(1), ..Global::default() },
     /// #         inputs: vec![input],
     /// #         outputs: vec![Output::new(TxOut {
     /// #             value: Amount::from_sat(900),
@@ -787,7 +787,7 @@ impl<'a, 'id> AllSignableInputs<'a, 'id> {
         let mut signable_inputs = Vec::new();
         let mut prevouts = Vec::new();
         let mut errors: BTreeMap<usize, SignError> = BTreeMap::new();
-        for index in 0..psbt.global.input_count {
+        for index in 0..usize::from(psbt.global.input_count) {
             match check(psbt, index) {
                 Ok(input) => {
                     signable_inputs.push(input);
@@ -1038,6 +1038,7 @@ mod test {
     use crate::global::Global;
     use crate::map::input::Input;
     use crate::map::output::Output;
+    use crate::Count;
 
     /// Builds a single-input PSBT spending a P2WPKH output, with both witness and non-witness
     /// UTXOs set. Used as the base for the strict/trusted matrix below.
@@ -1056,7 +1057,11 @@ mod test {
         input.witness_utxo = Some(tx_out);
         input.non_witness_utxo = Some(funding_tx);
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(900),
@@ -1093,7 +1098,11 @@ mod test {
         input.non_witness_utxo = Some(funding_tx);
         input.bip32_derivations.insert(pubkey, bitcoin::bip32::KeySource::default());
         let psbt = Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(900),
@@ -1119,7 +1128,11 @@ mod test {
         input.witness_utxo = Some(tx_out);
         input.non_witness_utxo = Some(funding_tx);
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(900),
@@ -1130,7 +1143,11 @@ mod test {
 
     fn single_input_psbt() -> Psbt {
         Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(1_000),
@@ -1141,7 +1158,11 @@ mod test {
 
     fn two_inputs_one_output_psbt() -> Psbt {
         Psbt {
-            global: Global { input_count: 2, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(2),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![Input::new(&OutPoint::null()), Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(1_000),
@@ -1185,7 +1206,7 @@ mod test {
     fn assume_checked_rejects_sighash_single_missing_output() {
         let mut psbt = wpkh_psbt();
         psbt.outputs.clear(); // no output at index 0
-        psbt.global.output_count = 0;
+        psbt.global.output_count = Count::from(0);
         psbt.inputs[0].sighash_type = Some(EcdsaSighashType::Single.into());
         assert_eq!(
             SignableInput::assume_checked(&psbt, 0),
@@ -1336,7 +1357,11 @@ mod test {
         input.witness_utxo = Some(tx_out.clone());
         input.non_witness_utxo = Some(funding_tx);
         let psbt = Psbt {
-            global: Global { input_count: 1, output_count: 1, ..Global::default() },
+            global: Global {
+                input_count: Count::from(1),
+                output_count: Count::from(1),
+                ..Global::default()
+            },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
                 value: Amount::from_sat(900),
@@ -1392,7 +1417,7 @@ mod test {
         let (mut psbt, key_map) = keyed_psbt();
         // Duplicate the keyed input so the PSBT has two signable standalone inputs.
         psbt.inputs.push(psbt.inputs[0].clone());
-        psbt.global.input_count = 2;
+        psbt.global.input_count = Count::from(2);
 
         let mut signer = Signer::new(psbt).unwrap();
         let sigs = signer.session(|mut session| {

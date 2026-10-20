@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Input 1: segwit (witness) funding.
     let prev_tx_1: Transaction = deserialize(&Vec::from_hex(INPUT_1_PREV_TX_HEX)?)?;
     psbt.inputs[1].witness_utxo =
-        Some(prev_tx_1.output[psbt.inputs[1].spent_output_index as usize].clone());
+        Some(prev_tx_1.output[usize::from(psbt.inputs[1].spent_output_index)].clone());
     psbt.inputs[1].redeem_script = Some(ScriptBuf::from_hex(INPUT_1_REDEEM_SCRIPT_HEX)?);
     psbt.inputs[1].witness_script = Some(ScriptBuf::from_hex(INPUT_1_WITNESS_SCRIPT_HEX)?);
     add_derivation(

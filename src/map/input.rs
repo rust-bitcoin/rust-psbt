@@ -17,11 +17,12 @@ use bitcoin::{
     ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    ArrayDecoder, ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus,
-    Encoder, EncoderStatus, ExactVecDecoderWith, IterEncoder, UnexpectedEofError,
+    ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
+    ExactVecDecoderWith, IterEncoder,
 };
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
+use super::vout::{Vout, VoutEncoder};
 use super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
     TapInternalKeyPair, UnknownKeyValueIter,
@@ -39,7 +40,7 @@ use crate::consts::{
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
 use crate::encoding::codecs::{EcdsaSignatureDecoder, KeySourceDecoder};
-use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
+use crate::encoding::{ExactLenEncoder, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
@@ -48,33 +49,6 @@ use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::SignError;
-
-/// The index of the output being spent, i.e. the `vout` of the previous transaction's outpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Vout(pub u32);
-
-/// Decoder for a PSBT `vout` value (4-byte little-endian).
-#[derive(Debug, Default)]
-pub(crate) struct VoutDecoder(ArrayDecoder<4>);
-
-impl Decoder for VoutDecoder {
-    type Output = Vout;
-    type Error = UnexpectedEofError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.0.push_bytes(bytes)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        self.0.end().map(|bytes| Vout(u32::from_le_bytes(bytes)))
-    }
-
-    fn read_limit(&self) -> usize { self.0.read_limit() }
-}
-
-impl PsbtDecode for Vout {
-    type Decoder = VoutDecoder;
-}
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -88,7 +62,7 @@ pub struct Input {
     ///  `OutPoint { txid: self.previous_txid, vout: self.spent_output_index }`
     pub previous_txid: Txid,
     /// The index of the output being spent in the transaction with the txid of `self.previous_txid`.
-    pub spent_output_index: u32,
+    pub spent_output_index: Vout,
     /// The sequence number of this input.
     ///
     /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]).
@@ -174,7 +148,7 @@ impl Input {
     pub fn new(previous_output: &OutPoint) -> Self {
         Self {
             previous_txid: previous_output.txid,
-            spent_output_index: previous_output.vout,
+            spent_output_index: Vout::from(previous_output.vout),
             sequence: None,
             min_time: None,
             min_height: None,
@@ -441,7 +415,7 @@ impl Input {
                 Err(FundingUtxoError::MismatchingTxid),
             (Some(ref utxo), None) => Ok(utxo),
             (Some(ref utxo), Some(ref tx)) => {
-                let vout = self.spent_output_index as usize;
+                let vout = usize::from(self.spent_output_index);
                 let txout = tx
                     .output
                     .get(vout)
@@ -453,7 +427,7 @@ impl Input {
                 }
             }
             (None, Some(ref tx)) => {
-                let vout = self.spent_output_index as usize;
+                let vout = usize::from(self.spent_output_index);
                 let txout = tx
                     .output
                     .get(vout)
@@ -484,7 +458,7 @@ impl Input {
     }
 
     fn out_point(&self) -> OutPoint {
-        OutPoint { txid: self.previous_txid, vout: self.spent_output_index }
+        OutPoint { txid: self.previous_txid, vout: u32::from(self.spent_output_index) }
     }
 
     /// Obtains the [`EcdsaSighashType`] for this input if one is specified. If no sighash type is
@@ -522,8 +496,8 @@ impl Input {
 
         if self.spent_output_index != other.spent_output_index {
             return Err(CombineError::SpentOutputIndexMismatch {
-                this: self.spent_output_index,
-                that: other.spent_output_index,
+                this: u32::from(self.spent_output_index),
+                that: u32::from(other.spent_output_index),
             });
         }
 
@@ -572,7 +546,7 @@ impl Input {
 pub struct InputDecoder {
     stage: DecoderStage,
     previous_txid: Option<Txid>,
-    spent_output_index: Option<u32>,
+    spent_output_index: Option<Vout>,
     sequence: Option<Sequence>,
     min_time: Option<absolute::Time>,
     min_height: Option<absolute::Height>,
@@ -989,7 +963,7 @@ impl Decoder for InputDecoder {
                     if self.spent_output_index.is_some() {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
-                    self.spent_output_index = Some(vout.0);
+                    self.spent_output_index = Some(vout);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingSequence { key, decoder } => {
@@ -1459,10 +1433,10 @@ impl<'e> InputMapEncoder<'e> {
         }
     }
 
-    fn output_index_pair(&self) -> OutputIndexPair<'_> {
+    fn output_index_pair(&self) -> OutputIndexPair<'e> {
         KeyValueEncoder::from_sized_kv(
             CompactSizeEncoder::new_u64(PSBT_IN_OUTPUT_INDEX),
-            ArrayEncoder::without_length_prefix(self.input.spent_output_index.to_le_bytes()),
+            self.input.spent_output_index.psbt_encoder(),
         )
     }
 
@@ -1882,7 +1856,7 @@ impl std::error::Error for CombineError {
 }
 
 /// Encoder for the spent-output-index key-value pair (PSBT_IN_OUTPUT_INDEX).
-pub(crate) type OutputIndexPair<'e> = KeyValueEncoder<CompactSizeEncoder, ArrayEncoder<4>>;
+pub(crate) type OutputIndexPair<'e> = KeyValueEncoder<CompactSizeEncoder, VoutEncoder<'e>>;
 /// Encoder for the previous-txid key-value pair (PSBT_IN_PREVIOUS_TXID).
 pub(crate) type PreviousTxidPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <Txid as PsbtEncode>::Encoder<'e>>;

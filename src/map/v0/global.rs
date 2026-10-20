@@ -16,6 +16,7 @@ use bitcoin_consensus_encoding::{
     ByteVecDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, EncoderStatus, IterEncoder,
 };
 
+use super::super::count::Count;
 #[cfg(feature = "silent-payments")]
 use super::super::global::{DleqKeyValueIter, EcdhKeyValueIter};
 use super::super::global::{VersionValueDecoder, XpubKeyValueIter};
@@ -292,8 +293,8 @@ impl Decoder for GlobalMapDecoder {
                                 tx_version,
                                 fallback_lock_time: (lock_time != absolute::LockTime::ZERO)
                                     .then_some(lock_time),
-                                input_count: tx_inputs.len(),
-                                output_count: tx_outputs.len(),
+                                input_count: Count::from(tx_inputs.len()),
+                                output_count: Count::from(tx_outputs.len()),
                                 // v0 has no PSBT_GLOBAL_TX_MODIFIABLE key, but we are assuming
                                 // construction is over and setting all to unmodifiable.
                                 tx_modifiable_flags: TxModifiableFlags::new(),

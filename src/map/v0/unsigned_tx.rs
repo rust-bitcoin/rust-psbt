@@ -68,7 +68,9 @@ impl<'e> Iterator for TxInIter<'e> {
         self.iter.next().map(|input| {
             Encoder4::new(
                 BytesEncoder::without_length_prefix(input.previous_txid.as_byte_array()),
-                ArrayEncoder::without_length_prefix(input.spent_output_index.to_le_bytes()),
+                ArrayEncoder::without_length_prefix(
+                    u32::from(input.spent_output_index).to_le_bytes(),
+                ),
                 ArrayEncoder::without_length_prefix([0x00]),
                 match input.sequence {
                     Some(ref seq) => seq.psbt_encoder(),
