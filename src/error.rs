@@ -156,6 +156,9 @@ pub enum SignError {
     SighashSingleMissingOutput,
     /// Pay-to-taproot non-ANYONECANPAY input requires all prevout for sighash.
     AllPrevoutsRequired,
+    /// The declared taproot internal key (tweaked with the merkle root) does not produce the
+    /// output key committed to by the prevout's `scriptPubKey`.
+    TaprootInternalKeyMismatch,
 }
 
 impl fmt::Display for SignError {
@@ -193,6 +196,8 @@ impl fmt::Display for SignError {
                 write!(f, "sighash single input has no output at the same index"),
             Self::AllPrevoutsRequired =>
                 write!(f, "non-ANYONECANPAY taproot input, it requires all prevouts"),
+            Self::TaprootInternalKeyMismatch =>
+                write!(f, "taproot internal key did not match the output key in the script_pubkey"),
         }
     }
 }
@@ -224,7 +229,8 @@ impl std::error::Error for SignError {
             | Self::WitnessScriptMismatchShWsh
             | Self::SighashMismatch
             | Self::SighashSingleMissingOutput
-            | Self::AllPrevoutsRequired => None,
+            | Self::AllPrevoutsRequired
+            | Self::TaprootInternalKeyMismatch => None,
         }
     }
 }

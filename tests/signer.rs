@@ -12,10 +12,11 @@ use std::collections::BTreeMap;
 use psbt_v2::bitcoin::absolute::LockTime;
 use psbt_v2::bitcoin::bip32::KeySource;
 use psbt_v2::bitcoin::hashes::Hash;
-use psbt_v2::bitcoin::opcodes::all::OP_CHECKMULTISIG;
+use psbt_v2::bitcoin::opcodes::all::{OP_CHECKMULTISIG, OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
 use psbt_v2::bitcoin::script::Builder;
 use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey, XOnlyPublicKey};
 use psbt_v2::bitcoin::sighash::{EcdsaSighashType, TapSighashType};
+use psbt_v2::bitcoin::taproot::TaprootBuilder;
 use psbt_v2::bitcoin::transaction::Version;
 use psbt_v2::bitcoin::{
     ecdsa, Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, Transaction, TxIn, TxOut,
@@ -165,10 +166,11 @@ fn wpkh_input(public_key: PublicKey, vout: usize, funding: Funding) -> Input {
     input
 }
 
-/// A witness-only P2TR input; no test key ever signs it (schnorr signing is unsupported).
-fn tr_input() -> Input {
+/// A witness-only P2TR key-path input worth 1,000 sats whose internal key is `public_key`'s,
+/// recorded in `tap_key_origins`.
+fn tr_input(public_key: PublicKey) -> Input {
     let secp = Secp256k1::verification_only();
-    let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+    let xonly = public_key.inner.x_only_public_key().0;
     let tx_out = TxOut {
         value: Amount::from_sat(1_000),
         script_pubkey: ScriptBuf::new_p2tr(&secp, xonly, None),
@@ -176,6 +178,8 @@ fn tr_input() -> Input {
     let funding_tx = funding_tx(0, tx_out.clone());
     let mut input = Input::new(&OutPoint { txid: funding_tx.compute_txid(), vout: 0 });
     input.witness_utxo = Some(tx_out);
+    input.tap_internal_key = Some(xonly);
+    input.tap_key_origins.insert(xonly, (vec![], KeySource::default()));
     input
 }
 
@@ -213,7 +217,7 @@ fn assume_signs_witness_only_input() {
 
     // The user attests the funding data out-of-band and signs anyway.
     let sigs = signer.session(sign_input_unchecked(0, &keys, &secp)).unwrap();
-    assert_eq!(sigs.signatures.len(), 1);
+    assert_eq!(sigs.len(), 1);
     let psbt = signer.apply([sigs]).unwrap();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
 }
@@ -332,14 +336,14 @@ fn strict_sign_succeeds_after_utxo_upgrade() {
 // Context: PSBT with a taproot and a P2WPKH input
 //
 // 1. Try to sign both through the singular API: only signs P2WPKH input, (taproot input needs sign_all)
-// 2. Re-signing with sign_all doesn't change P2WPKH input signature, taproot input still unsigned
-//    because schnorr signatures are not supported yet
+// 2. Re-signing with sign_all doesn't change P2WPKH input signature. Taproot signature gets added.
 #[test]
 fn taproot_input_requires_all_signable_inputs() {
     let secp = Secp256k1::new();
     let (a_keys, a_public_key) = user(1);
 
-    let psbt = unsigned_psbt(vec![tr_input(), wpkh_input(a_public_key, 1, Funding::Full)]);
+    let psbt =
+        unsigned_psbt(vec![tr_input(a_public_key), wpkh_input(a_public_key, 1, Funding::Full)]);
     let mut signer = Signer::new(psbt).unwrap();
 
     // Singular: the P2WPKH input signs, but the non-ANYONECANPAY taproot input is rejected: its
@@ -349,19 +353,18 @@ fn taproot_input_requires_all_signable_inputs() {
         let wpkh = session.signable_input(1).unwrap();
         session.get_input_sigs(&wpkh, &a_keys, &secp)
     });
-    assert_eq!(singular.signatures.len(), 1);
+    assert_eq!(singular.len(), 1);
 
-    // The complete set makes the whole PSBT signable. Taproot still contributes no
-    // signature (schnorr signing is unsupported) and the P2WPKH signature is unchanged.
-    let all_signed = signer.session(sign_all(&a_keys, &secp)).unwrap();
-    assert_eq!(all_signed.len(), 2);
-    assert_eq!(all_signed[0].index, 0);
-    assert!(all_signed[0].signatures.is_empty());
-    assert_eq!(all_signed[1], singular);
+    // The complete set makes the whole PSBT signable.
+    let all_signatures = signer.session(sign_all(&a_keys, &secp)).unwrap();
+    assert_eq!(all_signatures.len(), 2);
+    assert_eq!(all_signatures[0].index, 0);
+    assert_eq!(all_signatures[0].len(), 1); // P2TR gets signed
+    assert_eq!(all_signatures[1], singular); // P2WPKH does not change
 
-    let psbt = signer.apply(all_signed).unwrap();
-    assert!(psbt.inputs[0].partial_sigs.is_empty());
-    assert_eq!(psbt.inputs[1].partial_sigs.len(), 1);
+    let psbt = signer.apply(all_signatures).unwrap();
+    assert!(psbt.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
+    assert_eq!(psbt.inputs[1].partial_sigs.len(), 1); // P2WPKH gets signed
 }
 
 // Two users sign a single 2-of-2 multisig P2WSH input, each holding only his own key: the other
@@ -397,7 +400,7 @@ fn two_users_sign_2_of_2_wsh() {
     let psbt = {
         let mut signer = Signer::new(psbt).unwrap();
         let sigs = signer.session(sign_input(0, &a_keys, &secp)).unwrap();
-        assert_eq!(sigs.signatures.len(), 1);
+        assert_eq!(sigs.len(), 1);
         signer.apply([sigs]).unwrap()
     };
 
@@ -405,12 +408,77 @@ fn two_users_sign_2_of_2_wsh() {
     // signature does not trip the strict checks.
     let mut signer = Signer::new(psbt).unwrap();
     let sigs = signer.session(sign_input(0, &b_keys, &secp)).unwrap();
-    assert_eq!(sigs.signatures.len(), 1);
+    assert_eq!(sigs.len(), 1);
     let psbt = signer.apply([sigs]).unwrap();
 
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 2);
     assert!(psbt.inputs[0].partial_sigs.contains_key(&a_public_key));
     assert!(psbt.inputs[0].partial_sigs.contains_key(&b_public_key));
+}
+
+// Two users sign a single taproot script-path input (a 2-of-2 tapscript multisig leaf), each
+// holding only his own key: the other key is silently skipped, and user B receives user A's
+// signature and signs the same leaf on top of it.
+#[test]
+fn two_users_sign_taproot_script_path() {
+    let secp = Secp256k1::new();
+    let (a_keys, a_public_key) = user(1);
+    let (b_keys, b_public_key) = user(2);
+    let a_xonly = a_public_key.inner.x_only_public_key().0;
+    let b_xonly = b_public_key.inner.x_only_public_key().0;
+
+    let leaf_script = Builder::new()
+        .push_x_only_key(&a_xonly)
+        .push_opcode(OP_CHECKSIG)
+        .push_x_only_key(&b_xonly)
+        .push_opcode(OP_CHECKSIGADD)
+        .push_int(2)
+        .push_opcode(OP_NUMEQUAL)
+        .into_script();
+    // The internal key is held by nobody: only script-path signatures are possible.
+    let internal_key = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
+    let spend_info = TaprootBuilder::new()
+        .add_leaf(0, leaf_script.clone())
+        .unwrap()
+        .finalize(&secp, internal_key)
+        .unwrap();
+    let tx_out = TxOut {
+        value: Amount::from_sat(1_000),
+        script_pubkey: ScriptBuf::new_p2tr_tweaked(spend_info.output_key()),
+    };
+    let funding_tx = funding_tx(0, tx_out.clone());
+    let mut input = Input::new(&OutPoint { txid: funding_tx.compute_txid(), vout: 0 });
+    input.witness_utxo = Some(tx_out);
+    input.non_witness_utxo = Some(funding_tx);
+    input.tap_internal_key = Some(internal_key);
+    input.tap_merkle_root = spend_info.merkle_root();
+    let leaf_hash = leaf_script.tapscript_leaf_hash();
+    input.tap_key_origins.insert(a_xonly, (vec![leaf_hash], KeySource::default()));
+    input.tap_key_origins.insert(b_xonly, (vec![leaf_hash], KeySource::default()));
+
+    let psbt = unsigned_psbt(vec![input]);
+
+    // User A signs: only his key is in his key map, B's key is silently skipped.
+    let psbt = {
+        let mut signer = Signer::new(psbt).unwrap();
+        let sigs = signer.session(sign_all(&a_keys, &secp)).unwrap();
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].len(), 1);
+        signer.apply(sigs).unwrap()
+    };
+    assert!(psbt.inputs[0].tap_script_sigs.contains_key(&(a_xonly, leaf_hash)));
+
+    // User B receives the PSBT and signs the same leaf: A's existing signature is filtered out
+    // instead of duplicated.
+    let mut signer = Signer::new(psbt).unwrap();
+    let sigs = signer.session(sign_all(&b_keys, &secp)).unwrap();
+    assert_eq!(sigs.len(), 1);
+    assert_eq!(sigs[0].len(), 1);
+    let psbt = signer.apply(sigs).unwrap();
+
+    assert_eq!(psbt.inputs[0].tap_script_sigs.len(), 2);
+    assert!(psbt.inputs[0].tap_script_sigs.contains_key(&(a_xonly, leaf_hash)));
+    assert!(psbt.inputs[0].tap_script_sigs.contains_key(&(b_xonly, leaf_hash)));
 }
 
 // A misbehaving earlier signer leaves a signature whose sighash type disagrees with the input's
@@ -466,40 +534,35 @@ fn assume_still_rejects_inconsistent_utxos() {
     );
 }
 
-// An ANYONECANPAY taproot sighash commits to only this input's prevout, so the input may be
-// created standalone; the non-ANYONECANPAY default needs the complete input set. Schnorr
-// signing is unsupported, so even a validly created taproot input produces no signature.
+// An ANYONECANPAY taproot sighash commits to only this input's prevout, so the input may be created
+// standalone; the non-ANYONECANPAY default needs the complete input set.
 #[test]
 fn anyonecanpay_taproot_allowed_standalone() {
     let secp = Secp256k1::new();
-    let no_keys: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
+    let (keys, public_key) = user(1);
 
-    let mut input = tr_input();
+    let mut input = tr_input(public_key);
     input.sighash_type = Some(PsbtSighashType::from(TapSighashType::SinglePlusAnyoneCanPay));
     let psbt = unsigned_psbt(vec![input]); // one output satisfies the SINGLE bound
 
     let mut signer = Signer::new(psbt).unwrap();
-    let output_type = signer.session(|session| {
-        let signable = session.signable_input(0).unwrap();
-        assert_eq!(signable.index(), 0);
-        signable.output_type()
-    });
-    assert_eq!(output_type, OutputType::Tr);
-
     let sigs = signer.session(|mut session| {
         let signable = session.signable_input(0).unwrap();
-        session.get_input_sigs(&signable, &no_keys, &secp)
+        assert_eq!(signable.index(), 0);
+        assert_eq!(signable.output_type(), OutputType::Tr);
+        session.get_input_sigs(&signable, &keys, &secp)
     });
-    assert!(sigs.signatures.is_empty());
+
+    assert_eq!(sigs.len(), 1); // P2TR gets signed
+    let psbt = signer.apply([sigs]).unwrap();
+    assert!(psbt.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
 }
 
-// Signing an input for real clears PSBT_GLOBAL_TX_MODIFIABLE (BIP-370); an apply of only empty
-// signature sets (taproot signs nothing) leaves the flags alone.
+// Signing an input for real clears PSBT_GLOBAL_TX_MODIFIABLE (BIP-370).
 #[test]
 fn apply_clears_tx_modifiable_flags() {
     let secp = Secp256k1::new();
     let (keys, public_key) = user(1);
-    let no_keys: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
 
     let unsigned = unsigned_psbt(vec![wpkh_input(public_key, 0, Funding::Full)]);
     assert!(unsigned.global.tx_modifiable_flags.is_inputs_modifiable());
@@ -510,15 +573,15 @@ fn apply_clears_tx_modifiable_flags() {
     assert!(!signed.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(!signed.global.tx_modifiable_flags.is_outputs_modifiable());
 
-    let unsigned = unsigned_psbt(vec![tr_input()]);
+    let unsigned = unsigned_psbt(vec![tr_input(public_key)]);
     assert!(unsigned.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(unsigned.global.tx_modifiable_flags.is_outputs_modifiable());
     let mut signer = Signer::new(unsigned).unwrap();
-    let sigs = signer.session(sign_all(&no_keys, &secp)).unwrap();
-    assert!(sigs.iter().all(|input_sigs| input_sigs.signatures.is_empty()));
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
     let signed = signer.apply(sigs).unwrap();
-    assert!(signed.global.tx_modifiable_flags.is_inputs_modifiable());
-    assert!(signed.global.tx_modifiable_flags.is_outputs_modifiable());
+    assert!(signed.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
+    assert!(!signed.global.tx_modifiable_flags.is_inputs_modifiable());
+    assert!(!signed.global.tx_modifiable_flags.is_outputs_modifiable());
 }
 
 // Full strict signing of a PSBT whose inputs are all witness-only fails for every input: the error
@@ -595,7 +658,7 @@ fn get_some_signs_user_selected_inputs() {
     assert_eq!(sigs.len(), 2);
     assert_eq!(sigs[0].index, 0);
     assert_eq!(sigs[1].index, 2);
-    assert!(sigs.iter().all(|input_sigs| input_sigs.signatures.len() == 1));
+    assert!(sigs.iter().all(|input_sigs| input_sigs.len() == 1));
 
     let psbt = signer.apply(sigs).unwrap();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
