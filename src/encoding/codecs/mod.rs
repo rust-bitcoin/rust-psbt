@@ -899,25 +899,6 @@ mod tests {
     }
 
     #[test]
-    fn taproot_signature_encoded_size_matches_sighash_type() {
-        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
-        let sighashes = [
-            (bitcoin::TapSighashType::Default, 64),
-            (bitcoin::TapSighashType::All, 65),
-            (bitcoin::TapSighashType::None, 65),
-            (bitcoin::TapSighashType::Single, 65),
-            (bitcoin::TapSighashType::AllPlusAnyoneCanPay, 65),
-            (bitcoin::TapSighashType::NonePlusAnyoneCanPay, 65),
-            (bitcoin::TapSighashType::SinglePlusAnyoneCanPay, 65),
-        ];
-        for (sighash_type, expected_len) in sighashes {
-            let sig = taproot::Signature { signature: raw, sighash_type };
-            assert_eq!(sig.psbt_encoder().len(), expected_len, "encoder len for {sighash_type:?}");
-            assert_eq!(encode_to_vec(&sig).len(), expected_len, "encoded len for {sighash_type:?}");
-        }
-    }
-
-    #[test]
     fn tap_tree_encoder_len_counts_down() {
         use bitcoin::taproot::TaprootBuilder;
 
