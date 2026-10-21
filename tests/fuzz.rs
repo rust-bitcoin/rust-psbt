@@ -24,4 +24,9 @@ mod valid {
     fn strict_signer_with_funding_tx_succeeds() {
         fuzz("Valid: strict signer with prevout full tx succeeds to sign non-p2tr input.");
     }
+
+    #[test]
+    fn bip32_derivation_too_short_does_not_panic() {
+        fuzz("Invalid: PSBT v0 BIP32 derivation value too short (does not panic).");
+    }
 }

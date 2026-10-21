@@ -19,7 +19,7 @@ use bitcoin_consensus_encoding::{
     Encoder2,
 };
 
-use crate::encoding::codecs::KeySourceEncoder;
+use crate::encoding::codecs::key_source::KeySourceEncoder;
 use crate::encoding::{PrefixedSliceEncoder, PsbtEncode};
 
 bitcoin_consensus_encoding::encoder_newtype_exact! {
@@ -158,14 +158,13 @@ impl Decoder for TapKeyOriginDecoder {
 
         let count = value[0] as usize;
         let hash_end = 1 + count * 32;
+        if value.len() < hash_end + 4 {
+            return Err(TapKeyOriginDecodeError::MissingFingerprint);
+        }
         let leaf_hashes: Vec<TapLeafHash> = value[1..hash_end]
             .chunks_exact(32)
             .map(|chunk| TapLeafHash::from_slice(chunk).expect("32 bytes"))
             .collect();
-
-        if value.len() < hash_end + 4 {
-            return Err(TapKeyOriginDecodeError::MissingFingerprint);
-        }
 
         let fprint = bip32::Fingerprint::from(
             <[u8; 4]>::try_from(&value[hash_end..hash_end + 4]).expect("4 bytes"),

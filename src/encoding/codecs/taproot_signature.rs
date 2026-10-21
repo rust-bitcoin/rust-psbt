@@ -284,4 +284,28 @@ mod tests {
         let err = decoder.push_bytes(&mut bytes).unwrap_err();
         assert!(matches!(err, TaprootSignatureDecodeError::InvalidLength(66)));
     }
+
+    /// Encoder reports a fixed size for all sighash types.
+    #[test]
+    fn encoded_size_matches_sighash_type() {
+        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
+        let sighashes = [
+            (bitcoin::TapSighashType::Default, 64),
+            (bitcoin::TapSighashType::All, 65),
+            (bitcoin::TapSighashType::None, 65),
+            (bitcoin::TapSighashType::Single, 65),
+            (bitcoin::TapSighashType::AllPlusAnyoneCanPay, 65),
+            (bitcoin::TapSighashType::NonePlusAnyoneCanPay, 65),
+            (bitcoin::TapSighashType::SinglePlusAnyoneCanPay, 65),
+        ];
+        for (sighash_type, expected_len) in sighashes {
+            let sig = taproot::Signature { signature: raw, sighash_type };
+            assert_eq!(sig.psbt_encoder().len(), expected_len, "encoder len for {sighash_type:?}");
+            assert_eq!(
+                drain_to_vec(&mut sig.psbt_encoder()).len(),
+                expected_len,
+                "encoded len for {sighash_type:?}"
+            );
+        }
+    }
 }

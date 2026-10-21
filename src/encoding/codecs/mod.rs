@@ -3,21 +3,22 @@
 //! This module contains PSBT codec implementations for types which live upstream and whose PSBT
 //! codecs are different from their consensus codecs.
 
+pub mod ecdsa_signature;
+pub mod key_source;
 pub mod taproot_signature;
 
 use alloc::borrow::ToOwned as _;
-use alloc::vec::Vec;
 use core::fmt;
 use core::ops::BitOr as _;
 
-use bitcoin::bip32::{self, ChildNumber, KeySource, Xpub};
+use bitcoin::bip32::{self, ChildNumber, Xpub};
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash as _};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
 use bitcoin::taproot::{
     self, ControlBlock, LeafVersion, ScriptLeaves, TapLeafHash, TapNodeHash, TapTree,
 };
-use bitcoin::{ecdsa, CompressedPublicKey, ScriptBuf, Txid, VarInt};
+use bitcoin::{CompressedPublicKey, ScriptBuf, Txid, VarInt};
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, ByteVecDecoder, ByteVecDecoderError, BytesEncoder,
     CompactSizeDecoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder, Encoder2, Encoder4,
@@ -119,97 +120,28 @@ impl PsbtEncode for ChildNumber {
     }
 }
 
-bitcoin_consensus_encoding::encoder_newtype_exact! {
-    /// Encoder for a serialized [`KeySource`].
-    pub struct KeySourceEncoder<'e>(Encoder2<BytesEncoder<'e>, SliceEncoder<'e, ChildNumber>>);
-}
-
-impl PsbtEncode for KeySource {
-    type Encoder<'e>
-        = KeySourceEncoder<'e>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        KeySourceEncoder::new(Encoder2::new(
-            BytesEncoder::without_length_prefix(self.0.as_bytes()),
-            <SliceEncoder<'_, ChildNumber>>::without_length_prefix(self.1.as_ref()),
-        ))
-    }
-}
-
-/// Decoder for a [`KeySource`] value (fingerprint + derivation path).
+/// Decoder for a [`ChildNumber`].
 #[derive(Debug, Default)]
-pub struct KeySourceDecoder {
-    inner: ByteVecDecoder,
-}
+pub struct ChildNumberDecoder(ArrayDecoder<4>);
 
-impl Decoder for KeySourceDecoder {
-    type Output = KeySource;
-    type Error = KeySourceDecodeError;
+impl Decoder for ChildNumberDecoder {
+    type Output = ChildNumber;
+    type Error = UnexpectedEofError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(KeySourceDecodeError::ByteVec)
+        self.0.push_bytes(bytes)
     }
 
     fn end(self) -> Result<Self::Output, Self::Error> {
-        use bitcoin::bip32::{DerivationPath, Fingerprint};
-
-        let bytes = self.inner.end().map_err(KeySourceDecodeError::ByteVec)?;
-        if bytes.len() < 4 {
-            return Err(KeySourceDecodeError::TooShort(bytes.len()));
-        }
-        if bytes.len() % 4 != 0 {
-            return Err(KeySourceDecodeError::InvalidPathLength(bytes.len()));
-        }
-        let fingerprint = Fingerprint::from(<[u8; 4]>::try_from(&bytes[..4]).expect("4 bytes"));
-        let path = bytes[4..]
-            .chunks_exact(4)
-            .map(|c| ChildNumber::from(u32::from_le_bytes(c.try_into().expect("4-byte chunks"))))
-            .collect::<Vec<_>>();
-        Ok((fingerprint, DerivationPath::from(path)))
+        let bytes = self.0.end()?;
+        Ok(ChildNumber::from(u32::from_le_bytes(bytes)))
     }
 
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
+    fn read_limit(&self) -> usize { self.0.read_limit() }
 }
 
-impl PsbtDecode for KeySource {
-    type Decoder = KeySourceDecoder;
-}
-
-/// Error decoding a [`KeySource`] (fingerprint + derivation path).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KeySourceDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is shorter than the 4-byte fingerprint.
-    TooShort(usize),
-    /// The derivation path is not a multiple of 4 bytes.
-    InvalidPathLength(usize),
-}
-
-impl fmt::Display for KeySourceDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding key source: {e}"),
-            Self::TooShort(len) => {
-                write!(f, "key source too short ({} bytes, need at least 4)", len)
-            }
-            Self::InvalidPathLength(len) => {
-                write!(f, "key source path not aligned ({} bytes, not a multiple of 4)", len)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for KeySourceDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::TooShort(_) | Self::InvalidPathLength(_) => None,
-        }
-    }
+impl PsbtDecode for ChildNumber {
+    type Decoder = ChildNumberDecoder;
 }
 
 impl PsbtEncode for absolute::Time {
@@ -616,29 +548,6 @@ impl PsbtEncode for PublicKey {
     fn psbt_encoder(&self) -> Self::Encoder<'_> { PublicKeyEncoder::new(self) }
 }
 
-/// Encoder for a [`ecdsa::SerializedSignature`].
-pub struct EcdsaSigEncoder(ecdsa::SerializedSignature);
-
-impl EcdsaSigEncoder {
-    fn new(sig: ecdsa::SerializedSignature) -> Self { Self(sig) }
-}
-
-impl Encoder for EcdsaSigEncoder {
-    fn current_chunk(&self) -> &[u8] { &self.0 }
-
-    fn advance(&mut self) -> EncoderStatus { EncoderStatus::Finished }
-}
-
-impl ExactSizeEncoder for EcdsaSigEncoder {
-    fn len(&self) -> usize { self.0.len() }
-}
-
-impl PsbtEncode for ecdsa::Signature {
-    type Encoder<'e> = EcdsaSigEncoder;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> { EcdsaSigEncoder::new(self.serialize()) }
-}
-
 /// An encoder for a [`TapTree`] as its leaves: `merkle branch len u8`,
 /// `leaf version u8`, then compact-size-prefixed script per leaf, in DFS order.
 pub struct TapTreeEncoder<'e> {
@@ -887,62 +796,10 @@ impl std::error::Error for CompressedPublicKeyDecodeError {
     }
 }
 
-/// Decoder for an [`ecdsa::Signature`] value.
-#[derive(Debug, Default)]
-pub struct EcdsaSignatureDecoder {
-    inner: ByteVecDecoder,
-}
-
-impl Decoder for EcdsaSignatureDecoder {
-    type Output = ecdsa::Signature;
-    type Error = EcdsaSignatureDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(EcdsaSignatureDecodeError::ByteVec)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(EcdsaSignatureDecodeError::ByteVec)?;
-        ecdsa::Signature::from_slice(&value).map_err(EcdsaSignatureDecodeError::Invalid)
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-/// Error decoding an [`ecdsa::Signature`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EcdsaSignatureDecodeError {
-    /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
-    /// The value is not a valid ECDSA signature.
-    Invalid(ecdsa::Error),
-}
-
-impl fmt::Display for EcdsaSignatureDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ByteVec(e) => write!(f, "error decoding ECDSA signature: {e}"),
-            Self::Invalid(e) => write!(f, "invalid ECDSA signature: {e}"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for EcdsaSignatureDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ByteVec(e) => Some(e),
-            Self::Invalid(e) => Some(e),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
-
-    use bitcoin::bip32::Fingerprint;
 
     use super::*;
     use crate::encoding::{decode_from_slice, encode_to_vec};
@@ -1010,39 +867,6 @@ mod tests {
     }
 
     #[test]
-    fn key_source_encode_empty_path() {
-        use bitcoin::bip32::DerivationPath;
-
-        let key_source: KeySource =
-            (Fingerprint::from([0x42, 0x99, 0x69, 0xf0]), DerivationPath::default());
-        let bytes = encode_to_vec(&key_source);
-        assert_eq!(bytes.len(), 4);
-        assert_eq!(bytes, [0x42, 0x99, 0x69, 0xf0]);
-    }
-
-    #[test]
-    fn key_source_encode_multi_element_path() {
-        use bitcoin::bip32::DerivationPath;
-
-        let path: DerivationPath = [
-            ChildNumber::from_hardened_idx(84).unwrap(),
-            ChildNumber::from_normal_idx(1).unwrap(),
-            ChildNumber::from_hardened_idx(2).unwrap(),
-        ]
-        .into_iter()
-        .collect();
-        let key_source: KeySource = (Fingerprint::from([0x12, 0x34, 0x56, 0x78]), path);
-
-        let bytes = encode_to_vec(&key_source);
-        assert_eq!(bytes.len(), 4 + 3 * 4);
-        let mut expected = vec![0x12, 0x34, 0x56, 0x78];
-        for n in &key_source.1 {
-            expected.extend(u32::from(*n).to_le_bytes());
-        }
-        assert_eq!(bytes, expected);
-    }
-
-    #[test]
     fn public_key_encoder_len_is_key_size() {
         use core::str::FromStr;
 
@@ -1054,81 +878,6 @@ mod tests {
 
         let pk_uc = PublicKey { compressed: false, inner: pk.inner };
         assert_eq!(pk_uc.psbt_encoder().len(), 65, "uncompressed public key");
-    }
-
-    // Exercises `PsbtEncode for bitcoin::ecdsa::SerializedSignature` (the `BytesEncoder` impl).
-    // DER is variable-length: strict DER pads a scalar with a leading 0x00 when its high bit is
-    // set, so differently-sized signatures must encode to differently-sized values.
-    #[test]
-    fn serialized_ecdsa_signature_encoded_size_varies_with_der_size() {
-        // Builds a `SerializedSignature` (DER bytes + the SIGHASH_ALL byte) from raw DER.
-        fn serialized(der: &[u8]) -> bitcoin::ecdsa::Signature {
-            let sig = bitcoin::secp256k1::ecdsa::Signature::from_der(der).unwrap();
-            ecdsa::Signature { signature: sig, sighash_type: bitcoin::EcdsaSighashType::All }
-        }
-
-        // r = 1, s = 1 -> minimal DER (8 bytes), +1 sighash byte = 9.
-        let minimal = serialized(&[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
-
-        // r, s each 32 bytes, high bits clear -> no padding (70-byte DER), +1 = 71.
-        let mid = serialized(&der_with_scalars(&[0x01; 32], &[0x01; 32]));
-
-        // r padded (high bit set), s not -> 71-byte DER, +1 = 72.
-        let one_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x01; 32]));
-
-        // r, s both padded -> 72-byte DER, +1 = 73.
-        let both_pad = serialized(&der_with_scalars(&[0x80; 32], &[0x80; 32]));
-
-        // Use encoder to check len and remove mutants
-        let minimal_enc = EcdsaSigEncoder::new(minimal.serialize());
-        let minimal_len = minimal_enc.len();
-        let mid_enc = EcdsaSigEncoder::new(mid.serialize());
-        let mid_len = mid_enc.len();
-        // Use encode_to_vec for the rest to also exercise PsbtEncode interface
-        let one_pad_len = encode_to_vec(&one_pad).len();
-        let both_pad_len = encode_to_vec(&both_pad).len();
-
-        assert_eq!(minimal_len, 9, "minimal r=s=1 signature");
-        assert_eq!(mid_len, 71, "two unpadded 32-byte scalars");
-        assert_eq!(one_pad_len, 72, "one padded scalar");
-        assert_eq!(both_pad_len, 73, "two padded scalars");
-
-        // The core claim: differently-sized signatures encode to differently-sized values.
-        let mut sizes = vec![minimal_len, mid_len, one_pad_len, both_pad_len];
-        sizes.sort_unstable();
-        sizes.dedup();
-        assert_eq!(sizes.len(), 4, "encoded sizes must all be distinct");
-    }
-
-    // Encodes two big-endian scalars as strict DER: `0x30 <len> 0x02 <rlen> <r> 0x02 <slen> <s>`,
-    // prepending a 0x00 to either scalar whose high bit is set (strict DER minimal encoding).
-    fn der_with_scalars(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
-        let r = padded(r);
-        let s = padded(s);
-        let mut body = Vec::with_capacity(2 + r.len() + 2 + s.len());
-        body.push(0x02);
-        body.push(r.len() as u8);
-        body.extend_from_slice(&r);
-        body.push(0x02);
-        body.push(s.len() as u8);
-        body.extend_from_slice(&s);
-        let mut der = Vec::with_capacity(2 + body.len());
-        der.push(0x30);
-        der.push(body.len() as u8);
-        der.extend_from_slice(&body);
-        der
-    }
-
-    // Prepends a 0x00 byte iff the scalar's high bit is set, per strict DER.
-    fn padded(scalar: &[u8; 32]) -> Vec<u8> {
-        if scalar[0] & 0x80 != 0 {
-            let mut v = Vec::with_capacity(33);
-            v.push(0x00);
-            v.extend_from_slice(scalar);
-            v
-        } else {
-            scalar.to_vec()
-        }
     }
 
     #[test]
@@ -1147,29 +896,6 @@ mod tests {
         // Game between byte form used by `(ScriptBuf, LeafVersion)` serialization; LeafVersion
         // itself is only ever encoded as the trailing byte within that tuple.
         assert_eq!(bytes, vec![lv.to_consensus()]);
-    }
-
-    // Taproot signatures are fixed-size: 64 bytes for the default sighash (no trailing
-    // sighash byte), 65 bytes for any explicit sighash type. Mirrors
-    // `serialized_ecdsa_signature_encoded_size_varies_with_der_size` for the schnorr case,
-    // pinning both the `ExactSizeEncoder`-reported length and the actual encoded byte length.
-    #[test]
-    fn taproot_signature_encoded_size_matches_sighash_type() {
-        let raw = bitcoin::secp256k1::schnorr::Signature::from_slice(&[0x51; 64]).unwrap();
-        let sighashes = [
-            (bitcoin::TapSighashType::Default, 64),
-            (bitcoin::TapSighashType::All, 65),
-            (bitcoin::TapSighashType::None, 65),
-            (bitcoin::TapSighashType::Single, 65),
-            (bitcoin::TapSighashType::AllPlusAnyoneCanPay, 65),
-            (bitcoin::TapSighashType::NonePlusAnyoneCanPay, 65),
-            (bitcoin::TapSighashType::SinglePlusAnyoneCanPay, 65),
-        ];
-        for (sighash_type, expected_len) in sighashes {
-            let sig = taproot::Signature { signature: raw, sighash_type };
-            assert_eq!(sig.psbt_encoder().len(), expected_len, "encoder len for {sighash_type:?}");
-            assert_eq!(encode_to_vec(&sig).len(), expected_len, "encoded len for {sighash_type:?}");
-        }
     }
 
     #[test]
@@ -1212,63 +938,5 @@ mod tests {
         let leaf_encoder = iter.next().expect("one leaf");
         // 1 depth byte + 1 version byte + 1 compact-size byte + 3 script bytes.
         assert_eq!(leaf_encoder.len(), 6);
-    }
-
-    #[test]
-    fn key_source_decoder_read_limit_lifecycle() {
-        let mut decoder = KeySourceDecoder::default();
-        assert!(decoder.read_limit() > 0);
-
-        // Fingerprint-only value, compact_size(4) + 4 bytes.
-        let mut bytes: &[u8] = &[0x04, 0xde, 0xad, 0xbe, 0xef];
-        let status = decoder.push_bytes(&mut bytes).unwrap();
-        assert!(status.is_ready());
-        assert_eq!(decoder.read_limit(), 0);
-    }
-
-    #[test]
-    fn key_source_decoder_fingerprint_only() {
-        use bitcoin::bip32::{DerivationPath, Fingerprint};
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint without derivation, compact_size(4) + 4-byte fingerprint.
-        let mut bytes: &[u8] = &[0x04, 0xde, 0xad, 0xbe, 0xef];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let (fingerprint, derivation) = decoder.end().unwrap();
-        assert_eq!(fingerprint, Fingerprint::from([0xde, 0xad, 0xbe, 0xef]));
-        assert_eq!(derivation, DerivationPath::master());
-    }
-
-    #[test]
-    fn key_source_decoder_with_path() {
-        use bitcoin::bip32::Fingerprint;
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint + one child, compact_size(8) + 4-byte fingerprint + 4-byte child.
-        let mut bytes: &[u8] = &[0x08, 0xaa, 0xbb, 0xcc, 0xdd, 0x01, 0x00, 0x00, 0x00];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let (fingerprint, derivation) = decoder.end().unwrap();
-        assert_eq!(fingerprint, Fingerprint::from([0xaa, 0xbb, 0xcc, 0xdd]));
-        let children: Vec<ChildNumber> = derivation.into_iter().copied().collect();
-        assert_eq!(children.len(), 1);
-        assert_eq!(u32::from(children[0]), 1);
-    }
-
-    #[test]
-    fn key_source_decoder_too_short() {
-        let mut decoder = KeySourceDecoder::default();
-        // 3 bytes, shorter than the 4-byte fingerprint.
-        let mut bytes: &[u8] = &[0x03, 0xde, 0xad, 0xbe];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let err = decoder.end().unwrap_err();
-        assert_eq!(err, KeySourceDecodeError::TooShort(3));
-    }
-
-    #[test]
-    fn key_source_decoder_invalid_path_length() {
-        let mut decoder = KeySourceDecoder::default();
-        // Fingerprint + 2 extra bytes, compact_size(6) but path is not 4-byte aligned.
-        let mut bytes: &[u8] = &[0x06, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x00];
-        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
-        let err = decoder.end().unwrap_err();
-        assert_eq!(err, KeySourceDecodeError::InvalidPathLength(6));
     }
 }
