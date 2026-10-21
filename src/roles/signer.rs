@@ -132,7 +132,7 @@ impl Signer {
     /// Clears `PSBT_GLOBAL_TX_MODIFIABLE` for each input signed.
     ///
     /// Fails on the first entry whose index is out of bounds (only possible for signatures created
-    /// for a different [`Psbt`]).
+    /// for a different [`Psbt`]). Entries that produced no signatures are accepted and skipped.
     pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Psbt, SignError> {
         for InputSigs { index, signatures } in sigs {
             let psbt_input = self.psbt.checked_input_mut(index)?;
@@ -1864,6 +1864,19 @@ mod test {
         assert_eq!(
             signer.session(sign_input(1, &key_map, &secp)),
             Err(SignError::IndexOutOfBounds(IndexOutOfBoundsError::Inputs { index: 1, length: 1 }))
+        );
+    }
+
+    #[test]
+    fn apply_rejects_out_of_bounds_index_even_when_empty() {
+        // An entry with no signatures is skipped only after its index is bounds-checked.
+        let (psbt, _) = keyed_psbt();
+        let signer = Signer::new(psbt).unwrap();
+        let empty = InputSigs { index: 1, signatures: TypedSigs::Ecdsa(vec![]) };
+        let err = signer.apply([empty]).expect_err("out-of-bounds index is rejected");
+        assert_eq!(
+            err,
+            SignError::IndexOutOfBounds(IndexOutOfBoundsError::Inputs { index: 1, length: 1 })
         );
     }
 
