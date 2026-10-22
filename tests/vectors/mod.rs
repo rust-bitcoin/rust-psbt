@@ -179,11 +179,19 @@ pub struct TestCase {
 }
 
 impl TestCase {
+    /// The PSBTs a deserialization task must parse: the `supplementary` ones, plus the
+    /// `expected` one when the case keeps its PSBT there (as `bip371.json` and the
+    /// `deserialize` cases of `bip174.json` do).
+    fn parse_targets<'a>(&'a self, psbts: &'a [PsbtData]) -> impl Iterator<Item = &'a PsbtData> {
+        let expected = Some(&self.expected).filter(|e| e.hex.is_some() || e.base64.is_some());
+        psbts.iter().chain(expected)
+    }
+
     fn execute(&self) {
         match &self.supplementary {
             // FailDeserialize: the PSBT must be rejected during parsing.
             Supplementary::FailDeserialize { psbts } =>
-                for PsbtData { hex, base64 } in psbts {
+                for PsbtData { hex, base64 } in self.parse_targets(psbts) {
                     let base64 = base64.as_deref().expect("fail vector must have base64");
                     match self.version {
                         0 => {
@@ -244,7 +252,7 @@ impl TestCase {
             }
             // Deserialize: the PSBT must parse successfully.
             Supplementary::Deserialize { psbts } =>
-                for PsbtData { hex, base64 } in psbts {
+                for PsbtData { hex, base64 } in self.parse_targets(psbts) {
                     let base64 = base64.as_deref().expect("pass vector must have base64");
                     match self.version {
                         0 => {

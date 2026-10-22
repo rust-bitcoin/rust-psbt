@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix v0 decoding rejecting an unsigned transaction whose version is not 0 or 2, which BIP-174 allows.
+
 - Fix `Psbt::deserialize` rejecting PSBTv2 outputs whose `PSBT_OUT_SCRIPT` value is empty (BIP-370 requires the key's
   presence, not a non-empty scriptPubKey). Remove `output::ValidationError::MissingScriptPubkey`; missing
   `PSBT_OUT_SCRIPT` is now detected during decoding via `output::DecodeError::MissingScriptPubkey`.
