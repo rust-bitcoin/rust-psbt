@@ -18,7 +18,7 @@ use bitcoin::blockdata::transaction::{
 };
 use bitcoin::hashes::Hash;
 use bitcoin::locktime::absolute;
-use bitcoin::transaction::{self, Sequence};
+use bitcoin::transaction::{self, Sequence, VersionDecoder, VersionDecoderError};
 use bitcoin::{Amount, ScriptBuf, Txid};
 use bitcoin_consensus_encoding::{
     ArrayEncoder, BytesEncoder, CompactSizeEncoder, Decoder, DecoderStatus, Encoder2, Encoder4,
@@ -26,7 +26,6 @@ use bitcoin_consensus_encoding::{
 };
 
 use crate::encoding::{PsbtDecode, PsbtEncode};
-use crate::version::{VersionDecoder, VersionDecoderError};
 
 /// The unsigned transaction body embedded in a v0 PSBT global map.
 ///
@@ -225,9 +224,7 @@ impl Decoder for UnsignedTxDecoder {
             self.state =
                 match core::mem::replace(&mut self.state, State::Version(VersionDecoder::new())) {
                     State::Version(d) => {
-                        let version = transaction::Version(
-                            d.end().map_err(UnsignedTxDecodeError::DecodeVersion)?.to_u32() as i32,
-                        );
+                        let version = d.end().map_err(UnsignedTxDecodeError::DecodeVersion)?;
                         State::Inputs(version, VecDecoderWith::new())
                     }
                     State::Inputs(version, d) => {
@@ -289,4 +286,20 @@ impl Decoder for UnsignedTxDecoder {
 
 impl PsbtDecode for UnsignedTx {
     type Decoder = UnsignedTxDecoder;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_version_1_unsigned_tx() {
+        // Version 1, no inputs, no outputs, lock time 0.
+        let mut bytes: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut decoder = UnsignedTxDecoder::default();
+        decoder.push_bytes(&mut bytes).expect("version 1 is a valid transaction version");
+        let tx = decoder.end().expect("unsigned tx is complete");
+        assert_eq!(tx.version, transaction::Version::ONE);
+        assert!(tx.inputs.is_empty() && tx.outputs.is_empty());
+    }
 }
