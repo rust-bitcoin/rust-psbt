@@ -53,8 +53,6 @@ pub mod input;
 pub mod output;
 #[cfg(feature = "serde")]
 pub(crate) mod serde;
-/// PSBT-specific composite field types.
-pub(crate) mod taproot;
 /// PSBT v0 (BIP-174) map encoders.
 pub mod v0;
 /// PSBT output index (`PSBT_IN_OUTPUT_INDEX`).

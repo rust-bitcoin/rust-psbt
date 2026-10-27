@@ -17,8 +17,8 @@ use bitcoin::{
     ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use bitcoin_consensus_encoding::{
-    ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
-    ExactVecDecoderWith, IterEncoder,
+    ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder,
+    Encoder2, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
@@ -1892,6 +1892,23 @@ pub(crate) type PartialSigIter<'e> =
 /// Encoder for the taproot key-sig key-value pair (PSBT_IN_TAP_KEY_SIG).
 pub(crate) type TapKeySigPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <bitcoin::taproot::Signature as PsbtEncode>::Encoder<'e>>;
+
+bitcoin_consensus_encoding::encoder_newtype_exact! {
+    /// Encoder for a `(XOnlyPublicKey, TapLeafHash)` composite (32 byte + 32 byte).
+    pub struct XOnlyLeafHashPairEncoder<'e>(Encoder2<ArrayEncoder<32>, ArrayEncoder<32>>);
+}
+
+impl PsbtEncode for (XOnlyPublicKey, TapLeafHash) {
+    type Encoder<'e>
+        = XOnlyLeafHashPairEncoder<'e>
+    where
+        Self: 'e;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> {
+        XOnlyLeafHashPairEncoder::new(Encoder2::new(self.0.psbt_encoder(), self.1.psbt_encoder()))
+    }
+}
+
 /// Iterator yielding tap-script-sig entries (PSBT_IN_TAP_SCRIPT_SIG).
 pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
     btree_map::Iter<'e, (XOnlyPublicKey, TapLeafHash), bitcoin::taproot::Signature>,
