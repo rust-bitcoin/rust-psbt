@@ -38,6 +38,9 @@ impl PsbtEncode for TapLeafScript {
 }
 
 /// Decoder for a [`TapLeafScript`] value: `<script bytes> <leaf version>`.
+///
+/// Delegates to [`ByteVecDecoder`] for DoS-resistant buffered reading, then splits
+/// the version byte off the tail without copying the script bytes.
 #[derive(Debug, Default)]
 pub struct LeafScriptDecoder {
     inner: ByteVecDecoder,
@@ -48,18 +51,15 @@ impl Decoder for LeafScriptDecoder {
     type Error = LeafScriptDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(LeafScriptDecodeError::ByteVec)
+        self.inner.push_bytes(bytes).map_err(LeafScriptDecodeError::Decode)
     }
 
     fn end(self) -> Result<Self::Output, Self::Error> {
-        let value = self.inner.end().map_err(LeafScriptDecodeError::ByteVec)?;
-        if value.is_empty() {
-            return Err(LeafScriptDecodeError::Empty);
-        }
-        let last = value.len() - 1;
-        let script = ScriptBuf::from_bytes(value[..last].to_vec());
-        let version = LeafVersion::from_consensus(value[last])
+        let mut value = self.inner.end().map_err(LeafScriptDecodeError::Decode)?;
+        let version_byte = value.pop().ok_or(LeafScriptDecodeError::Empty)?;
+        let version = LeafVersion::from_consensus(version_byte)
             .map_err(|_| LeafScriptDecodeError::InvalidLeafVersion)?;
+        let script = ScriptBuf::from_bytes(value);
         Ok((script, version))
     }
 
@@ -74,7 +74,7 @@ impl PsbtDecode for TapLeafScript {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeafScriptDecodeError {
     /// The inner byte-vector decoder encountered an error.
-    ByteVec(ByteVecDecoderError),
+    Decode(ByteVecDecoderError),
     /// The value is empty (needs at least a leaf version byte).
     Empty,
     /// The last byte is not a valid leaf version.
@@ -84,7 +84,7 @@ pub enum LeafScriptDecodeError {
 impl fmt::Display for LeafScriptDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ByteVec(e) => write!(f, "error decoding leaf script: {e}"),
+            Self::Decode(e) => write!(f, "error decoding leaf script: {e}"),
             Self::Empty => write!(f, "leaf script value is empty"),
             Self::InvalidLeafVersion => write!(f, "invalid leaf version in leaf script"),
         }
@@ -95,7 +95,7 @@ impl fmt::Display for LeafScriptDecodeError {
 impl std::error::Error for LeafScriptDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::ByteVec(e) => Some(e),
+            Self::Decode(e) => Some(e),
             Self::Empty | Self::InvalidLeafVersion => None,
         }
     }
