@@ -50,10 +50,10 @@ use crate::encoding::PsbtEncode;
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder};
-use crate::map::taproot::TapKeyOriginDecoder;
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
+use crate::tap_key_origin::TapKeyOriginDecoder;
 
 pub struct InputMapEncoder<'e> {
     input: &'e Input,

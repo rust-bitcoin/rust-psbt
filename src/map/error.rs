@@ -27,10 +27,10 @@ use crate::encoding::codecs::{
 };
 use crate::error::write_err;
 use crate::map::output::ValidationError;
-use crate::map::taproot::TapKeyOriginDecodeError;
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::SpV0InfoDecodeError;
+use crate::tap_key_origin::TapKeyOriginDecodeError;
 
 /// An error while decoding a global map.
 ///

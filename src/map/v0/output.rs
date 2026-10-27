@@ -35,10 +35,10 @@ use crate::encoding::codecs::TapTreeDecoder;
 use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder};
-use crate::map::taproot::TapKeyOriginDecoder;
 use crate::output::Output;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
+use crate::tap_key_origin::TapKeyOriginDecoder;
 
 pub struct OutputMapEncoder<'e> {
     output: &'e Output,

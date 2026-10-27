@@ -45,11 +45,11 @@ use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
 use crate::encoding::{ExactLenEncoder, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
-use crate::map::taproot::TapKeyOriginDecoder;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
+use crate::tap_key_origin::TapKeyOriginDecoder;
 use crate::SignError;
 
 /// A key-value map for an input of the corresponding index in the unsigned
