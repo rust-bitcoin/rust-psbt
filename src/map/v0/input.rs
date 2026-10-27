@@ -556,7 +556,7 @@ enum InputStage {
         key: Key,
         decoder: ValueDecoder<DleqProof>,
     },
-    Done(Input),
+    Done(InputV0),
     Errored,
 }
 
@@ -639,13 +639,89 @@ impl InputStage {
     }
 }
 
+/// The portion of an [`Input`](crate::Input) carried by a v0 (BIP-174) input map.
+///
+/// v0 input maps do not carry `previous_txid`, `spent_output_index`, `sequence`,
+/// `min_time`, or `min_height`, those come from the unsigned transaction in the
+/// global map. This type holds everything the per-input map *can* contain, and is
+/// promoted to a full [`Input`](crate::Input) via [`into_input`](Self::into_input).
+#[derive(Debug, Clone)]
+pub(crate) struct InputV0 {
+    pub(crate) non_witness_utxo: Option<Transaction>,
+    pub(crate) witness_utxo: Option<TxOut>,
+    pub(crate) partial_sigs: BTreeMap<PublicKey, ecdsa::Signature>,
+    pub(crate) sighash_type: Option<PsbtSighashType>,
+    pub(crate) redeem_script: Option<ScriptBuf>,
+    pub(crate) witness_script: Option<ScriptBuf>,
+    pub(crate) bip32_derivations: BTreeMap<PublicKey, KeySource>,
+    pub(crate) final_script_sig: Option<ScriptBuf>,
+    pub(crate) final_script_witness: Option<Witness>,
+    pub(crate) ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
+    pub(crate) sha256_preimages: BTreeMap<sha256::Hash, Vec<u8>>,
+    pub(crate) hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>>,
+    pub(crate) hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
+    pub(crate) tap_key_sig: Option<taproot::Signature>,
+    pub(crate) tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
+    pub(crate) tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    pub(crate) tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    pub(crate) tap_internal_key: Option<XOnlyPublicKey>,
+    pub(crate) tap_merkle_root: Option<TapNodeHash>,
+    #[cfg(feature = "silent-payments")]
+    pub(crate) sp_ecdh_shares: BTreeMap<CompressedPublicKey, CompressedPublicKey>,
+    #[cfg(feature = "silent-payments")]
+    pub(crate) sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
+    pub(crate) proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
+    pub(crate) unknowns: BTreeMap<Key, Vec<u8>>,
+}
+
+impl InputV0 {
+    /// Promote this `InputV0` into a full [`Input`](crate::Input) by injecting
+    /// the unsigned-transaction fields that the v0 input map does not carry.
+    pub(crate) fn into_input(self, txid: Txid, vout: u32, sequence: Sequence) -> Input {
+        Input {
+            previous_txid: txid,
+            spent_output_index: Vout::from(vout),
+            sequence: Some(sequence),
+            min_time: None,
+            min_height: None,
+            non_witness_utxo: self.non_witness_utxo,
+            witness_utxo: self.witness_utxo,
+            partial_sigs: self.partial_sigs,
+            sighash_type: self.sighash_type,
+            redeem_script: self.redeem_script,
+            witness_script: self.witness_script,
+            bip32_derivations: self.bip32_derivations,
+            final_script_sig: self.final_script_sig,
+            final_script_witness: self.final_script_witness,
+            ripemd160_preimages: self.ripemd160_preimages,
+            sha256_preimages: self.sha256_preimages,
+            hash160_preimages: self.hash160_preimages,
+            hash256_preimages: self.hash256_preimages,
+            tap_key_sig: self.tap_key_sig,
+            tap_script_sigs: self.tap_script_sigs,
+            tap_scripts: self.tap_scripts,
+            tap_key_origins: self.tap_key_origins,
+            tap_internal_key: self.tap_internal_key,
+            tap_merkle_root: self.tap_merkle_root,
+            #[cfg(feature = "silent-payments")]
+            sp_ecdh_shares: self.sp_ecdh_shares,
+            #[cfg(feature = "silent-payments")]
+            sp_dleq_proofs: self.sp_dleq_proofs,
+            proprietaries: self.proprietaries,
+            unknowns: self.unknowns,
+        }
+    }
+}
+
 /// Decoder for a single v0 input map.
-#[derive(Debug)]
+///
+/// The decoded [`InputV0`] does not include `previous_txid`, `spent_output_index`, `sequence`,
+/// `min_time`, or `min_height`, those are injected from the unsigned transaction after decoding.
+/// All fields default to empty/absent, which is always meaningful because the v0 input map never
+/// carries unsigned-transaction data.
+#[derive(Debug, Default)]
 pub(crate) struct InputMapDecoder {
     stage: InputStage,
-    txid: Txid,
-    vout: u32,
-    sequence: Sequence,
     non_witness_utxo: Option<Transaction>,
     witness_utxo: Option<TxOut>,
     partial_sigs: BTreeMap<PublicKey, ecdsa::Signature>,
@@ -673,44 +749,8 @@ pub(crate) struct InputMapDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-impl Default for InputMapDecoder {
-    fn default() -> Self {
-        Self {
-            stage: InputStage::default(),
-            txid: Txid::all_zeros(),
-            vout: 0,
-            sequence: Sequence::MAX,
-            non_witness_utxo: None,
-            witness_utxo: None,
-            partial_sigs: BTreeMap::default(),
-            sighash_type: None,
-            redeem_script: None,
-            witness_script: None,
-            bip32_derivations: BTreeMap::default(),
-            final_script_sig: None,
-            final_script_witness: None,
-            ripemd160_preimages: BTreeMap::default(),
-            sha256_preimages: BTreeMap::default(),
-            hash160_preimages: BTreeMap::default(),
-            hash256_preimages: BTreeMap::default(),
-            tap_key_sig: None,
-            tap_script_sigs: BTreeMap::default(),
-            tap_scripts: BTreeMap::default(),
-            tap_key_origins: BTreeMap::default(),
-            tap_internal_key: None,
-            tap_merkle_root: None,
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: BTreeMap::default(),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: BTreeMap::default(),
-            proprietaries: BTreeMap::default(),
-            unknowns: BTreeMap::default(),
-        }
-    }
-}
-
 impl Decoder for InputMapDecoder {
-    type Output = Input;
+    type Output = InputV0;
     type Error = InputDecodeError;
 
     #[allow(clippy::too_many_lines)]
@@ -724,7 +764,33 @@ impl Decoder for InputMapDecoder {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
-                        let input = self.finish_inner()?;
+                        let input = InputV0 {
+                            non_witness_utxo: self.non_witness_utxo.take(),
+                            witness_utxo: self.witness_utxo.take(),
+                            partial_sigs: core::mem::take(&mut self.partial_sigs),
+                            sighash_type: self.sighash_type.take(),
+                            redeem_script: self.redeem_script.take(),
+                            witness_script: self.witness_script.take(),
+                            bip32_derivations: core::mem::take(&mut self.bip32_derivations),
+                            final_script_sig: self.final_script_sig.take(),
+                            final_script_witness: self.final_script_witness.take(),
+                            ripemd160_preimages: core::mem::take(&mut self.ripemd160_preimages),
+                            sha256_preimages: core::mem::take(&mut self.sha256_preimages),
+                            hash160_preimages: core::mem::take(&mut self.hash160_preimages),
+                            hash256_preimages: core::mem::take(&mut self.hash256_preimages),
+                            tap_key_sig: self.tap_key_sig.take(),
+                            tap_script_sigs: core::mem::take(&mut self.tap_script_sigs),
+                            tap_scripts: core::mem::take(&mut self.tap_scripts),
+                            tap_key_origins: core::mem::take(&mut self.tap_key_origins),
+                            tap_internal_key: self.tap_internal_key.take(),
+                            tap_merkle_root: self.tap_merkle_root.take(),
+                            #[cfg(feature = "silent-payments")]
+                            sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
+                            #[cfg(feature = "silent-payments")]
+                            sp_dleq_proofs: core::mem::take(&mut self.sp_dleq_proofs),
+                            proprietaries: core::mem::take(&mut self.proprietaries),
+                            unknowns: core::mem::take(&mut self.unknowns),
+                        };
                         self.stage = InputStage::Done(input);
                         return Ok(DecoderStatus::Ready);
                     }
@@ -1016,8 +1082,6 @@ impl Decoder for InputMapDecoder {
                         .map_err(|_| {
                             InputDecodeError::KeyDecode(KeyDecodeError::InvalidProprietaryKey)
                         })?;
-                    // This will not compile as-is: need to convert from crate::map::ProprietaryKey
-                    // to the generic type. We'll fix this when we connect everything.
                     if self.proprietaries.contains_key(&prop_key) {
                         return Err(InputDecodeError::DuplicateKey(prop_key.to_key()));
                     }
@@ -1095,53 +1159,11 @@ impl Decoder for InputMapDecoder {
         }
     }
 
-    fn end(self) -> Result<Input, Self::Error> {
+    fn end(self) -> Result<InputV0, Self::Error> {
         match self.stage {
             InputStage::Done(input) => Ok(input),
             _ => Err(InputDecodeError::EarlyEnd),
         }
-    }
-}
-
-// Helper that extracts the accumulator and panics if we're not Done.
-impl InputMapDecoder {
-    fn finish_inner(&mut self) -> Result<Input, InputDecodeError> {
-        // Take all the fields by replacing with defaults, then build.
-        let txid = self.txid;
-        let vout = self.vout;
-        let sequence = self.sequence;
-        Ok(Input {
-            previous_txid: txid,
-            spent_output_index: Vout::from(vout),
-            sequence: Some(sequence),
-            min_time: None,
-            min_height: None,
-            non_witness_utxo: self.non_witness_utxo.take(),
-            witness_utxo: self.witness_utxo.take(),
-            partial_sigs: core::mem::take(&mut self.partial_sigs),
-            sighash_type: self.sighash_type.take(),
-            redeem_script: self.redeem_script.take(),
-            witness_script: self.witness_script.take(),
-            bip32_derivations: core::mem::take(&mut self.bip32_derivations),
-            final_script_sig: self.final_script_sig.take(),
-            final_script_witness: self.final_script_witness.take(),
-            ripemd160_preimages: core::mem::take(&mut self.ripemd160_preimages),
-            sha256_preimages: core::mem::take(&mut self.sha256_preimages),
-            hash160_preimages: core::mem::take(&mut self.hash160_preimages),
-            hash256_preimages: core::mem::take(&mut self.hash256_preimages),
-            tap_key_sig: self.tap_key_sig.take(),
-            tap_script_sigs: core::mem::take(&mut self.tap_script_sigs),
-            tap_scripts: core::mem::take(&mut self.tap_scripts),
-            tap_key_origins: core::mem::take(&mut self.tap_key_origins),
-            tap_internal_key: self.tap_internal_key.take(),
-            tap_merkle_root: self.tap_merkle_root.take(),
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: core::mem::take(&mut self.sp_dleq_proofs),
-            proprietaries: core::mem::take(&mut self.proprietaries),
-            unknowns: core::mem::take(&mut self.unknowns),
-        })
     }
 }
 

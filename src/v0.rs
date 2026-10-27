@@ -19,7 +19,6 @@ use crate::encoding::{encode_to_vec, PsbtEncode};
 use crate::error::DeserializeError;
 use crate::map::global::Global;
 use crate::map::input::Input;
-use crate::map::vout::Vout;
 #[cfg(feature = "base64")]
 use crate::psbt::ParsePsbtError;
 use crate::psbt::{MagicEncoder, Psbt, PSBT_MAGIC, PSBT_MAGIC_BYTES, PSBT_SEPARATOR};
@@ -315,12 +314,12 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Inputs(global, tx_inputs, tx_outputs, decoder) => {
-                    let mut inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
-                    for (input, (txid, vout, seq)) in inputs.iter_mut().zip(&tx_inputs) {
-                        input.previous_txid = *txid;
-                        input.spent_output_index = Vout::from(*vout);
-                        input.sequence = Some(*seq);
-                    }
+                    let v0_inputs = decoder.end().map_err(DeserializeError::DecodeInputs)?;
+                    let inputs: Vec<Input> = v0_inputs
+                        .into_iter()
+                        .zip(&tx_inputs)
+                        .map(|(vi, (txid, vout, seq))| vi.into_input(*txid, *vout, *seq))
+                        .collect();
                     let out_count = tx_outputs.len();
                     if out_count == 0 {
                         self.stage =
@@ -336,11 +335,12 @@ impl Decoder for PsbtV0Decoder {
                     continue;
                 }
                 V0DecoderStage::Outputs(global, inputs, tx_outputs, decoder) => {
-                    let mut outputs = decoder.end().map_err(DeserializeError::DecodeOutputs)?;
-                    for (output, (amount, script)) in outputs.iter_mut().zip(&tx_outputs) {
-                        output.amount = *amount;
-                        output.script_pubkey = script.clone();
-                    }
+                    let v0_outputs = decoder.end().map_err(DeserializeError::DecodeOutputs)?;
+                    let outputs: Vec<_> = v0_outputs
+                        .into_iter()
+                        .zip(&tx_outputs)
+                        .map(|(vo, (amount, script))| vo.into_output(*amount, script.clone()))
+                        .collect();
                     self.stage = V0DecoderStage::Done(Psbt { global, inputs, outputs });
                 }
                 V0DecoderStage::Done(_) => return Ok(DecoderStatus::Ready),
