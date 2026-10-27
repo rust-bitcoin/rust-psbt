@@ -100,3 +100,20 @@ impl std::error::Error for LeafScriptDecodeError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_limit_lifecycle() {
+        let mut decoder = LeafScriptDecoder::default();
+        assert!(decoder.read_limit() > 0);
+
+        // ByteVecDecoder expects <compact_size len> <bytes>.
+        // Empty script + TapScript version (0xc0) = 1 byte body.
+        let mut bytes: &[u8] = &[0x01, 0xc0];
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+}

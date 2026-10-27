@@ -1147,3 +1147,31 @@ impl InputMapDecoder {
 }
 
 pub(crate) type InputsDecoder = ExactVecDecoderWith<InputMapDecoder>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_limit_lifecycle_during_leaf_script() {
+        let mut decoder = InputMapDecoder::default();
+        // Valid control block: tapscript version (0xc1) + xonly pubkey.
+        let xonly: [u8; 32] = bitcoin::hex::FromHex::from_hex(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        let mut control_block_bytes = alloc::vec![0xc1];
+        control_block_bytes.extend_from_slice(&xonly);
+        decoder.stage = InputStage::DecodingLeafScript {
+            key: Key { type_value: 0x15, key: control_block_bytes },
+            decoder: LeafScriptDecoder::default(),
+        };
+        assert!(decoder.read_limit() > 0);
+
+        // ByteVecDecoder expects <compact_size len> <bytes>.
+        // InputMapDecoder also expects the separator byte (0x00) after the value.
+        let mut bytes: &[u8] = &[0x01, 0xc0, 0x00];
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+}
