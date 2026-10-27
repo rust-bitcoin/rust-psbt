@@ -10,7 +10,7 @@ use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
 use bitcoin::sighash::{EcdsaSighashType, NonStandardSighashTypeError, TapSighashType};
-use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{
@@ -40,11 +40,12 @@ use crate::consts::{
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 use crate::encoding::codecs::ecdsa_signature::EcdsaSignatureDecoder;
 use crate::encoding::codecs::key_source::KeySourceDecoder;
+use crate::encoding::codecs::leaf_script::{LeafScriptDecoder, TapLeafScript};
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
 use crate::encoding::{ExactLenEncoder, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
-use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
+use crate::map::taproot::TapKeyOriginDecoder;
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
 #[cfg(feature = "silent-payments")]
@@ -120,7 +121,7 @@ pub struct Input {
     pub tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
     /// Map of Control blocks to Script version pair.
     #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
-    pub tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    pub tap_scripts: BTreeMap<ControlBlock, TapLeafScript>,
     /// Map of tap root x only keys to origin info and leaf hashes contained in it.
     #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq"))]
     pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
@@ -566,7 +567,7 @@ pub struct InputDecoder {
     hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
     tap_key_sig: Option<taproot::Signature>,
     tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    tap_scripts: BTreeMap<ControlBlock, TapLeafScript>,
     tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     tap_internal_key: Option<XOnlyPublicKey>,
     tap_merkle_root: Option<TapNodeHash>,
@@ -695,9 +696,9 @@ enum DecoderStage {
         decoder: TaprootSignatureDecoder,
     },
     /// Decoding a taproot leaf script.
-    DecodingTapLeafScript {
+    DecodingLeafScript {
         key: Key,
-        decoder: TapLeafScriptDecoder,
+        decoder: LeafScriptDecoder,
     },
     /// Decoding a taproot BIP32 derivation.
     DecodingTapBip32Derivation {
@@ -778,7 +779,7 @@ impl DecoderStage {
             PSBT_IN_TAP_SCRIPT_SIG =>
                 Ok(Self::DecodingTapScriptSig { key, decoder: TaprootSignatureDecoder::default() }),
             PSBT_IN_TAP_LEAF_SCRIPT =>
-                Ok(Self::DecodingTapLeafScript { key, decoder: TapLeafScriptDecoder::default() }),
+                Ok(Self::DecodingLeafScript { key, decoder: LeafScriptDecoder::default() }),
             PSBT_IN_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
                 key,
                 decoder: TapKeyOriginDecoder::default(),
@@ -923,8 +924,8 @@ impl Decoder for InputDecoder {
                     decoder.push_bytes(bytes).map_err(InputDecodeError::Hash256Preimage)?,
                 DecoderStage::DecodingTapScriptSig { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapScriptSig)?,
-                DecoderStage::DecodingTapLeafScript { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(InputDecodeError::TapLeafScript)?,
+                DecoderStage::DecodingLeafScript { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(InputDecodeError::LeafScript)?,
                 DecoderStage::DecodingProprietary { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::ProprietaryValue)?,
                 DecoderStage::DecodingUnknown { ref mut decoder, .. } =>
@@ -1171,8 +1172,8 @@ impl Decoder for InputDecoder {
                     }
                     self.stage = DecoderStage::DecodingSeparator;
                 }
-                DecoderStage::DecodingTapLeafScript { key, decoder } => {
-                    let (script, ver) = decoder.end().map_err(InputDecodeError::TapLeafScript)?;
+                DecoderStage::DecodingLeafScript { key, decoder } => {
+                    let (script, ver) = decoder.end().map_err(InputDecodeError::LeafScript)?;
                     let cb = ControlBlock::decode(&key.key)
                         .map_err(|_| InputDecodeError::InvalidControlBlock)?;
                     match self.tap_scripts.entry(cb) {
@@ -1320,7 +1321,7 @@ impl Decoder for InputDecoder {
             | DecoderStage::DecodingHash256 { decoder, .. }
             | DecoderStage::DecodingProprietary { decoder, .. }
             | DecoderStage::DecodingUnknown { decoder, .. } => decoder.read_limit(),
-            DecoderStage::DecodingTapLeafScript { decoder, .. } => decoder.read_limit(),
+            DecoderStage::DecodingLeafScript { decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
             DecoderStage::DecodingSpEcdhShare { decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
@@ -1897,10 +1898,8 @@ pub(crate) type TapScriptSigIter<'e> = KeyValueIter<
     PSBT_IN_TAP_SCRIPT_SIG,
 >;
 /// Iterator yielding tap-leaf-script entries (PSBT_IN_TAP_LEAF_SCRIPT).
-pub(crate) type TapScriptIter<'e> = KeyValueIter<
-    btree_map::Iter<'e, ControlBlock, (ScriptBuf, LeafVersion)>,
-    PSBT_IN_TAP_LEAF_SCRIPT,
->;
+pub(crate) type TapScriptIter<'e> =
+    KeyValueIter<btree_map::Iter<'e, ControlBlock, TapLeafScript>, PSBT_IN_TAP_LEAF_SCRIPT>;
 /// Iterator yielding bip-32 derivation entries (PSBT_IN_BIP32_DERIVATION).
 pub(crate) type Bip32DerivationIter<'e> =
     KeyValueIter<btree_map::Iter<'e, PublicKey, KeySource>, PSBT_IN_BIP32_DERIVATION>;
@@ -2303,7 +2302,7 @@ mod test {
         cb_bytes.extend_from_slice(&crate::encoding::encode_to_vec(&xonly));
         input.tap_scripts.insert(
             ControlBlock::decode(&cb_bytes).unwrap(),
-            (ScriptBuf::from_bytes(vec![0x53]), LeafVersion::TapScript),
+            (ScriptBuf::from_bytes(vec![0x53]), bitcoin::taproot::LeafVersion::TapScript),
         );
 
         input.tap_key_origins.insert(xonly, (vec![leaf], ks));
