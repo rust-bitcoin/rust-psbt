@@ -114,6 +114,7 @@ enum Task {
     Create {
         inputs: Vec<OutPoint>,
         outputs: Vec<TxOut>,
+        expected: PsbtData,
     },
     Update {
         #[serde(default)]
@@ -126,6 +127,7 @@ enum Task {
         output_updates: Vec<OutputUpdate>,
         #[serde(default, deserialize_with = "deserialize_sighash")]
         sighash: Option<PsbtSighashType>,
+        expected: PsbtData,
     },
     StrictSign {
         #[serde(default)]
@@ -135,6 +137,7 @@ enum Task {
         seed: Option<PrivateKey>,
         #[serde(default)]
         private_keys: Vec<PrivKeyPath>,
+        expected: PsbtData,
     },
     TrustedSign {
         #[serde(default)]
@@ -144,14 +147,17 @@ enum Task {
         seed: Option<PrivateKey>,
         #[serde(default)]
         private_keys: Vec<PrivKeyPath>,
+        expected: PsbtData,
     },
     Combine {
         #[serde(default)]
         psbts: Vec<PsbtData>,
+        expected: PsbtData,
     },
     Finalize {
         #[serde(default)]
         psbts: Vec<PsbtData>,
+        expected: PsbtData,
     },
     Extract {
         #[serde(default)]
@@ -174,24 +180,15 @@ pub struct TestCase {
     #[serde(alias = "description")]
     pub description: String,
     version: Version,
-    #[serde(default)]
-    expected: Option<PsbtData>,
     task: Task,
 }
 
 impl TestCase {
-    /// The PSBTs a deserialization task must parse: the `task` ones, plus the
-    /// `expected` one when the case keeps its PSBT there (as `bip371.json` and the
-    /// `deserialize` cases of `bip174.json` do).
-    fn parse_targets<'a>(&'a self, psbts: &'a [PsbtData]) -> impl Iterator<Item = &'a PsbtData> {
-        psbts.iter().chain(self.expected.iter())
-    }
-
     fn execute(&self) {
         match &self.task {
             // FailDeserialize: the PSBT must be rejected during parsing.
             Task::FailDeserialize { psbts } =>
-                for PsbtData { base64 } in self.parse_targets(psbts) {
+                for PsbtData { base64 } in psbts {
                     match self.version {
                         Version::ZERO => assert_invalid_v0(base64),
                         Version::TWO => assert_invalid_v2(base64),
@@ -234,7 +231,7 @@ impl TestCase {
             }
             // Deserialize: the PSBT must parse successfully.
             Task::Deserialize { psbts } =>
-                for PsbtData { base64 } in self.parse_targets(psbts) {
+                for PsbtData { base64 } in psbts {
                     match self.version {
                         Version::ZERO => assert_valid_v0(base64),
                         Version::TWO => assert_valid_v2(base64),
@@ -242,8 +239,7 @@ impl TestCase {
                     }
                 },
             // Create: build a PSBT from the given inputs and outputs.
-            Task::Create { inputs, outputs } => {
-                let expected = self.expected.as_ref().expect("create expected must be present");
+            Task::Create { inputs, outputs, expected } => {
                 let expected_v0 = PsbtV0::deserialize_base64(&expected.base64)
                     .expect("create expected PSBT must be valid base64");
 
@@ -270,12 +266,11 @@ impl TestCase {
                 );
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
-            Task::Update { psbts, xpriv, input_updates, output_updates, sighash } => {
+            Task::Update { psbts, xpriv, input_updates, output_updates, sighash, expected } => {
                 assert!(!psbts.is_empty(), "update task needs at least one input PSBT");
                 let mut psbt =
                     base64_psbt_v0(&psbts[0].base64).expect("update input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("update expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("update expected PSBT must be valid");
 
@@ -338,7 +333,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Task::StrictSign { psbts, xpriv, seed, private_keys } => {
+            Task::StrictSign { psbts, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -351,7 +346,6 @@ impl TestCase {
                 assert!(!psbts.is_empty(), "strict_signer task needs at least one input PSBT");
                 let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
@@ -377,7 +371,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Task::TrustedSign { psbts, xpriv, seed, private_keys } => {
+            Task::TrustedSign { psbts, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -390,7 +384,6 @@ impl TestCase {
                 assert!(!psbts.is_empty(), "sign task needs at least one input PSBT");
                 let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
@@ -416,10 +409,9 @@ impl TestCase {
                 assert_eq!(psbt, expected_psbt);
             }
             // Combine: merge multiple PSBTs into one.
-            Task::Combine { psbts } => {
+            Task::Combine { psbts, expected } => {
                 assert!(psbts.len() >= 2, "combine task needs at least two input PSBTs");
 
-                let expected = self.expected.as_ref().expect("combine expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("combine expected PSBT must be valid");
 
@@ -434,13 +426,12 @@ impl TestCase {
                 assert_eq!(combined, expected_psbt);
             }
             // Finalize: apply final scripts and witnesses.
-            Task::Finalize { psbts } => {
+            Task::Finalize { psbts, expected } => {
                 assert!(!psbts.is_empty(), "finalize task needs at least one input PSBT");
 
                 let psbt =
                     base64_psbt_v0(&psbts[0].base64).expect("finalize input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("finalize expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
 
