@@ -12,7 +12,8 @@
 //!
 //! - The **Creator** role Use the [`Creator`] type - or if creator and constructor are a single entity just use the `Constructor`.
 //! - The **Constructor**: Use the [`Constructor`] type.
-//! - The **Updater** role: Use the [`Updater`] type and then update additional fields of the [`Psbt`] directly.
+//! - The **Updater** role: Use the [`Updater`] type, calling [`Updater::update`] to add auxiliary
+//!   data (witness UTXOs, scripts, derivation paths, etc.) and set sequence numbers.
 //! - The **Signer** role: Use the [`Signer`] type.
 //! - The **Finalizer** role: Use the [`Finalizer`] type (requires "miniscript" feature).
 //! - The **Extractor** role: Use the [`Extractor`](crate::Extractor) type.

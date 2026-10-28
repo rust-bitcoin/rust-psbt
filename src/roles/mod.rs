@@ -23,4 +23,4 @@ pub use signer::{
     GetKeyError, InputSigs, KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys,
     SigningSession,
 };
-pub use updater::Updater;
+pub use updater::{Updater, UpdaterGlobalView, UpdaterView};
