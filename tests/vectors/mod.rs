@@ -15,6 +15,7 @@ use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{OutPoint, PrivateKey, PublicKey, ScriptBuf, TxOut};
 use psbt_v2::{
     Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0, Signer,
+    Version,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -172,8 +173,7 @@ enum Task {
 pub struct TestCase {
     #[serde(alias = "description")]
     pub description: String,
-    #[serde(default)]
-    version: u8,
+    version: Version,
     #[serde(default)]
     expected: Option<PsbtData>,
     task: Task,
@@ -193,9 +193,9 @@ impl TestCase {
             Task::FailDeserialize { psbts } =>
                 for PsbtData { base64 } in self.parse_targets(psbts) {
                     match self.version {
-                        0 => assert_invalid_v0(base64),
-                        2 => assert_invalid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version),
+                        Version::ZERO => assert_invalid_v0(base64),
+                        Version::TWO => assert_invalid_v2(base64),
+                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
                     }
                 },
             // FailSign: the PSBT must fail the signer validity checks.
@@ -236,9 +236,9 @@ impl TestCase {
             Task::Deserialize { psbts } =>
                 for PsbtData { base64 } in self.parse_targets(psbts) {
                     match self.version {
-                        0 => assert_valid_v0(base64),
-                        2 => assert_valid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version),
+                        Version::ZERO => assert_valid_v0(base64),
+                        Version::TWO => assert_valid_v2(base64),
+                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
                     }
                 },
             // Create: build a PSBT from the given inputs and outputs.
