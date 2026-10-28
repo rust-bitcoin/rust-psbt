@@ -395,6 +395,9 @@ impl Psbt {
             self_output.combine(other_output)?;
         }
 
+        // Combining can introduce a lock time conflict.
+        self.determine_lock_time().map_err(CombineError::LockTime)?;
+
         Ok(self)
     }
 
@@ -584,7 +587,7 @@ mod display_from_str {
     }
 }
 
-/// Error combining two input maps.
+/// Error combining two PSBTs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CombineError {
@@ -594,6 +597,8 @@ pub enum CombineError {
     Input(input::CombineError),
     /// Error while combining the output maps.
     Output(output::CombineError),
+    /// Combining introduced a lock time conflict that prevents determining the lock time.
+    LockTime(DetermineLockTimeError),
 }
 
 impl fmt::Display for CombineError {
@@ -602,6 +607,8 @@ impl fmt::Display for CombineError {
             Self::Global(ref e) => write_err!(f, "error while combining the global maps"; e),
             Self::Input(ref e) => write_err!(f, "error while combining the input maps"; e),
             Self::Output(ref e) => write_err!(f, "error while combining the output maps"; e),
+            Self::LockTime(ref e) =>
+                write_err!(f, "lock time could not be determined after combining"; e),
         }
     }
 }
@@ -613,6 +620,7 @@ impl std::error::Error for CombineError {
             Self::Global(ref e) => Some(e),
             Self::Input(ref e) => Some(e),
             Self::Output(ref e) => Some(e),
+            Self::LockTime(ref e) => Some(e),
         }
     }
 }
