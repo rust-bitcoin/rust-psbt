@@ -385,14 +385,14 @@ impl Psbt {
     ///
     /// See [`combine()`] for a non-consuming version of this function.
     pub fn combine_with(mut self, other: Self) -> Result<Self, CombineError> {
-        self.global.combine(other.global)?;
+        self.global.combine(other.global).map_err(CombineError::Global)?;
 
         for (self_input, other_input) in self.inputs.iter_mut().zip(other.inputs) {
-            self_input.combine(other_input)?;
+            self_input.combine(other_input).map_err(CombineError::Input)?;
         }
 
         for (self_output, other_output) in self.outputs.iter_mut().zip(other.outputs) {
-            self_output.combine(other_output)?;
+            self_output.combine(other_output).map_err(CombineError::Output)?;
         }
 
         // Combining can introduce a lock time conflict.
@@ -623,18 +623,6 @@ impl std::error::Error for CombineError {
             Self::LockTime(ref e) => Some(e),
         }
     }
-}
-
-impl From<global::CombineError> for CombineError {
-    fn from(e: global::CombineError) -> Self { Self::Global(e) }
-}
-
-impl From<input::CombineError> for CombineError {
-    fn from(e: input::CombineError) -> Self { Self::Input(e) }
-}
-
-impl From<output::CombineError> for CombineError {
-    fn from(e: output::CombineError) -> Self { Self::Output(e) }
 }
 
 #[cfg(test)]
