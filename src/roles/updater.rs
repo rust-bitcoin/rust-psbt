@@ -14,6 +14,7 @@ use crate::error::DetermineLockTimeError;
 use crate::input::Input;
 use crate::output::Output;
 use crate::psbt::Psbt;
+use crate::roles::signer::Signer;
 #[cfg(feature = "silent-payments")]
 use crate::DleqProof;
 use crate::{Key, ProprietaryKey};
@@ -26,7 +27,9 @@ use crate::{Key, ProprietaryKey};
 /// (that is the Constructor role).
 ///
 /// Access to the PSBT is provided through [`Updater::update`], which lends the updatable
-/// fields via an [`UpdaterView`] inside a closure.
+/// fields via an [`UpdaterView`] inside a closure. Once all updates are applied, either
+/// extract the [`Psbt`] with [`Updater::psbt`] or transition directly to the [`Signer`] role
+/// with [`Updater::signer`].
 ///
 /// # Examples
 ///
@@ -140,6 +143,9 @@ impl Updater {
         let _ = self.0.determine_lock_time()?;
         Ok(self.0)
     }
+
+    /// Transitions directly to the [`Signer`] role after completing all updates.
+    pub fn signer(self) -> Result<Signer, DetermineLockTimeError> { Signer::new(self.psbt()?) }
 }
 
 impl TryFrom<Psbt> for Updater {
