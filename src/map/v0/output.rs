@@ -294,7 +294,7 @@ enum OutputStage {
         key: Key,
         decoder: ValueDecoder<SpV0Label>,
     },
-    Done(Output),
+    Done(OutputV0),
     Errored,
 }
 
@@ -341,12 +341,62 @@ impl OutputStage {
     }
 }
 
+/// The portion of an [`Output`](crate::Output) carried by a v0 (BIP-174) output map.
+///
+/// v0 output maps do not carry `amount` or `script_pubkey`, those come from
+/// the unsigned transaction in the global map. This type holds everything the
+/// per-output map *can* contain, and is promoted to a full [`Output`](crate::Output)
+/// via [`into_output`](Self::into_output).
+#[derive(Debug, Clone)]
+pub(crate) struct OutputV0 {
+    pub(crate) redeem_script: Option<ScriptBuf>,
+    pub(crate) witness_script: Option<ScriptBuf>,
+    pub(crate) bip32_derivations: BTreeMap<PublicKey, KeySource>,
+    pub(crate) tap_internal_key: Option<XOnlyPublicKey>,
+    pub(crate) tap_tree: Option<TapTree>,
+    pub(crate) tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    #[cfg(feature = "silent-payments")]
+    pub(crate) sp_v0_info: Option<SpV0Info>,
+    #[cfg(feature = "silent-payments")]
+    pub(crate) sp_v0_label: Option<u32>,
+    pub(crate) proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
+    pub(crate) unknowns: BTreeMap<Key, Vec<u8>>,
+}
+
+impl OutputV0 {
+    /// Promote this `OutputV0` into a full [`Output`](crate::Output) by injecting
+    /// the `amount` and `script_pubkey` from the unsigned transaction.
+    pub(crate) fn into_output(self, amount: Amount, script_pubkey: ScriptBuf) -> Output {
+        Output {
+            amount,
+            script_pubkey,
+            redeem_script: self.redeem_script,
+            witness_script: self.witness_script,
+            bip32_derivations: self.bip32_derivations,
+            tap_internal_key: self.tap_internal_key,
+            tap_tree: self.tap_tree,
+            tap_key_origins: self.tap_key_origins,
+            #[cfg(feature = "silent-payments")]
+            sp_v0_info: self.sp_v0_info,
+            #[cfg(feature = "silent-payments")]
+            sp_v0_label: self.sp_v0_label,
+            proprietaries: self.proprietaries,
+            unknowns: self.unknowns,
+        }
+    }
+}
+
 /// Decoder for a single v0 output map.
+///
+/// Decodes key-value pairs from the v0 per-output map. The decoded
+/// [`OutputV0`] does not include `amount` or `script_pubkey` — those
+/// are injected from the unsigned transaction after decoding.
+///
+/// All fields default to empty/absent, which is always meaningful because the
+/// v0 output map never carries unsigned-transaction data.
 #[derive(Debug, Default)]
 pub(crate) struct OutputMapDecoder {
     stage: OutputStage,
-    amount: Amount,
-    script_pubkey: ScriptBuf,
     redeem_script: Option<ScriptBuf>,
     witness_script: Option<ScriptBuf>,
     bip32_derivations: BTreeMap<PublicKey, KeySource>,
@@ -361,30 +411,8 @@ pub(crate) struct OutputMapDecoder {
     unknowns: BTreeMap<Key, Vec<u8>>,
 }
 
-impl OutputMapDecoder {
-    /// Build the merged [`Output`].
-    fn finish(&mut self) -> Result<Output, OutputDecodeError> {
-        Ok(Output {
-            amount: self.amount,
-            script_pubkey: core::mem::take(&mut self.script_pubkey),
-            redeem_script: self.redeem_script.take(),
-            witness_script: self.witness_script.take(),
-            bip32_derivations: core::mem::take(&mut self.bip32_derivations),
-            tap_internal_key: self.tap_internal_key.take(),
-            tap_tree: self.tap_tree.take(),
-            tap_key_origins: core::mem::take(&mut self.tap_key_origins),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_info: self.sp_v0_info.take(),
-            #[cfg(feature = "silent-payments")]
-            sp_v0_label: self.sp_v0_label.take(),
-            proprietaries: core::mem::take(&mut self.proprietaries),
-            unknowns: core::mem::take(&mut self.unknowns),
-        })
-    }
-}
-
 impl Decoder for OutputMapDecoder {
-    type Output = Output;
+    type Output = OutputV0;
     type Error = OutputDecodeError;
 
     #[allow(clippy::too_many_lines)]
@@ -398,7 +426,20 @@ impl Decoder for OutputMapDecoder {
                 match bytes.split_first() {
                     Some((&PSBT_SEPARATOR, rest)) => {
                         *bytes = rest;
-                        let output = self.finish()?;
+                        let output = OutputV0 {
+                            redeem_script: self.redeem_script.take(),
+                            witness_script: self.witness_script.take(),
+                            bip32_derivations: core::mem::take(&mut self.bip32_derivations),
+                            tap_internal_key: self.tap_internal_key.take(),
+                            tap_tree: self.tap_tree.take(),
+                            tap_key_origins: core::mem::take(&mut self.tap_key_origins),
+                            #[cfg(feature = "silent-payments")]
+                            sp_v0_info: self.sp_v0_info.take(),
+                            #[cfg(feature = "silent-payments")]
+                            sp_v0_label: self.sp_v0_label.take(),
+                            proprietaries: core::mem::take(&mut self.proprietaries),
+                            unknowns: core::mem::take(&mut self.unknowns),
+                        };
                         self.stage = OutputStage::Done(output);
                         return Ok(DecoderStatus::Ready);
                     }
@@ -572,7 +613,7 @@ impl Decoder for OutputMapDecoder {
         }
     }
 
-    fn end(self) -> Result<Output, Self::Error> {
+    fn end(self) -> Result<OutputV0, Self::Error> {
         match self.stage {
             OutputStage::Done(output) => Ok(output),
             _ => Err(OutputDecodeError::EarlyEnd),
