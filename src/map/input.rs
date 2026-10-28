@@ -502,7 +502,10 @@ impl Input {
             });
         }
 
-        // TODO: Should we keep any value other than Sequence::MAX since it is default?
+        // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
+        // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
+        // when combinging, an explicit Sequence::MAX is viewed as a decision by the user, and
+        // should not be assumed to be an unset default.
         v2_combine_option!(sequence, self, other);
         v2_combine_option!(min_time, self, other);
         v2_combine_option!(min_height, self, other);

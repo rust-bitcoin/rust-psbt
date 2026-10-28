@@ -117,12 +117,14 @@ fn combine_rejects_tx_version_mismatch() {
 }
 
 #[test]
-fn combine_first_wins_for_option_fields() {
+fn combine_sequence_semantics() {
     let op = outpoint(b"in");
-    let mut input_a = Input::new(&op);
-    input_a.sequence = Some(Sequence::ZERO);
+
+    // Scenario 1: self has no sequence, could end up being the default Sequence::MAX, other
+    // explicitly sets a non-default value. Other's value is adopted.
+    let input_a = Input::new(&op);
     let mut input_b = Input::new(&op);
-    input_b.sequence = Some(Sequence::MAX);
+    input_b.sequence = Some(Sequence::ZERO);
 
     let psbt_a = Psbt {
         global: Global {
@@ -142,10 +144,45 @@ fn combine_first_wins_for_option_fields() {
         inputs: vec![input_b],
         outputs: vec![dummy_output()],
     };
-
     let combined = psbt_a.combine_with(psbt_b).expect("combine should succeed");
-    // First PSBT's value wins when both have the same option set.
-    assert_eq!(combined.inputs[0].sequence, Some(Sequence::ZERO));
+    assert_eq!(
+        combined.inputs[0].sequence,
+        Some(Sequence::ZERO),
+        "None should let other's explicit value through, do not interpret as Sequence::MAX"
+    );
+
+    // Scenario 2: self explicitly sets Sequence::MAX (signals finality). Even though MAX is the
+    // default when omitted, an explicit MAX is a deliberate choice, other's value must not override
+    // it.
+    let mut input_a = Input::new(&op);
+    input_a.sequence = Some(Sequence::MAX);
+    let mut input_b = Input::new(&op);
+    input_b.sequence = Some(Sequence::ZERO);
+
+    let psbt_a = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![input_a],
+        outputs: vec![dummy_output()],
+    };
+    let psbt_b = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![input_b],
+        outputs: vec![dummy_output()],
+    };
+    let combined = psbt_a.combine_with(psbt_b).expect("combine should succeed");
+    assert_eq!(
+        combined.inputs[0].sequence,
+        Some(Sequence::MAX),
+        "explicit Sequence::MAX must not be overridden"
+    );
 }
 
 #[test]
