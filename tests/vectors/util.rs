@@ -1,54 +1,34 @@
 //! Test utility functions.
 
-use psbt_v2::bitcoin::hex::{self, FromHex};
-use psbt_v2::{DeserializeError, Psbt, PsbtV0};
+use psbt_v2::{ParsePsbtError, Psbt, PsbtV0};
 
 #[track_caller]
-pub fn hex_psbt_v0(s: &str) -> Result<Psbt, DeserializeError> {
-    let r: Result<Vec<u8>, hex::HexToBytesError> = Vec::from_hex(s);
-    match r {
-        Err(_e) => panic!("unable to parse PSBT v0 from hex string {}", s),
-        Ok(v) => PsbtV0::deserialize(&v).map(|v0| v0.into_psbt()),
-    }
+pub fn base64_psbt_v0(s: &str) -> Result<Psbt, ParsePsbtError> {
+    PsbtV0::deserialize_base64(s).map(|v0| v0.into_psbt())
 }
 
 #[track_caller]
-pub fn hex_psbt_v2(s: &str) -> Result<Psbt, DeserializeError> {
-    let r: Result<Vec<u8>, hex::HexToBytesError> = Vec::from_hex(s);
-    match r {
-        Err(_e) => panic!("unable to parse PSBT v2 from hex string {}", s),
-        Ok(v) => Psbt::deserialize(&v),
-    }
-}
+pub fn base64_psbt_v2(s: &str) -> Result<Psbt, ParsePsbtError> { s.parse::<Psbt>() }
 
 #[track_caller]
-pub fn assert_valid_v0(hex: &str, base64: &str) {
-    if let Err(e) = hex_psbt_v0(hex) {
-        println!("Parse PSBT v0 (from hex) error: {:?}\n\n{}\n", e, hex);
+pub fn assert_valid_v0(base64: &str) {
+    if let Err(e) = base64_psbt_v0(base64) {
+        println!("Parse PSBT v0 (from base64) error: {:?}\n\n{}\n", e, base64);
         panic!()
     }
-    // If we got this far decoding works so this is basically just a sanity check.
-    assert!(PsbtV0::deserialize_base64(base64).is_ok());
 }
 
 #[track_caller]
-pub fn assert_valid_v2(hex: Option<&str>, base64: &str) {
-    if let Some(h) = hex.filter(|h| !h.is_empty()) {
-        assert!(hex_psbt_v2(h).is_ok());
-    }
+pub fn assert_valid_v2(base64: &str) {
     assert!(base64.parse::<Psbt>().is_ok());
 }
 
 #[track_caller]
-pub fn assert_invalid_v0(hex: &str, base64: &str) {
-    assert!(hex_psbt_v0(hex).is_err());
-    assert!(PsbtV0::deserialize_base64(base64).is_err());
+pub fn assert_invalid_v0(base64: &str) {
+    assert!(base64_psbt_v0(base64).is_err());
 }
 
 #[track_caller]
-pub fn assert_invalid_v2(hex: Option<&str>, base64: &str) {
-    if let Some(h) = hex.filter(|h| !h.is_empty()) {
-        assert!(hex_psbt_v2(h).is_err());
-    }
+pub fn assert_invalid_v2(base64: &str) {
     assert!(base64.parse::<Psbt>().is_err());
 }

@@ -21,8 +21,7 @@ use serde::{de, Deserialize, Deserializer};
 pub mod util;
 
 use util::{
-    assert_invalid_v0, assert_invalid_v2, assert_valid_v0, assert_valid_v2, hex_psbt_v0,
-    hex_psbt_v2,
+    assert_invalid_v0, assert_invalid_v2, assert_valid_v0, assert_valid_v2, base64_psbt_v0,
 };
 
 #[derive(Debug, Deserialize)]
@@ -54,11 +53,10 @@ struct TestFile {
     cases: Vec<TestCase>,
 }
 
-/// Holds the optional hex/base64 encodings of a PSBT.
-#[derive(Debug, Deserialize, Default)]
+/// Holds the base64 encoding of a PSBT.
+#[derive(Debug, Deserialize)]
 struct PsbtData {
-    hex: Option<String>,
-    base64: Option<String>,
+    base64: String,
 }
 
 /// Per-input update data for the updater task.
@@ -174,7 +172,7 @@ pub struct TestCase {
     #[serde(default)]
     version: u8,
     #[serde(default)]
-    expected: PsbtData,
+    expected: Option<PsbtData>,
     supplementary: Supplementary,
 }
 
@@ -183,43 +181,30 @@ impl TestCase {
     /// `expected` one when the case keeps its PSBT there (as `bip371.json` and the
     /// `deserialize` cases of `bip174.json` do).
     fn parse_targets<'a>(&'a self, psbts: &'a [PsbtData]) -> impl Iterator<Item = &'a PsbtData> {
-        let expected = Some(&self.expected).filter(|e| e.hex.is_some() || e.base64.is_some());
-        psbts.iter().chain(expected)
+        psbts.iter().chain(self.expected.iter())
     }
 
     fn execute(&self) {
         match &self.supplementary {
             // FailDeserialize: the PSBT must be rejected during parsing.
             Supplementary::FailDeserialize { psbts } =>
-                for PsbtData { hex, base64 } in self.parse_targets(psbts) {
-                    let base64 = base64.as_deref().expect("fail vector must have base64");
+                for PsbtData { base64 } in self.parse_targets(psbts) {
                     match self.version {
-                        0 => {
-                            let hex = hex.as_deref().expect("v0 fail vector must have hex");
-                            assert_invalid_v0(hex, base64);
-                        }
-                        2 => {
-                            assert_invalid_v2(hex.as_deref(), base64);
-                        }
+                        0 => assert_invalid_v0(base64),
+                        2 => assert_invalid_v2(base64),
                         _ => panic!("unknown PSBT version: {}", self.version),
                     }
                 },
             // FailSign: the PSBT must fail the signer validity checks.
             Supplementary::FailSign { psbts } => {
-                for PsbtData { hex, base64 } in psbts {
-                    let hex = hex.as_deref().expect("fail vector must have hex");
-                    let base64 = base64.as_deref().expect("fail vector must have base64");
-                    let hex_psbt = hex_psbt_v0(hex).expect("should parse");
-                    let base64_psbt = PsbtV0::deserialize_base64(base64)
-                        .expect("base64 must decode when hex decoded")
-                        .into_psbt();
-                    assert_eq!(hex_psbt, base64_psbt);
+                for PsbtData { base64 } in psbts {
+                    let psbt =
+                        base64_psbt_v0(base64).expect("fail sign vector must be valid base64");
 
                     // The BIP-174 signer validity checks run upfront in `sign` (before any
                     // signature is produced), so signing must fail even though we hold no keys.
-                    let inputs_len = base64_psbt.inputs.len();
-                    let mut signer =
-                        Signer::new(base64_psbt).expect("lock time must be determinable");
+                    let inputs_len = psbt.inputs.len();
+                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
                     let any_err = signer.session(|session| {
                         (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
                     });
@@ -227,23 +212,17 @@ impl TestCase {
                 }
             }
             Supplementary::FailStrictSign { psbts } => {
-                for PsbtData { hex, base64 } in psbts {
-                    let hex = hex.as_deref().expect("fail vector must have hex");
-                    let base64 = base64.as_deref().expect("fail vector must have base64");
-                    let hex_psbt = hex_psbt_v0(hex).expect("should parse");
-                    let base64_psbt = PsbtV0::deserialize_base64(base64)
-                        .expect("base64 must decode when hex decoded")
-                        .into_psbt();
-                    assert_eq!(hex_psbt, base64_psbt);
+                for PsbtData { base64 } in psbts {
+                    let psbt = base64_psbt_v0(base64)
+                        .expect("fail strict sign vector must be valid base64");
 
-                    let input_len = base64_psbt.inputs.len();
+                    let input_len = psbt.inputs.len();
 
                     // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
                     // full tx prevout.
                     // Under strict signing, inputs with missing full tx prevout must fail while
                     // getting the signable inputs.
-                    let mut signer =
-                        Signer::new(base64_psbt).expect("lock time must be determinable");
+                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
                     let any_err = signer.session(|session| {
                         (0..input_len).any(|idx| session.signable_input(idx).is_err())
                     });
@@ -252,23 +231,18 @@ impl TestCase {
             }
             // Deserialize: the PSBT must parse successfully.
             Supplementary::Deserialize { psbts } =>
-                for PsbtData { hex, base64 } in self.parse_targets(psbts) {
-                    let base64 = base64.as_deref().expect("pass vector must have base64");
+                for PsbtData { base64 } in self.parse_targets(psbts) {
                     match self.version {
-                        0 => {
-                            let hex = hex.as_deref().expect("v0 pass vector must have hex");
-                            assert_valid_v0(hex, base64);
-                        }
-                        2 => {
-                            assert_valid_v2(hex.as_deref(), base64);
-                        }
+                        0 => assert_valid_v0(base64),
+                        2 => assert_valid_v2(base64),
                         _ => panic!("unknown PSBT version: {}", self.version),
                     }
                 },
             // Create: build a PSBT from the given inputs and outputs.
             Supplementary::Create { inputs, outputs } => {
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("create expected must have hex");
+                let expected = self.expected.as_ref().expect("create expected must be present");
+                let expected_v0 = PsbtV0::deserialize_base64(&expected.base64)
+                    .expect("create expected PSBT must be valid base64");
 
                 let mut psbt = Constructor::<Modifiable>::default();
                 for prev_out in inputs {
@@ -285,25 +259,22 @@ impl TestCase {
                 }
                 let psbt = psbt.psbt().expect("lock time must be determinable");
 
-                let expected_bytes =
-                    Vec::from_hex(expected_hex).expect("expected PSBT must be valid hex");
                 assert_eq!(
                     PsbtV0::from_psbt(psbt)
                         .expect("BIP-174 test vector PSBT must have resolvable lock time")
                         .serialize(),
-                    expected_bytes
+                    expected_v0.serialize()
                 );
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
             Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } => {
                 assert!(!psbts.is_empty(), "update task needs at least one input PSBT");
-                let input_hex = psbts[0].hex.as_deref().expect("update input must have hex");
-                let mut psbt = hex_psbt_v0(input_hex).expect("update input PSBT must be valid");
+                let mut psbt =
+                    base64_psbt_v0(&psbts[0].base64).expect("update input PSBT must be valid");
 
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("update expected must have hex");
+                let expected = self.expected.as_ref().expect("update expected must be present");
                 let expected_psbt =
-                    hex_psbt_v0(expected_hex).expect("update expected PSBT must be valid");
+                    base64_psbt_v0(&expected.base64).expect("update expected PSBT must be valid");
 
                 let fp = xpriv.map(|xpriv| {
                     let secp = Secp256k1::new();
@@ -375,13 +346,11 @@ impl TestCase {
                 }
 
                 assert!(!psbts.is_empty(), "strict_signer task needs at least one input PSBT");
-                let input_hex = psbts[0].hex.as_deref().expect("sign input must have hex");
-                let psbt = hex_psbt_v0(input_hex).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
 
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("sign expected must have hex");
+                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
-                    hex_psbt_v0(expected_hex).expect("sign expected PSBT must be valid");
+                    base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
                 let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
 
@@ -416,13 +385,11 @@ impl TestCase {
                 }
 
                 assert!(!psbts.is_empty(), "sign task needs at least one input PSBT");
-                let input_hex = psbts[0].hex.as_deref().expect("sign input must have hex");
-                let psbt = hex_psbt_v0(input_hex).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
 
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("sign expected must have hex");
+                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
-                    hex_psbt_v0(expected_hex).expect("sign expected PSBT must be valid");
+                    base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
                 let mut key_map: BTreeMap<PublicKey, PrivateKey> = BTreeMap::new();
 
@@ -449,18 +416,15 @@ impl TestCase {
             Supplementary::Combine { psbts } => {
                 assert!(psbts.len() >= 2, "combine task needs at least two input PSBTs");
 
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("combine expected must have hex");
+                let expected = self.expected.as_ref().expect("combine expected must be present");
                 let expected_psbt =
-                    hex_psbt_v0(expected_hex).expect("combine expected PSBT must be valid");
+                    base64_psbt_v0(&expected.base64).expect("combine expected PSBT must be valid");
 
                 let mut combined =
-                    hex_psbt_v0(psbts[0].hex.as_deref().expect("combine input[0] must have hex"))
-                        .expect("combine input[0] must be valid");
+                    base64_psbt_v0(&psbts[0].base64).expect("combine input[0] must be valid");
 
                 for p in &psbts[1..] {
-                    let next = hex_psbt_v0(p.hex.as_deref().expect("combine input must have hex"))
-                        .expect("combine input must be valid");
+                    let next = base64_psbt_v0(&p.base64).expect("combine input must be valid");
                     combined = combined.combine_with(next).expect("combine must succeed");
                 }
 
@@ -470,13 +434,12 @@ impl TestCase {
             Supplementary::Finalize { psbts } => {
                 assert!(!psbts.is_empty(), "finalize task needs at least one input PSBT");
 
-                let input_hex = psbts[0].hex.as_deref().expect("finalize input must have hex");
-                let psbt = hex_psbt_v0(input_hex).expect("finalize input PSBT must be valid");
+                let psbt =
+                    base64_psbt_v0(&psbts[0].base64).expect("finalize input PSBT must be valid");
 
-                let expected_hex =
-                    self.expected.hex.as_deref().expect("finalize expected must have hex");
+                let expected = self.expected.as_ref().expect("finalize expected must be present");
                 let expected_psbt =
-                    hex_psbt_v0(expected_hex).expect("finalize expected PSBT must be valid");
+                    base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
 
                 let secp = Secp256k1::verification_only();
                 let finalizer = Finalizer::new(psbt).expect("finalizer requirements must be met");
@@ -488,8 +451,8 @@ impl TestCase {
             Supplementary::Extract { psbts, tx: expected_tx_hex } => {
                 assert!(!psbts.is_empty(), "extract task needs at least one input PSBT");
 
-                let input_hex = psbts[0].hex.as_deref().expect("extract input must have hex");
-                let psbt = hex_psbt_v0(input_hex).expect("extract input PSBT must be valid");
+                let psbt =
+                    base64_psbt_v0(&psbts[0].base64).expect("extract input PSBT must be valid");
 
                 let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
                 let tx = extractor.extract_tx_unchecked_fee_rate().expect("extract must succeed");
@@ -498,16 +461,9 @@ impl TestCase {
             // DetermineLockTime: compute the lock time from the PSBT.
             Supplementary::DetermineLockTime { psbts, expected_lock_time } => {
                 let expected_lock_time = *expected_lock_time;
-                for PsbtData { hex, base64 } in psbts {
-                    let hex = hex.as_deref().expect("determine_lock_time vector must have hex");
-                    let base64 =
-                        base64.as_deref().expect("determine_lock_time vector must have base64");
-
-                    let psbt = hex_psbt_v2(hex).expect("failed to deserialize PSBT from hex");
-                    assert_eq!(
-                        psbt,
-                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64")
-                    );
+                for PsbtData { base64 } in psbts {
+                    let psbt =
+                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64");
 
                     let got = psbt.determine_lock_time().expect("valid lock time");
                     let want = bitcoin::absolute::LockTime::from_consensus(expected_lock_time);
@@ -515,26 +471,16 @@ impl TestCase {
                 }
             }
             // FailDetermineLockTime: lock time determination must fail.
-            Supplementary::FailDetermineLockTime { psbts } => {
-                for PsbtData { hex, base64 } in psbts {
-                    let hex =
-                        hex.as_deref().expect("fail_determine_lock_time vector must have hex");
-                    let base64 = base64
-                        .as_deref()
-                        .expect("fail_determine_lock_time vector must have base64");
-
-                    let psbt = hex_psbt_v2(hex).expect("failed to deserialize PSBT from hex");
-                    assert_eq!(
-                        psbt,
-                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64")
-                    );
+            Supplementary::FailDetermineLockTime { psbts } =>
+                for PsbtData { base64 } in psbts {
+                    let psbt =
+                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64");
 
                     assert!(
                         psbt.determine_lock_time().is_err(),
                         "expected determine_lock_time to fail"
                     );
-                }
-            }
+                },
         }
     }
 }

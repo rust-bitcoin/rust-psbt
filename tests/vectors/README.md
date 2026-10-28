@@ -45,9 +45,9 @@ Find a case by a word in its description:
 jq '[.cases | to_entries[] | select(.value.description | test("<substr>"; "i")) | .key]' tests/data/bip174.json
 ```
 
-Find a case by its expected PSBT hex:
+Find a case by its expected PSBT base64:
 ```sh
-jq '[.cases | to_entries[] | select(.value.expected.hex == "<hex>") | .key]' tests/data/bip174.json
+jq '[.cases | to_entries[] | select(.value.expected.base64 == "<base64>") | .key]' tests/data/bip174.json
 ```
 
 List all case descriptions grouped by task type:
@@ -60,13 +60,14 @@ jq '[.cases[] | {task: .supplementary.task, desc: .description}] | group_by(.tas
 Only add cases when the upstream BIP vectors gain a new one.
 
 1. Append an entry to `cases` in the appropriate `tests/data/<spec>.json`:
-   - `description` — start with `Valid:`, `Invalid:`, or `Workflow` so it
+   - `description`: start with `Valid:`, `Invalid:`, or `Workflow` so it
      matches the module grouping convention.
-   - `supplementary.task` — pick the handler that should run.
+   - `supplementary.task`: pick the handler that should run.
    - The fields that handler reads. The authoritative list is the `Supplementary`
      struct in `tests/vectors/mod.rs`; only set what your case actually uses.
-   - `expected.hex` — the resulting PSBT. Omit for `fail_*` tasks. For
-     `extract`, put the expected transaction hex in `supplementary.tx` instead.
+   - `expected.base64`: the resulting PSBT as a base64 string. Omit the
+     `expected` key entirely for `fail_*` tasks. For `extract`, put the
+     expected transaction hex in `supplementary.tx` instead.
 
 2. Add a `#[test]` shim in the corresponding `tests/<spec>.rs` under the
    right module (match by task type: `fail_deserialize`/`fail_sign` go in
