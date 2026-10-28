@@ -100,12 +100,10 @@ enum Task {
         psbts: Vec<PsbtData>,
     },
     FailSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     FailStrictSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     Deserialize {
         #[serde(default)]
@@ -117,8 +115,7 @@ enum Task {
         expected: PsbtData,
     },
     Update {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         #[serde(default)]
         xpriv: Option<Xpriv>,
         #[serde(default)]
@@ -130,8 +127,7 @@ enum Task {
         expected: PsbtData,
     },
     StrictSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         xpriv: Xpriv,
         #[serde(default)]
         seed: Option<PrivateKey>,
@@ -140,8 +136,7 @@ enum Task {
         expected: PsbtData,
     },
     TrustedSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         xpriv: Xpriv,
         #[serde(default)]
         seed: Option<PrivateKey>,
@@ -155,13 +150,11 @@ enum Task {
         expected: PsbtData,
     },
     Finalize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         expected: PsbtData,
     },
     Extract {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         tx: String,
     },
     DetermineLockTime {
@@ -196,38 +189,34 @@ impl TestCase {
                     }
                 },
             // FailSign: the PSBT must fail the signer validity checks.
-            Task::FailSign { psbts } => {
-                for PsbtData { base64 } in psbts {
-                    let psbt =
-                        base64_psbt_v0(base64).expect("fail sign vector must be valid base64");
+            Task::FailSign { psbt } => {
+                let psbt =
+                    base64_psbt_v0(&psbt.base64).expect("fail sign vector must be valid base64");
 
-                    // The BIP-174 signer validity checks run upfront in `sign` (before any
-                    // signature is produced), so signing must fail even though we hold no keys.
-                    let inputs_len = psbt.inputs.len();
-                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                    let any_err = signer.session(|session| {
-                        (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
-                    });
-                    assert!(any_err, "expected sign() to fail");
-                }
+                // The BIP-174 signer validity checks run upfront in `sign` (before any
+                // signature is produced), so signing must fail even though we hold no keys.
+                let inputs_len = psbt.inputs.len();
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let any_err = signer.session(|session| {
+                    (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
+                });
+                assert!(any_err, "expected sign() to fail");
             }
-            Task::FailStrictSign { psbts } => {
-                for PsbtData { base64 } in psbts {
-                    let psbt = base64_psbt_v0(base64)
-                        .expect("fail strict sign vector must be valid base64");
+            Task::FailStrictSign { psbt } => {
+                let psbt = base64_psbt_v0(&psbt.base64)
+                    .expect("fail strict sign vector must be valid base64");
 
-                    let input_len = psbt.inputs.len();
+                let input_len = psbt.inputs.len();
 
-                    // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
-                    // full tx prevout.
-                    // Under strict signing, inputs with missing full tx prevout must fail while
-                    // getting the signable inputs.
-                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                    let any_err = signer.session(|session| {
-                        (0..input_len).any(|idx| session.signable_input(idx).is_err())
-                    });
-                    assert!(any_err, "expected signable_input() to fail");
-                }
+                // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
+                // full tx prevout.
+                // Under strict signing, inputs with missing full tx prevout must fail while
+                // getting the signable inputs.
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let any_err = signer.session(|session| {
+                    (0..input_len).any(|idx| session.signable_input(idx).is_err())
+                });
+                assert!(any_err, "expected signable_input() to fail");
             }
             // Deserialize: the PSBT must parse successfully.
             Task::Deserialize { psbts } =>
@@ -266,10 +255,9 @@ impl TestCase {
                 );
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
-            Task::Update { psbts, xpriv, input_updates, output_updates, sighash, expected } => {
-                assert!(!psbts.is_empty(), "update task needs at least one input PSBT");
+            Task::Update { psbt, xpriv, input_updates, output_updates, sighash, expected } => {
                 let mut psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("update input PSBT must be valid");
+                    base64_psbt_v0(&psbt.base64).expect("update input PSBT must be valid");
 
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("update expected PSBT must be valid");
@@ -333,7 +321,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Task::StrictSign { psbts, xpriv, seed, private_keys, expected } => {
+            Task::StrictSign { psbt, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -343,8 +331,7 @@ impl TestCase {
                     assert_eq!(seeded, xpriv);
                 }
 
-                assert!(!psbts.is_empty(), "strict_signer task needs at least one input PSBT");
-                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbt.base64).expect("sign input PSBT must be valid");
 
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
@@ -371,7 +358,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Task::TrustedSign { psbts, xpriv, seed, private_keys, expected } => {
+            Task::TrustedSign { psbt, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -381,8 +368,7 @@ impl TestCase {
                     assert_eq!(seeded, xpriv);
                 }
 
-                assert!(!psbts.is_empty(), "sign task needs at least one input PSBT");
-                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbt.base64).expect("sign input PSBT must be valid");
 
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
@@ -426,11 +412,8 @@ impl TestCase {
                 assert_eq!(combined, expected_psbt);
             }
             // Finalize: apply final scripts and witnesses.
-            Task::Finalize { psbts, expected } => {
-                assert!(!psbts.is_empty(), "finalize task needs at least one input PSBT");
-
-                let psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("finalize input PSBT must be valid");
+            Task::Finalize { psbt, expected } => {
+                let psbt = base64_psbt_v0(&psbt.base64).expect("finalize input PSBT must be valid");
 
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
@@ -442,11 +425,8 @@ impl TestCase {
                 assert_eq!(psbt, expected_psbt);
             }
             // Extract: extract the final transaction from a finalized PSBT.
-            Task::Extract { psbts, tx: expected_tx_hex } => {
-                assert!(!psbts.is_empty(), "extract task needs at least one input PSBT");
-
-                let psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("extract input PSBT must be valid");
+            Task::Extract { psbt, tx: expected_tx_hex } => {
+                let psbt = base64_psbt_v0(&psbt.base64).expect("extract input PSBT must be valid");
 
                 let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
                 let tx = extractor.extract_tx_unchecked_fee_rate().expect("extract must succeed");
