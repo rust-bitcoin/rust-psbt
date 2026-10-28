@@ -21,7 +21,7 @@ jobs:
           token: ${{ secrets.RBMT }}
       - name: Install a default toolchain in tmp
         run: rustup default stable
-      - uses: ./.forgejo/actions/setup-rbmt
+      - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
       - name: Configure git
         run: |
           git config user.name "RBMT Bot"
