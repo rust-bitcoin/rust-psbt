@@ -161,8 +161,7 @@ enum Task {
         expected_lock_time: u32,
     },
     FailDetermineLockTime {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
 }
 
@@ -437,16 +436,17 @@ impl TestCase {
                 }
             }
             // FailDetermineLockTime: lock time determination must fail.
-            Task::FailDetermineLockTime { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    let psbt =
-                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64");
+            Task::FailDetermineLockTime { psbt } => {
+                let psbt = psbt
+                    .base64
+                    .parse::<psbt_v2::Psbt>()
+                    .expect("failed to deserialize from base64");
 
-                    assert!(
-                        psbt.determine_lock_time().is_err(),
-                        "expected determine_lock_time to fail"
-                    );
-                },
+                assert!(
+                    psbt.determine_lock_time().is_err(),
+                    "expected determine_lock_time to fail"
+                );
+            }
         }
     }
 }
