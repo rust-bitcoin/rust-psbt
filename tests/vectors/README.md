@@ -67,9 +67,9 @@ Only add cases when the upstream BIP vectors gain a new one.
      e.g. `"task": { "deserialize": { "psbts": [...] } }`. The payload schema
      is determined by that key; the authoritative list is the `Task` enum in
      `tests/vectors/mod.rs`.
-   - Input PSBTs live in the task payload. Validation/parse tasks
-     (`deserialize`, `fail_deserialize`, `determine_lock_time`, `combine`, etc.)
-     use an array `psbts`, while single-input tasks (`fail_sign`,
+   - Input PSBTs live in the task payload. Multi-PSBT tasks (`deserialize`,
+     `determine_lock_time`, `fail_determine_lock_time`, `combine`) use an
+     array `psbts`, while single-input tasks (`fail_deserialize`, `fail_sign`,
      `fail_strict_sign`, `strict_sign`, `trusted_sign`, `update`, `finalize`,
      `extract`) use a single `psbt` object.
    - Result-producing tasks (`create`, `update`, `strict_sign`, `trusted_sign`,

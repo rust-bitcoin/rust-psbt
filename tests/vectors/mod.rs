@@ -96,8 +96,7 @@ struct OutputUpdate {
 #[serde(rename_all = "snake_case")]
 enum Task {
     FailDeserialize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     FailSign {
         psbt: PsbtData,
@@ -180,14 +179,11 @@ impl TestCase {
     fn execute(&self) {
         match &self.task {
             // FailDeserialize: the PSBT must be rejected during parsing.
-            Task::FailDeserialize { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    match self.version {
-                        Version::ZERO => assert_invalid_v0(base64),
-                        Version::TWO => assert_invalid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
-                    }
-                },
+            Task::FailDeserialize { psbt } => match self.version {
+                Version::ZERO => assert_invalid_v0(&psbt.base64),
+                Version::TWO => assert_invalid_v2(&psbt.base64),
+                _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
+            },
             // FailSign: the PSBT must fail the signer validity checks.
             Task::FailSign { psbt } => {
                 let psbt =
