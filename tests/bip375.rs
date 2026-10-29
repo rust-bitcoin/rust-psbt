@@ -21,6 +21,11 @@ mod invalid {
     }
 
     #[test]
+    fn structure_incorrect_byte_length_out_sp_v0_label() {
+        bip375("Invalid: psbt structure: incorrect byte length for PSBT_OUT_SP_V0_LABEL field");
+    }
+
+    #[test]
     fn structure_incorrect_byte_length_out_sp_v0_info() {
         bip375("Invalid: psbt structure: incorrect byte length for PSBT_OUT_SP_V0_INFO field");
     }
@@ -168,6 +173,13 @@ mod invalid {
 
 mod valid {
     use super::bip375;
+
+    // TODO: Validation not yet implemented.
+    #[ignore]
+    #[test]
+    fn input_eligibility_bare_op2_not_segwit_v2() {
+        bip375("Valid: input eligibility: bare OP_2 script is not a segwit v2 witness program");
+    }
 
     #[test]
     fn can_finalize_one_p2pkh_input_single_signer() {
