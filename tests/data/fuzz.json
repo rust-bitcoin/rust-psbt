@@ -5,11 +5,9 @@
       "version": 2,
       "task": {
         "deserialize": {
-          "psbts": [
-            {
-              "base64": "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEBAAEOIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ8EAAAAAAABAwgQAAAAAAAAAAEEAAA="
-            }
-          ]
+          "psbt": {
+            "base64": "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEBAAEOIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ8EAAAAAAABAwgQAAAAAAAAAAEEAAA="
+          }
         }
       }
     },

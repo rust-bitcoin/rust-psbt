@@ -105,8 +105,7 @@ enum Task {
         psbt: PsbtData,
     },
     Deserialize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     Create {
         inputs: Vec<OutPoint>,
@@ -215,14 +214,11 @@ impl TestCase {
                 assert!(any_err, "expected signable_input() to fail");
             }
             // Deserialize: the PSBT must parse successfully.
-            Task::Deserialize { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    match self.version {
-                        Version::ZERO => assert_valid_v0(base64),
-                        Version::TWO => assert_valid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
-                    }
-                },
+            Task::Deserialize { psbt } => match self.version {
+                Version::ZERO => assert_valid_v0(&psbt.base64),
+                Version::TWO => assert_valid_v2(&psbt.base64),
+                _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
+            },
             // Create: build a PSBT from the given inputs and outputs.
             Task::Create { inputs, outputs, expected } => {
                 let expected_v0 = PsbtV0::deserialize_base64(&expected.base64)
