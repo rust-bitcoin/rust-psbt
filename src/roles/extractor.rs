@@ -269,12 +269,28 @@ pub enum ExtractTxError {
 }
 
 impl fmt::Display for ExtractTxError {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result { todo!() }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unfinalized =>
+                write!(f, "attempted to extract transaction from an unfinalized PSBT"),
+            Self::DetermineLockTime(ref e) => write_err!(f, "failed to determine lock time"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { index } =>
+                write!(f, "silent payment output {} has no computed output script", index),
+        }
+    }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for ExtractTxError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { todo!() }
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DetermineLockTime(ref e) => Some(e),
+            Self::Unfinalized => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { .. } => None,
+        }
+    }
 }
 
 impl From<DetermineLockTimeError> for ExtractTxError {
