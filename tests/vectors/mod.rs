@@ -15,6 +15,7 @@ use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{OutPoint, PrivateKey, PublicKey, ScriptBuf, TxOut};
 use psbt_v2::{
     Constructor, Extractor, Finalizer, Input, Modifiable, Output, PsbtSighashType, PsbtV0, Signer,
+    Version,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -87,21 +88,22 @@ struct OutputUpdate {
     bip32_derivation: Vec<PubKeyPath>,
 }
 
-/// Task-specific supplementary data, keyed by the `task` field in the JSON.
+/// Task payload, keyed by the operation name (e.g. `deserialize`, `create`).
+///
+/// The JSON represents this as an object with a single key whose name is the
+/// task type; the value under that key holds the task-specific data.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "task", rename_all = "snake_case")]
-enum Supplementary {
+#[serde(rename_all = "snake_case")]
+enum Task {
     FailDeserialize {
         #[serde(default)]
         psbts: Vec<PsbtData>,
     },
     FailSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     FailStrictSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     Deserialize {
         #[serde(default)]
@@ -110,10 +112,10 @@ enum Supplementary {
     Create {
         inputs: Vec<OutPoint>,
         outputs: Vec<TxOut>,
+        expected: PsbtData,
     },
     Update {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         #[serde(default)]
         xpriv: Option<Xpriv>,
         #[serde(default)]
@@ -122,36 +124,37 @@ enum Supplementary {
         output_updates: Vec<OutputUpdate>,
         #[serde(default, deserialize_with = "deserialize_sighash")]
         sighash: Option<PsbtSighashType>,
+        expected: PsbtData,
     },
     StrictSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         xpriv: Xpriv,
         #[serde(default)]
         seed: Option<PrivateKey>,
         #[serde(default)]
         private_keys: Vec<PrivKeyPath>,
+        expected: PsbtData,
     },
     TrustedSign {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         xpriv: Xpriv,
         #[serde(default)]
         seed: Option<PrivateKey>,
         #[serde(default)]
         private_keys: Vec<PrivKeyPath>,
+        expected: PsbtData,
     },
     Combine {
         #[serde(default)]
         psbts: Vec<PsbtData>,
+        expected: PsbtData,
     },
     Finalize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
+        expected: PsbtData,
     },
     Extract {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
         tx: String,
     },
     DetermineLockTime {
@@ -169,78 +172,63 @@ enum Supplementary {
 pub struct TestCase {
     #[serde(alias = "description")]
     pub description: String,
-    #[serde(default)]
-    version: u8,
-    #[serde(default)]
-    expected: Option<PsbtData>,
-    supplementary: Supplementary,
+    version: Version,
+    task: Task,
 }
 
 impl TestCase {
-    /// The PSBTs a deserialization task must parse: the `supplementary` ones, plus the
-    /// `expected` one when the case keeps its PSBT there (as `bip371.json` and the
-    /// `deserialize` cases of `bip174.json` do).
-    fn parse_targets<'a>(&'a self, psbts: &'a [PsbtData]) -> impl Iterator<Item = &'a PsbtData> {
-        psbts.iter().chain(self.expected.iter())
-    }
-
     fn execute(&self) {
-        match &self.supplementary {
+        match &self.task {
             // FailDeserialize: the PSBT must be rejected during parsing.
-            Supplementary::FailDeserialize { psbts } =>
-                for PsbtData { base64 } in self.parse_targets(psbts) {
+            Task::FailDeserialize { psbts } =>
+                for PsbtData { base64 } in psbts {
                     match self.version {
-                        0 => assert_invalid_v0(base64),
-                        2 => assert_invalid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version),
+                        Version::ZERO => assert_invalid_v0(base64),
+                        Version::TWO => assert_invalid_v2(base64),
+                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
                     }
                 },
             // FailSign: the PSBT must fail the signer validity checks.
-            Supplementary::FailSign { psbts } => {
-                for PsbtData { base64 } in psbts {
-                    let psbt =
-                        base64_psbt_v0(base64).expect("fail sign vector must be valid base64");
+            Task::FailSign { psbt } => {
+                let psbt =
+                    base64_psbt_v0(&psbt.base64).expect("fail sign vector must be valid base64");
 
-                    // The BIP-174 signer validity checks run upfront in `sign` (before any
-                    // signature is produced), so signing must fail even though we hold no keys.
-                    let inputs_len = psbt.inputs.len();
-                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                    let any_err = signer.session(|session| {
-                        (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
-                    });
-                    assert!(any_err, "expected sign() to fail");
-                }
+                // The BIP-174 signer validity checks run upfront in `sign` (before any
+                // signature is produced), so signing must fail even though we hold no keys.
+                let inputs_len = psbt.inputs.len();
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let any_err = signer.session(|session| {
+                    (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
+                });
+                assert!(any_err, "expected sign() to fail");
             }
-            Supplementary::FailStrictSign { psbts } => {
-                for PsbtData { base64 } in psbts {
-                    let psbt = base64_psbt_v0(base64)
-                        .expect("fail strict sign vector must be valid base64");
+            Task::FailStrictSign { psbt } => {
+                let psbt = base64_psbt_v0(&psbt.base64)
+                    .expect("fail strict sign vector must be valid base64");
 
-                    let input_len = psbt.inputs.len();
+                let input_len = psbt.inputs.len();
 
-                    // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
-                    // full tx prevout.
-                    // Under strict signing, inputs with missing full tx prevout must fail while
-                    // getting the signable inputs.
-                    let mut signer = Signer::new(psbt).expect("lock time must be determinable");
-                    let any_err = signer.session(|session| {
-                        (0..input_len).any(|idx| session.signable_input(idx).is_err())
-                    });
-                    assert!(any_err, "expected signable_input() to fail");
-                }
+                // The BIP-174 strict signer validity checks verify non-P2TR inputs provide the
+                // full tx prevout.
+                // Under strict signing, inputs with missing full tx prevout must fail while
+                // getting the signable inputs.
+                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let any_err = signer.session(|session| {
+                    (0..input_len).any(|idx| session.signable_input(idx).is_err())
+                });
+                assert!(any_err, "expected signable_input() to fail");
             }
             // Deserialize: the PSBT must parse successfully.
-            Supplementary::Deserialize { psbts } =>
-                for PsbtData { base64 } in self.parse_targets(psbts) {
+            Task::Deserialize { psbts } =>
+                for PsbtData { base64 } in psbts {
                     match self.version {
-                        0 => assert_valid_v0(base64),
-                        2 => assert_valid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version),
+                        Version::ZERO => assert_valid_v0(base64),
+                        Version::TWO => assert_valid_v2(base64),
+                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
                     }
                 },
             // Create: build a PSBT from the given inputs and outputs.
-            Supplementary::Create { inputs, outputs } => {
-                let expected = self.expected.as_ref().expect("create expected must be present");
+            Task::Create { inputs, outputs, expected } => {
                 let expected_v0 = PsbtV0::deserialize_base64(&expected.base64)
                     .expect("create expected PSBT must be valid base64");
 
@@ -267,12 +255,10 @@ impl TestCase {
                 );
             }
             // Update: apply UTXOs, scripts, BIP-32 derivations, and sighash.
-            Supplementary::Update { psbts, xpriv, input_updates, output_updates, sighash } => {
-                assert!(!psbts.is_empty(), "update task needs at least one input PSBT");
+            Task::Update { psbt, xpriv, input_updates, output_updates, sighash, expected } => {
                 let mut psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("update input PSBT must be valid");
+                    base64_psbt_v0(&psbt.base64).expect("update input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("update expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("update expected PSBT must be valid");
 
@@ -335,7 +321,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Supplementary::StrictSign { psbts, xpriv, seed, private_keys } => {
+            Task::StrictSign { psbt, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -345,10 +331,8 @@ impl TestCase {
                     assert_eq!(seeded, xpriv);
                 }
 
-                assert!(!psbts.is_empty(), "strict_signer task needs at least one input PSBT");
-                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbt.base64).expect("sign input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
@@ -374,7 +358,7 @@ impl TestCase {
 
                 assert_eq!(psbt, expected_psbt);
             }
-            Supplementary::TrustedSign { psbts, xpriv, seed, private_keys } => {
+            Task::TrustedSign { psbt, xpriv, seed, private_keys, expected } => {
                 let secp = Secp256k1::new();
                 let xpriv = *xpriv;
 
@@ -384,10 +368,8 @@ impl TestCase {
                     assert_eq!(seeded, xpriv);
                 }
 
-                assert!(!psbts.is_empty(), "sign task needs at least one input PSBT");
-                let psbt = base64_psbt_v0(&psbts[0].base64).expect("sign input PSBT must be valid");
+                let psbt = base64_psbt_v0(&psbt.base64).expect("sign input PSBT must be valid");
 
-                let expected = self.expected.as_ref().expect("sign expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("sign expected PSBT must be valid");
 
@@ -413,10 +395,9 @@ impl TestCase {
                 assert_eq!(psbt, expected_psbt);
             }
             // Combine: merge multiple PSBTs into one.
-            Supplementary::Combine { psbts } => {
+            Task::Combine { psbts, expected } => {
                 assert!(psbts.len() >= 2, "combine task needs at least two input PSBTs");
 
-                let expected = self.expected.as_ref().expect("combine expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("combine expected PSBT must be valid");
 
@@ -431,13 +412,9 @@ impl TestCase {
                 assert_eq!(combined, expected_psbt);
             }
             // Finalize: apply final scripts and witnesses.
-            Supplementary::Finalize { psbts } => {
-                assert!(!psbts.is_empty(), "finalize task needs at least one input PSBT");
+            Task::Finalize { psbt, expected } => {
+                let psbt = base64_psbt_v0(&psbt.base64).expect("finalize input PSBT must be valid");
 
-                let psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("finalize input PSBT must be valid");
-
-                let expected = self.expected.as_ref().expect("finalize expected must be present");
                 let expected_psbt =
                     base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
 
@@ -448,18 +425,15 @@ impl TestCase {
                 assert_eq!(psbt, expected_psbt);
             }
             // Extract: extract the final transaction from a finalized PSBT.
-            Supplementary::Extract { psbts, tx: expected_tx_hex } => {
-                assert!(!psbts.is_empty(), "extract task needs at least one input PSBT");
-
-                let psbt =
-                    base64_psbt_v0(&psbts[0].base64).expect("extract input PSBT must be valid");
+            Task::Extract { psbt, tx: expected_tx_hex } => {
+                let psbt = base64_psbt_v0(&psbt.base64).expect("extract input PSBT must be valid");
 
                 let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
                 let tx = extractor.extract_tx_unchecked_fee_rate().expect("extract must succeed");
                 assert_eq!(serialize_hex(&tx), expected_tx_hex.as_str());
             }
             // DetermineLockTime: compute the lock time from the PSBT.
-            Supplementary::DetermineLockTime { psbts, expected_lock_time } => {
+            Task::DetermineLockTime { psbts, expected_lock_time } => {
                 let expected_lock_time = *expected_lock_time;
                 for PsbtData { base64 } in psbts {
                     let psbt =
@@ -471,7 +445,7 @@ impl TestCase {
                 }
             }
             // FailDetermineLockTime: lock time determination must fail.
-            Supplementary::FailDetermineLockTime { psbts } =>
+            Task::FailDetermineLockTime { psbts } =>
                 for PsbtData { base64 } in psbts {
                     let psbt =
                         base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64");
