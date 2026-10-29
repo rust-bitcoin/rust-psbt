@@ -106,7 +106,7 @@ pub use crate::{
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
         GetKey, GetKeyError, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable,
         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
-        Updater,
+        Updater, UpdaterGlobalView, UpdaterView,
     },
     sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
     tx_modifiable_flags::TxModifiableFlags,
