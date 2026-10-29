@@ -46,7 +46,7 @@ impl Extractor {
         if psbt.inputs.iter().any(|input| !input.is_finalized()) {
             return Err(ExtractError::PsbtNotFinalized);
         }
-        let _ = psbt.determine_lock_time()?;
+        let _ = psbt.determine_lock_time().map_err(ExtractError::DetermineLockTime)?;
         #[cfg(feature = "silent-payments")]
         if let Some(index) = uncomputed_silent_payment_output(&psbt) {
             return Err(ExtractError::SilentPaymentOutputScriptNotComputed { index });
@@ -105,8 +105,8 @@ impl Extractor {
         &self,
         max_fee_rate: FeeRate,
     ) -> Result<Transaction, ExtractTxFeeRateError> {
-        let fee = self.0.fee()?;
-        let tx = self.internal_extract_tx()?;
+        let fee = self.0.fee().map_err(ExtractTxFeeRateError::Fee)?;
+        let tx = self.internal_extract_tx().map_err(ExtractTxFeeRateError::ExtractTx)?;
 
         // Now that the extracted Transaction is made, decide how to return it.
         let fee_rate =
@@ -129,7 +129,7 @@ impl Extractor {
             return Err(ExtractTxError::Unfinalized);
         }
 
-        let lock_time = self.0.determine_lock_time()?;
+        let lock_time = self.0.determine_lock_time().map_err(ExtractTxError::DetermineLockTime)?;
 
         #[cfg(feature = "silent-payments")]
         if let Some(index) = uncomputed_silent_payment_output(&self.0) {
@@ -202,10 +202,6 @@ impl std::error::Error for ExtractError {
     }
 }
 
-impl From<DetermineLockTimeError> for ExtractError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
 /// Error caused by fee calculation when extracting a [`Transaction`] from a PSBT.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -242,14 +238,6 @@ impl std::error::Error for ExtractTxFeeRateError {
             Self::FeeTooHigh { .. } => None,
         }
     }
-}
-
-impl From<FeeError> for ExtractTxFeeRateError {
-    fn from(e: FeeError) -> Self { Self::Fee(e) }
-}
-
-impl From<ExtractTxError> for ExtractTxFeeRateError {
-    fn from(e: ExtractTxError) -> Self { Self::ExtractTx(e) }
 }
 
 /// Error extracting a [`Transaction`] from a PSBT.
@@ -291,10 +279,6 @@ impl std::error::Error for ExtractTxError {
             Self::SilentPaymentOutputScriptNotComputed { .. } => None,
         }
     }
-}
-
-impl From<DetermineLockTimeError> for ExtractTxError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
 }
 
 #[cfg(test)]
