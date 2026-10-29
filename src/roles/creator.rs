@@ -63,9 +63,9 @@ impl Creator {
 
     /// Sets the transaction version.
     ///
-    /// You likely do not need this, it is provided for completeness.
-    ///
-    /// The default is [`transaction::Version::TWO`].
+    /// You likely do not need this; [`transaction::Version::TWO`] is the standard
+    /// version since BIP-68 and is used by default. Provided for the rare case
+    /// where version 1 or 3 is required.
     pub fn transaction_version(mut self, version: transaction::Version) -> Self {
         self.0.global.tx_version = version;
         self

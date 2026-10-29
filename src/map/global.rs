@@ -43,6 +43,13 @@ pub struct Global {
     /// The version number of this PSBT.
     pub version: Version,
     /// The version number of the transaction being built.
+    ///
+    /// BIP-370 requires the `PSBT_GLOBAL_TX_VERSION` key in PSBTv2; a PSBTv2
+    /// missing it is invalid. A freshly created [`Global`] starts with
+    /// [`transaction::Version::TWO`], the standard version since BIP-68, but
+    /// may be overridden via [`Creator::transaction_version`].
+    ///
+    /// [`Creator::transaction_version`]: crate::Creator::transaction_version
     pub tx_version: transaction::Version,
     /// The transaction locktime to use if no inputs specify a required locktime.
     pub fallback_lock_time: Option<absolute::LockTime>,
@@ -74,7 +81,6 @@ impl Global {
     fn new() -> Self {
         Self {
             version: V2,
-            // TODO: Is this default correct?
             tx_version: transaction::Version::TWO,
             fallback_lock_time: None,
             tx_modifiable_flags: TxModifiableFlags::new(),
