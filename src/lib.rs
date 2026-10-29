@@ -108,7 +108,7 @@ pub use crate::{
         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
         Updater, UpdaterGlobalView, UpdaterView,
     },
-    sighash_type::{InvalidSighashTypeError, ParseSighashTypeError, PsbtSighashType},
+    sighash_type::{ParseSighashTypeError, PsbtSighashType},
     tx_modifiable_flags::TxModifiableFlags,
     v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
     version::{UnsupportedVersionError, Version},

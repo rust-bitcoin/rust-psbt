@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
