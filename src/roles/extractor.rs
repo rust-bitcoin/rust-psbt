@@ -68,23 +68,18 @@ impl Extractor {
     /// 1000 sats/vByte. 25k sats/vByte is obviously a mistake at this point.
     pub const DEFAULT_MAX_FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(25_000);
 
-    /// An alias for [`Self::extract_tx_fee_rate_limit`].
+    /// Extracts the [`Transaction`] from a finalized [`Psbt`] by filling in the
+    /// available signature information, checking the fee rate against
+    /// [`Self::DEFAULT_MAX_FEE_RATE`].
+    ///
+    /// For a custom limit use [`Self::extract_tx_with_fee_rate_limit`]. To skip the fee rate
+    /// check entirely, use [`Self::extract_tx_unchecked_fee_rate`].
     pub fn extract_tx(&self) -> Result<Transaction, ExtractTxFeeRateError> {
         self.internal_extract_tx_with_fee_rate_limit(Self::DEFAULT_MAX_FEE_RATE)
     }
 
-    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature information.
-    ///
-    /// ## Errors
-    ///
-    /// `ExtractTxError` variants will contain either the [`Psbt`] itself or the [`Transaction`]
-    /// that was extracted. These can be extracted from the Errors in order to recover.
-    /// See the error documentation for info on the variants. In general, it covers large fees.
-    pub fn extract_tx_fee_rate_limit(&self) -> Result<Transaction, ExtractTxFeeRateError> {
-        self.internal_extract_tx_with_fee_rate_limit(Self::DEFAULT_MAX_FEE_RATE)
-    }
-
-    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature information.
+    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature
+    /// information, checking the fee rate against `max_fee_rate`.
     pub fn extract_tx_with_fee_rate_limit(
         &self,
         max_fee_rate: FeeRate,
@@ -92,7 +87,7 @@ impl Extractor {
         self.internal_extract_tx_with_fee_rate_limit(max_fee_rate)
     }
 
-    /// Perform [`Self::extract_tx_fee_rate_limit`] without the fee rate check.
+    /// Perform [`Self::extract_tx`] without the fee rate check.
     ///
     /// This can result in a transaction with absurdly high fees. Use with caution.
     #[allow(clippy::result_large_err)]
