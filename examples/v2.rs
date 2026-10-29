@@ -20,7 +20,8 @@ use psbt_v2::bitcoin::{
     Sequence, TxOut, Txid,
 };
 use psbt_v2::{
-    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt, Signer, Updater,
+    combine, Constructor, InputBuilder, Modifiable, Output, OutputBuilder, Psbt,
+    RequiredHeightLockTime, Signer, Updater,
 };
 
 const DUMMY_UTXO_AMOUNT: Amount = Amount::from_sat(20_000_000);
@@ -40,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pk_b = bob.multisig_public_key()?;
 
     // Use of a locktime is of course optional.
-    let min_required_height = absolute::Height::from_consensus(800_000).expect("valid height");
+    let min_required_height =
+        RequiredHeightLockTime::from_consensus(800_000).expect("valid height");
 
     // Each party will be contributing 20,000,000 sats to the mulitsig output, as such each party
     // provides an unspent input to create the multisig output (and any change details if needed).

@@ -156,17 +156,6 @@ impl PsbtEncode for absolute::Time {
     }
 }
 
-impl PsbtEncode for absolute::Height {
-    type Encoder<'e>
-        = ArrayEncoder<4>
-    where
-        Self: 'e;
-
-    fn psbt_encoder(&self) -> Self::Encoder<'_> {
-        ArrayEncoder::without_length_prefix(self.to_consensus_u32().to_le_bytes())
-    }
-}
-
 impl PsbtEncode for XOnlyPublicKey {
     type Encoder<'e>
         = ArrayEncoder<32>
@@ -385,61 +374,6 @@ impl fmt::Display for TimeDecodeError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for TimeDecodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::UnexpectedEof(e) => Some(e),
-            Self::Invalid => None,
-        }
-    }
-}
-
-/// Decoder for a minimum lock height value (4 bytes, u32 LE).
-#[derive(Debug, Default)]
-pub struct HeightDecoder {
-    inner: ArrayDecoder<4>,
-}
-
-impl Decoder for HeightDecoder {
-    type Output = absolute::Height;
-    type Error = HeightDecodeError;
-
-    fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        self.inner.push_bytes(bytes).map_err(HeightDecodeError::UnexpectedEof)
-    }
-
-    fn end(self) -> Result<Self::Output, Self::Error> {
-        let bytes = self.inner.end().map_err(HeightDecodeError::UnexpectedEof)?;
-        absolute::Height::from_consensus(u32::from_le_bytes(bytes))
-            .map_err(|_| HeightDecodeError::Invalid)
-    }
-
-    fn read_limit(&self) -> usize { self.inner.read_limit() }
-}
-
-impl PsbtDecode for absolute::Height {
-    type Decoder = HeightDecoder;
-}
-
-/// Error decoding a minimum lock height.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HeightDecodeError {
-    /// Not enough bytes were provided.
-    UnexpectedEof(UnexpectedEofError),
-    /// The value is not a valid block height.
-    Invalid,
-}
-
-impl fmt::Display for HeightDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedEof(e) => write!(f, "unexpected EOF decoding lock height: {e}"),
-            Self::Invalid => write!(f, "invalid lock height value"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for HeightDecodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::UnexpectedEof(e) => Some(e),

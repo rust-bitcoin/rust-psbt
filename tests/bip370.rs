@@ -65,6 +65,11 @@ mod invalid {
     fn psbtv0_but_out_script() { bip370("Invalid: PSBTv0 but with PSBT_OUT_SCRIPT."); }
 
     #[test]
+    fn psbtv2_but_global_unsigned_tx() {
+        bip370("Invalid: PSBTv2 but with PSBT_GLOBAL_UNSIGNED_TX.");
+    }
+
+    #[test]
     fn psbtv2_missing_global_input_count() {
         bip370("Invalid: PSBTv2 missing PSBT_GLOBAL_INPUT_COUNT.");
     }
@@ -72,6 +77,11 @@ mod invalid {
     #[test]
     fn psbtv2_missing_global_output_count() {
         bip370("Invalid: PSBTv2 missing PSBT_GLOBAL_OUTPUT_COUNT.");
+    }
+
+    #[test]
+    fn psbtv2_missing_global_tx_version() {
+        bip370("Invalid: PSBTv2 missing PSBT_GLOBAL_TX_VERSION.");
     }
 
     #[test]
@@ -95,6 +105,11 @@ mod invalid {
     #[test]
     fn psbtv2_required_height_locktime_greater_than_equal_500000000() {
         bip370("Invalid: PSBTv2 with PSBT_IN_REQUIRED_HEIGHT_LOCKTIME greater than or equal to 500000000.");
+    }
+
+    #[test]
+    fn psbtv2_required_height_locktime_of_0() {
+        bip370("Invalid: PSBTv2 with PSBT_IN_REQUIRED_HEIGHT_LOCKTIME of 0.");
     }
 }
 

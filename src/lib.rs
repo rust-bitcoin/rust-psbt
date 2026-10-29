@@ -96,6 +96,8 @@ pub use crate::{
         ProprietaryKey,
         ProprietaryKeyEncoder,
         ProprietaryType,
+        RequiredHeightLockTime,
+        RequiredHeightLockTimeError,
         Vout,
     },
     psbt::{
