@@ -2184,7 +2184,6 @@ mod test {
         assert_eq!(finalized.unknowns, input.unknowns);
     }
 
-    // TODO: Remove once the BIP-375 finalizer and extractor vectors land in tests/bip375.rs.
     #[cfg(feature = "miniscript")]
     #[cfg(feature = "silent-payments")]
     #[test]
