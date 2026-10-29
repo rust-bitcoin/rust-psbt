@@ -17,6 +17,7 @@ use super::framing::ValueDecoderError;
 use super::Key;
 use crate::encoding::codecs::ecdsa_signature::EcdsaSignatureDecodeError;
 use crate::encoding::codecs::key_source::KeySourceDecodeError;
+use crate::encoding::codecs::leaf_script::LeafScriptDecodeError;
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::codecs::CompressedPublicKeyDecodeError;
@@ -26,10 +27,10 @@ use crate::encoding::codecs::{
 };
 use crate::error::write_err;
 use crate::map::output::ValidationError;
-use crate::map::taproot::{TapKeyOriginDecodeError, TapLeafScriptDecodeError};
 use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::SpV0InfoDecodeError;
+use crate::tap_key_origin::TapKeyOriginDecodeError;
 
 /// An error while decoding a global map.
 ///
@@ -361,8 +362,8 @@ pub enum InputDecodeError {
     Hash256Preimage(ByteVecDecoderError),
     /// Error decoding a taproot script signature.
     TapScriptSig(TaprootSignatureDecodeError),
-    /// Error decoding a tap leaf script.
-    TapLeafScript(TapLeafScriptDecodeError),
+    /// Error decoding a taproot leaf script.
+    LeafScript(LeafScriptDecodeError),
     /// Error decoding a proprietary value.
     ProprietaryValue(ByteVecDecoderError),
     /// Error decoding an unknown value.
@@ -425,7 +426,7 @@ impl fmt::Display for InputDecodeError {
             Self::Hash160Preimage(ref e) => write_err!(f, "error decoding HASH160 preimage"; e),
             Self::Hash256Preimage(ref e) => write_err!(f, "error decoding HASH256 preimage"; e),
             Self::TapScriptSig(ref e) => write_err!(f, "error decoding tap script signature"; e),
-            Self::TapLeafScript(ref e) => write_err!(f, "error decoding tap leaf script"; e),
+            Self::LeafScript(ref e) => write_err!(f, "error decoding leaf script"; e),
             Self::ProprietaryValue(ref e) => write_err!(f, "error decoding proprietary value"; e),
             Self::UnknownValue(ref e) => write_err!(f, "error decoding unknown value"; e),
             Self::InvalidControlBlock => write!(f, "invalid control block"),
@@ -480,7 +481,7 @@ impl std::error::Error for InputDecodeError {
             Self::Hash160Preimage(ref e) => Some(e),
             Self::Hash256Preimage(ref e) => Some(e),
             Self::TapScriptSig(ref e) => Some(e),
-            Self::TapLeafScript(ref e) => Some(e),
+            Self::LeafScript(ref e) => Some(e),
             Self::ProprietaryValue(ref e) => Some(e),
             Self::UnknownValue(ref e) => Some(e),
             Self::InvalidControlBlock => None,

@@ -5,6 +5,7 @@
 
 pub mod ecdsa_signature;
 pub mod key_source;
+pub mod leaf_script;
 pub mod taproot_signature;
 
 use alloc::borrow::ToOwned as _;
@@ -893,8 +894,8 @@ mod tests {
     fn leaf_version_matches_serialize() {
         let lv = LeafVersion::TapScript;
         let bytes = encode_to_vec(&lv);
-        // Game between byte form used by `(ScriptBuf, LeafVersion)` serialization; LeafVersion
-        // itself is only ever encoded as the trailing byte within that tuple.
+        // Game between byte form used by `LeafScript<ScriptBuf>` serialization; LeafVersion
+        // itself is only ever encoded as the trailing byte within that value.
         assert_eq!(bytes, vec![lv.to_consensus()]);
     }
 

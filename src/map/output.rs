@@ -32,9 +32,9 @@ use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::encoding::codecs::{TapTreeDecoder, TapTreeEncoder};
 use crate::encoding::PsbtEncode;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
-use crate::map::taproot::TapKeyOriginDecoder;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
+use crate::tap_key_origin::TapKeyOriginDecoder;
 
 /// A key-value map for an output of the corresponding index in the unsigned
 /// transaction.

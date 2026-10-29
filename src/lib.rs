@@ -52,6 +52,7 @@ mod roles;
 mod sighash_type;
 #[cfg(feature = "silent-payments")]
 mod silent_payments;
+mod tap_key_origin;
 mod tx_modifiable_flags;
 mod v0;
 mod version;

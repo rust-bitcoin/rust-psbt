@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
@@ -44,15 +44,16 @@ use crate::consts::{
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
 use crate::encoding::codecs::ecdsa_signature::EcdsaSignatureDecoder;
 use crate::encoding::codecs::key_source::KeySourceDecoder;
+use crate::encoding::codecs::leaf_script::{LeafScriptDecoder, TapLeafScript};
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
 use crate::encoding::PsbtEncode;
 use crate::input::Input;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder};
-use crate::map::taproot::{TapKeyOriginDecoder, TapLeafScriptDecoder};
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
+use crate::tap_key_origin::TapKeyOriginDecoder;
 
 pub struct InputMapEncoder<'e> {
     input: &'e Input,
@@ -530,9 +531,9 @@ enum InputStage {
         key: Key,
         decoder: TaprootSignatureDecoder,
     },
-    DecodingTapLeafScript {
+    DecodingLeafScript {
         key: Key,
-        decoder: TapLeafScriptDecoder,
+        decoder: LeafScriptDecoder,
     },
     DecodingTapBip32Derivation {
         key: Key,
@@ -600,7 +601,7 @@ impl InputStage {
             PSBT_IN_TAP_SCRIPT_SIG =>
                 Ok(Self::DecodingTapScriptSig { key, decoder: TaprootSignatureDecoder::default() }),
             PSBT_IN_TAP_LEAF_SCRIPT =>
-                Ok(Self::DecodingTapLeafScript { key, decoder: TapLeafScriptDecoder::default() }),
+                Ok(Self::DecodingLeafScript { key, decoder: LeafScriptDecoder::default() }),
             PSBT_IN_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
                 key,
                 decoder: TapKeyOriginDecoder::default(),
@@ -737,7 +738,7 @@ pub(crate) struct InputMapDecoder {
     hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
     tap_key_sig: Option<taproot::Signature>,
     tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    tap_scripts: BTreeMap<ControlBlock, TapLeafScript>,
     tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     tap_internal_key: Option<XOnlyPublicKey>,
     tap_merkle_root: Option<TapNodeHash>,
@@ -839,8 +840,8 @@ impl Decoder for InputMapDecoder {
                     decoder.push_bytes(bytes).map_err(InputDecodeError::Hash256Preimage)?,
                 InputStage::DecodingTapScriptSig { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapScriptSig)?,
-                InputStage::DecodingTapLeafScript { ref mut decoder, .. } =>
-                    decoder.push_bytes(bytes).map_err(InputDecodeError::TapLeafScript)?,
+                InputStage::DecodingLeafScript { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(InputDecodeError::LeafScript)?,
                 InputStage::DecodingTapBip32Derivation { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::TapBip32Derivation)?,
                 InputStage::DecodingProprietary { ref mut decoder, .. } =>
@@ -1049,8 +1050,8 @@ impl Decoder for InputMapDecoder {
                     }
                     self.stage = InputStage::DecodingSeparator;
                 }
-                InputStage::DecodingTapLeafScript { key, decoder } => {
-                    let (script, ver) = decoder.end().map_err(InputDecodeError::TapLeafScript)?;
+                InputStage::DecodingLeafScript { key, decoder } => {
+                    let (script, ver) = decoder.end().map_err(InputDecodeError::LeafScript)?;
                     let cb = ControlBlock::decode(&key.key)
                         .map_err(|_| InputDecodeError::InvalidControlBlock)?;
                     match self.tap_scripts.entry(cb) {
@@ -1148,7 +1149,7 @@ impl Decoder for InputMapDecoder {
             | InputStage::DecodingHash256 { ref decoder, .. }
             | InputStage::DecodingProprietary { ref decoder, .. }
             | InputStage::DecodingUnknown { ref decoder, .. } => decoder.read_limit(),
-            InputStage::DecodingTapLeafScript { ref decoder, .. } => decoder.read_limit(),
+            InputStage::DecodingLeafScript { ref decoder, .. } => decoder.read_limit(),
             InputStage::DecodingTapBip32Derivation { ref decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
             InputStage::DecodingSpEcdhShare { ref decoder, .. } => decoder.read_limit(),
@@ -1168,3 +1169,31 @@ impl Decoder for InputMapDecoder {
 }
 
 pub(crate) type InputsDecoder = ExactVecDecoderWith<InputMapDecoder>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_limit_lifecycle_during_leaf_script() {
+        let mut decoder = InputMapDecoder::default();
+        // Valid control block: tapscript version (0xc1) + xonly pubkey.
+        let xonly: [u8; 32] = bitcoin::hex::FromHex::from_hex(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        let mut control_block_bytes = alloc::vec![0xc1];
+        control_block_bytes.extend_from_slice(&xonly);
+        decoder.stage = InputStage::DecodingLeafScript {
+            key: Key { type_value: 0x15, key: control_block_bytes },
+            decoder: LeafScriptDecoder::default(),
+        };
+        assert!(decoder.read_limit() > 0);
+
+        // ByteVecDecoder expects <compact_size len> <bytes>.
+        // InputMapDecoder also expects the separator byte (0x00) after the value.
+        let mut bytes: &[u8] = &[0x01, 0xc0, 0x00];
+        assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+}
