@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
+use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
 use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
@@ -663,7 +663,7 @@ pub(crate) struct InputV0 {
     pub(crate) hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
     pub(crate) tap_key_sig: Option<taproot::Signature>,
     pub(crate) tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-    pub(crate) tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
+    pub(crate) tap_scripts: BTreeMap<ControlBlock, TapLeafScript>,
     pub(crate) tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
     pub(crate) tap_internal_key: Option<XOnlyPublicKey>,
     pub(crate) tap_merkle_root: Option<TapNodeHash>,
