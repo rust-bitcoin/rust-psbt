@@ -385,15 +385,18 @@ impl Psbt {
     ///
     /// See [`combine()`] for a non-consuming version of this function.
     pub fn combine_with(mut self, other: Self) -> Result<Self, CombineError> {
-        self.global.combine(other.global)?;
+        self.global.combine(other.global).map_err(CombineError::Global)?;
 
         for (self_input, other_input) in self.inputs.iter_mut().zip(other.inputs) {
-            self_input.combine(other_input)?;
+            self_input.combine(other_input).map_err(CombineError::Input)?;
         }
 
         for (self_output, other_output) in self.outputs.iter_mut().zip(other.outputs) {
-            self_output.combine(other_output)?;
+            self_output.combine(other_output).map_err(CombineError::Output)?;
         }
+
+        // Combining can introduce a lock time conflict.
+        self.determine_lock_time().map_err(CombineError::LockTime)?;
 
         Ok(self)
     }
@@ -584,7 +587,7 @@ mod display_from_str {
     }
 }
 
-/// Error combining two input maps.
+/// Error combining two PSBTs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CombineError {
@@ -594,6 +597,8 @@ pub enum CombineError {
     Input(input::CombineError),
     /// Error while combining the output maps.
     Output(output::CombineError),
+    /// Combining introduced a lock time conflict that prevents determining the lock time.
+    LockTime(DetermineLockTimeError),
 }
 
 impl fmt::Display for CombineError {
@@ -602,6 +607,8 @@ impl fmt::Display for CombineError {
             Self::Global(ref e) => write_err!(f, "error while combining the global maps"; e),
             Self::Input(ref e) => write_err!(f, "error while combining the input maps"; e),
             Self::Output(ref e) => write_err!(f, "error while combining the output maps"; e),
+            Self::LockTime(ref e) =>
+                write_err!(f, "lock time could not be determined after combining"; e),
         }
     }
 }
@@ -613,20 +620,9 @@ impl std::error::Error for CombineError {
             Self::Global(ref e) => Some(e),
             Self::Input(ref e) => Some(e),
             Self::Output(ref e) => Some(e),
+            Self::LockTime(ref e) => Some(e),
         }
     }
-}
-
-impl From<global::CombineError> for CombineError {
-    fn from(e: global::CombineError) -> Self { Self::Global(e) }
-}
-
-impl From<input::CombineError> for CombineError {
-    fn from(e: input::CombineError) -> Self { Self::Input(e) }
-}
-
-impl From<output::CombineError> for CombineError {
-    fn from(e: output::CombineError) -> Self { Self::Output(e) }
 }
 
 #[cfg(test)]
