@@ -147,9 +147,3 @@ impl Updater {
     /// Transitions directly to the [`Signer`] role after completing all updates.
     pub fn signer(self) -> Result<Signer, DetermineLockTimeError> { Signer::new(self.psbt()?) }
 }
-
-impl TryFrom<Psbt> for Updater {
-    type Error = DetermineLockTimeError;
-
-    fn try_from(psbt: Psbt) -> Result<Self, Self::Error> { Self::new(psbt) }
-}

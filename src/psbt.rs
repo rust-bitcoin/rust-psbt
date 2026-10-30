@@ -253,8 +253,6 @@ pub struct Psbt {
 }
 
 impl Psbt {
-    // TODO: Add inherent methods to get each of the role types.
-
     /// Returns this PSBT's unique identification.
     pub(crate) fn id(&self) -> Result<Txid, DetermineLockTimeError> {
         let mut tx = self.unsigned_tx()?;

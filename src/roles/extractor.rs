@@ -21,7 +21,7 @@ use crate::error::{write_err, FeeError};
 use crate::psbt::Psbt;
 use crate::DetermineLockTimeError;
 
-/// Implements the BIP-370 Finalized role.
+/// Implements the BIP-370 Extractor role.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Extractor(Psbt);
@@ -46,7 +46,7 @@ impl Extractor {
         if psbt.inputs.iter().any(|input| !input.is_finalized()) {
             return Err(ExtractError::PsbtNotFinalized);
         }
-        let _ = psbt.determine_lock_time()?;
+        let _ = psbt.determine_lock_time().map_err(ExtractError::DetermineLockTime)?;
         #[cfg(feature = "silent-payments")]
         if let Some(index) = uncomputed_silent_payment_output(&psbt) {
             return Err(ExtractError::SilentPaymentOutputScriptNotComputed { index });
@@ -68,23 +68,18 @@ impl Extractor {
     /// 1000 sats/vByte. 25k sats/vByte is obviously a mistake at this point.
     pub const DEFAULT_MAX_FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(25_000);
 
-    /// An alias for [`Self::extract_tx_fee_rate_limit`].
+    /// Extracts the [`Transaction`] from a finalized [`Psbt`] by filling in the
+    /// available signature information, checking the fee rate against
+    /// [`Self::DEFAULT_MAX_FEE_RATE`].
+    ///
+    /// For a custom limit use [`Self::extract_tx_with_fee_rate_limit`]. To skip the fee rate
+    /// check entirely, use [`Self::extract_tx_unchecked_fee_rate`].
     pub fn extract_tx(&self) -> Result<Transaction, ExtractTxFeeRateError> {
         self.internal_extract_tx_with_fee_rate_limit(Self::DEFAULT_MAX_FEE_RATE)
     }
 
-    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature information.
-    ///
-    /// ## Errors
-    ///
-    /// `ExtractTxError` variants will contain either the [`Psbt`] itself or the [`Transaction`]
-    /// that was extracted. These can be extracted from the Errors in order to recover.
-    /// See the error documentation for info on the variants. In general, it covers large fees.
-    pub fn extract_tx_fee_rate_limit(&self) -> Result<Transaction, ExtractTxFeeRateError> {
-        self.internal_extract_tx_with_fee_rate_limit(Self::DEFAULT_MAX_FEE_RATE)
-    }
-
-    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature information.
+    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature
+    /// information, checking the fee rate against `max_fee_rate`.
     pub fn extract_tx_with_fee_rate_limit(
         &self,
         max_fee_rate: FeeRate,
@@ -92,7 +87,7 @@ impl Extractor {
         self.internal_extract_tx_with_fee_rate_limit(max_fee_rate)
     }
 
-    /// Perform [`Self::extract_tx_fee_rate_limit`] without the fee rate check.
+    /// Perform [`Self::extract_tx`] without the fee rate check.
     ///
     /// This can result in a transaction with absurdly high fees. Use with caution.
     #[allow(clippy::result_large_err)]
@@ -105,8 +100,8 @@ impl Extractor {
         &self,
         max_fee_rate: FeeRate,
     ) -> Result<Transaction, ExtractTxFeeRateError> {
-        let fee = self.0.fee()?;
-        let tx = self.internal_extract_tx()?;
+        let fee = self.0.fee().map_err(ExtractTxFeeRateError::Fee)?;
+        let tx = self.internal_extract_tx().map_err(ExtractTxFeeRateError::ExtractTx)?;
 
         // Now that the extracted Transaction is made, decide how to return it.
         let fee_rate =
@@ -129,7 +124,7 @@ impl Extractor {
             return Err(ExtractTxError::Unfinalized);
         }
 
-        let lock_time = self.0.determine_lock_time()?;
+        let lock_time = self.0.determine_lock_time().map_err(ExtractTxError::DetermineLockTime)?;
 
         #[cfg(feature = "silent-payments")]
         if let Some(index) = uncomputed_silent_payment_output(&self.0) {
@@ -202,10 +197,6 @@ impl std::error::Error for ExtractError {
     }
 }
 
-impl From<DetermineLockTimeError> for ExtractError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
 /// Error caused by fee calculation when extracting a [`Transaction`] from a PSBT.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -244,14 +235,6 @@ impl std::error::Error for ExtractTxFeeRateError {
     }
 }
 
-impl From<FeeError> for ExtractTxFeeRateError {
-    fn from(e: FeeError) -> Self { Self::Fee(e) }
-}
-
-impl From<ExtractTxError> for ExtractTxFeeRateError {
-    fn from(e: ExtractTxError) -> Self { Self::ExtractTx(e) }
-}
-
 /// Error extracting a [`Transaction`] from a PSBT.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -269,16 +252,28 @@ pub enum ExtractTxError {
 }
 
 impl fmt::Display for ExtractTxError {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result { todo!() }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unfinalized =>
+                write!(f, "attempted to extract transaction from an unfinalized PSBT"),
+            Self::DetermineLockTime(ref e) => write_err!(f, "failed to determine lock time"; e),
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { index } =>
+                write!(f, "silent payment output {} has no computed output script", index),
+        }
+    }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for ExtractTxError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { todo!() }
-}
-
-impl From<DetermineLockTimeError> for ExtractTxError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DetermineLockTime(ref e) => Some(e),
+            Self::Unfinalized => None,
+            #[cfg(feature = "silent-payments")]
+            Self::SilentPaymentOutputScriptNotComputed { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]

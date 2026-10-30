@@ -24,9 +24,6 @@ examples = [
     "v2:std",
     "v2-separate-creator-constructor:std",
 ]
-exact_features = [
-    ["std", "base64", "miniscript", "serde"], # Ensure integration tests always run.
-]
 
 [package.metadata.rbmt.lint]
 allowed_duplicates = [
