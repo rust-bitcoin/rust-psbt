@@ -391,6 +391,8 @@ pub enum InputDecodeError {
     /// BIP-375: ECDH shares and DLEQ proofs must both be present or both absent.
     #[cfg(feature = "silent-payments")]
     SpFieldMismatch,
+    /// Error decoding the Proof of Reserves commitment (BIP-127).
+    PorCommitment(crate::map::por_commitment::PorCommitmentDecodeError),
 }
 
 impl fmt::Display for InputDecodeError {
@@ -442,6 +444,8 @@ impl fmt::Display for InputDecodeError {
             Self::SpFieldMismatch => {
                 write!(f, "ECDH shares and DLEQ proofs must both be present or both absent")
             }
+            Self::PorCommitment(ref e) =>
+                write_err!(f, "error decoding proof of reserves commitment"; e),
             Self::IncorrectNonWitnessUtxo { previous_txid, non_witness_utxo_txid } => write!(
                 f,
                 "non-witness utxo txid {} does not match previous txid {}",
@@ -496,6 +500,7 @@ impl std::error::Error for InputDecodeError {
             | Self::IncorrectNonWitnessUtxo { .. } => None,
             #[cfg(feature = "silent-payments")]
             Self::SpFieldMismatch => None,
+            Self::PorCommitment(ref e) => Some(e),
         }
     }
 }

@@ -57,7 +57,6 @@ pub(crate) const PSBT_IN_FINAL_SCRIPTSIG: u64 = 0x07;
 /// Type: Finalized scriptWitness PSBT_IN_FINAL_SCRIPTWITNESS = 0x08
 pub(crate) const PSBT_IN_FINAL_SCRIPTWITNESS: u64 = 0x08;
 /// Type: Proof-of-reserves commitment PSBT_IN_POR_COMMITMENT = 0x09
-#[allow(unused)] // PSBT v0
 pub(crate) const PSBT_IN_POR_COMMITMENT: u64 = 0x09;
 /// Type: RIPEMD160 preimage PSBT_IN_RIPEMD160 = 0x0a
 pub(crate) const PSBT_IN_RIPEMD160: u64 = 0x0a;

@@ -623,6 +623,7 @@ impl std::error::Error for CombineError {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
 
     use ::bitcoin::OutPoint;
@@ -630,6 +631,7 @@ mod tests {
     use bitcoin::ScriptBuf;
 
     use super::*;
+    use crate::map::por_commitment::PorCommitment;
     use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable, Signer};
     use crate::{Count, PsbtSighashType};
 
@@ -772,11 +774,17 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip_nonempty() {
-        let psbt = valid_psbt();
+        let mut psbt = valid_psbt();
+        psbt.inputs[0].por_commitment = Some(PorCommitment(String::from("reserve proof")));
+
         let bytes = psbt.serialize();
         let decoded = Psbt::deserialize(&bytes).expect("roundtrip decode failed");
         let reencoded = decoded.serialize();
         assert_eq!(bytes, reencoded);
+        assert_eq!(
+            decoded.inputs[0].por_commitment,
+            Some(PorCommitment(String::from("reserve proof")))
+        );
     }
 
     #[test]
