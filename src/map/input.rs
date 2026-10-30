@@ -244,22 +244,23 @@ impl Input {
     ///
     /// The `final_script_sig` and `final_script_witness` should come from `miniscript`.
     #[cfg(feature = "miniscript")]
-    pub(crate) fn finalize(
-        &self,
-        final_script_sig: ScriptBuf,
-        final_script_witness: Witness,
-    ) -> Result<Self, FinalizeError> {
+    pub(crate) fn finalize(&self, scripts: FinalScripts) -> Self {
         debug_assert!(self.has_funding_utxo());
 
-        let mut ret = Self {
+        let (final_script_sig, final_script_witness) = match scripts {
+            FinalScripts::Segwit { witness } => (None, Some(witness)),
+            FinalScripts::Wrapped { script_sig, witness } => (Some(script_sig), Some(witness)),
+            FinalScripts::Legacy { script_sig } => (Some(script_sig), None),
+        };
+
+        Self {
             previous_txid: self.previous_txid,
             spent_output_index: self.spent_output_index,
             non_witness_utxo: self.non_witness_utxo.clone(),
             witness_utxo: self.witness_utxo.clone(),
 
-            // Set below.
-            final_script_sig: None,
-            final_script_witness: None,
+            final_script_sig,
+            final_script_witness,
 
             // Preserve the fields required to reconstruct the unsigned transaction,
             // clearing them would change the transaction the Extractor produces.
@@ -294,22 +295,7 @@ impl Input {
             // proprietary and unknown fields.
             proprietaries: self.proprietaries.clone(),
             unknowns: self.unknowns.clone(),
-        };
-
-        // TODO: These errors should only trigger if there are bugs in this crate or miniscript.
-        // Is there an infallible way to do this?
-        if self.witness_utxo.is_some() {
-            if final_script_witness.is_empty() {
-                return Err(FinalizeError::EmptyWitness);
-            }
-            ret.final_script_sig = Some(final_script_sig);
-            ret.final_script_witness = Some(final_script_witness);
-        } else {
-            // TODO: Any checks should do here?
-            ret.final_script_sig = Some(final_script_sig);
         }
-
-        Ok(ret)
     }
 
     // TODO: Work out if this is in line with bip-370
@@ -1797,30 +1783,27 @@ impl InputBuilder {
     pub fn build(self) -> Input { self.0 }
 }
 
-/// Error finalizing an input.
+/// Scripts for a finalized input.
 #[cfg(feature = "miniscript")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeError {
-    /// Failed to create a final witness.
-    EmptyWitness,
-    /// Unexpected witness data.
-    UnexpectedWitness,
-}
-
-#[cfg(feature = "miniscript")]
-impl fmt::Display for FinalizeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyWitness => write!(f, "failed to create a final witness"),
-            Self::UnexpectedWitness => write!(f, "unexpected witness data"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-#[cfg(feature = "miniscript")]
-impl std::error::Error for FinalizeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
+#[derive(Debug, Clone)]
+pub(crate) enum FinalScripts {
+    /// Native segwit (P2WPKH, P2WSH, P2TR): witness only, no scriptSig.
+    Segwit {
+        /// The final script witness.
+        witness: Witness,
+    },
+    /// P2SH-wrapped segwit (SH-WPKH, SH-WSH): redeem script push and witness.
+    Wrapped {
+        /// The final scriptSig (redeem script push).
+        script_sig: ScriptBuf,
+        /// The final script witness.
+        witness: Witness,
+    },
+    /// Legacy (P2PKH, bare P2SH): scriptSig only, no witness.
+    Legacy {
+        /// The final scriptSig.
+        script_sig: ScriptBuf,
+    },
 }
 
 /// Error combining two input maps.
@@ -2166,9 +2149,8 @@ mod test {
             Some(bitcoin::locktime::absolute::Time::from_consensus(1_700_000_000).unwrap());
         input.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
 
-        let finalized = input
-            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
-            .expect("finalize must succeed");
+        let finalized =
+            input.finalize(FinalScripts::Segwit { witness: Witness::from_slice(&[vec![1u8]]) });
 
         assert_eq!(finalized.sequence, input.sequence);
         assert_eq!(finalized.min_time, input.min_time);
@@ -2189,9 +2171,8 @@ mod test {
         );
         input.unknowns.insert(Key { type_value: 0x7f, key: vec![0x03] }, vec![0x04]);
 
-        let finalized = input
-            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
-            .expect("finalize must succeed");
+        let finalized =
+            input.finalize(FinalScripts::Segwit { witness: Witness::from_slice(&[vec![1u8]]) });
 
         assert_eq!(finalized.proprietaries, input.proprietaries);
         assert_eq!(finalized.unknowns, input.unknowns);
@@ -2216,9 +2197,8 @@ mod test {
         input.sp_ecdh_shares.insert(scan_key, scan_key);
         input.sp_dleq_proofs.insert(scan_key, DleqProof([0x42; 64]));
 
-        let finalized = input
-            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
-            .expect("finalize must succeed");
+        let finalized =
+            input.finalize(FinalScripts::Segwit { witness: Witness::from_slice(&[vec![1u8]]) });
 
         assert_eq!(finalized.sp_ecdh_shares, input.sp_ecdh_shares);
         assert_eq!(finalized.sp_dleq_proofs, input.sp_dleq_proofs);
@@ -2235,9 +2215,8 @@ mod test {
         });
         input.sighash_type = Some(PsbtSighashType::ALL);
 
-        let finalized = input
-            .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
-            .expect("finalize must succeed");
+        let finalized =
+            input.finalize(FinalScripts::Segwit { witness: Witness::from_slice(&[vec![1u8]]) });
 
         assert!(finalized.partial_sigs.is_empty());
         assert!(finalized.sighash_type.is_none());
