@@ -1746,6 +1746,7 @@ impl PsbtEncode for Input {
 }
 
 /// Enables building an [`Input`] using the standard builder pattern.
+#[derive(Debug)]
 pub struct InputBuilder(Input);
 
 impl InputBuilder {
@@ -1772,12 +1773,22 @@ impl InputBuilder {
 
     /// Funds this input with a legacy UTXO.
     ///
-    /// Caller to guarantee that this `tx` is correct for this input (i.e., has a txid equal to
-    /// `self.previous_txid`).
-    // TODO: Consider adding error checks that tx is correct.
-    pub fn legacy_fund(mut self, tx: Transaction) -> Self {
+    /// # Errors
+    ///
+    /// * [`FundingUtxoError::MismatchingTxid`] if the transaction's txid does not match
+    ///   [`Input::previous_txid`].
+    /// * [`FundingUtxoError::OutOfBounds`] if the spent output index is out of range for this
+    ///   transaction's output list.
+    pub fn legacy_fund(mut self, tx: Transaction) -> Result<Self, FundingUtxoError> {
+        if tx.compute_txid() != self.0.previous_txid {
+            return Err(FundingUtxoError::MismatchingTxid);
+        }
+        let vout = usize::from(self.0.spent_output_index);
+        if tx.output.get(vout).is_none() {
+            return Err(FundingUtxoError::OutOfBounds { vout, len: tx.output.len() });
+        }
         self.0.non_witness_utxo = Some(tx);
-        self
+        Ok(self)
     }
 
     /// Builds the [`Input`].
@@ -2389,5 +2400,58 @@ mod test {
         input.non_witness_utxo = Some(funding_tx);
 
         assert_eq!(input.funding_utxo().unwrap_err(), FundingUtxoError::MismatchingUtxos);
+    }
+
+    #[test]
+    fn legacy_fund_accepts_matching_tx() {
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() }],
+        };
+        let txid = funding_tx.compute_txid();
+        let out_point = OutPoint { txid, vout: 0 };
+
+        let input = InputBuilder::new(&out_point)
+            .legacy_fund(funding_tx)
+            .expect("matching txid must succeed")
+            .build();
+
+        assert_eq!(input.previous_txid, txid);
+        assert!(input.non_witness_utxo.is_some());
+    }
+
+    #[test]
+    fn legacy_fund_rejects_mismatched_txid() {
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() }],
+        };
+        // Use an unrelated txid so the check trips.
+        let wrong_out_point = OutPoint { txid: Txid::hash(b"completely different"), vout: 0 };
+
+        let err = InputBuilder::new(&wrong_out_point).legacy_fund(funding_tx).unwrap_err();
+
+        assert_eq!(err, FundingUtxoError::MismatchingTxid);
+    }
+
+    #[test]
+    fn legacy_fund_rejects_out_of_bounds_vout() {
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() }],
+        };
+        let txid = funding_tx.compute_txid();
+        // vout 5 is past the single output.
+        let out_point = OutPoint { txid, vout: 5 };
+
+        let err = InputBuilder::new(&out_point).legacy_fund(funding_tx).unwrap_err();
+
+        assert_eq!(err, FundingUtxoError::OutOfBounds { vout: 5, len: 1 });
     }
 }

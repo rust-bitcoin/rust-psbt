@@ -143,7 +143,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     let spend_output = TxOut { value: spend_amount, script_pubkey: receiver.script_pubkey() };
     let change_output = TxOut { value: change_amount, script_pubkey: address.script_pubkey() };
 
-    let mut input = InputBuilder::new(&out_point).legacy_fund(tx).build();
+    let mut input = InputBuilder::new(&out_point).legacy_fund(tx)?.build();
     input.bip32_derivations.insert(cpk.into(), (fingerprint, path.clone()));
     input.sequence = Some(psbt::bitcoin::Sequence::MAX);
 

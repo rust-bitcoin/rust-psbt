@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // If no lock time is required we can just create the `Input` directly.
-    let input_b = InputBuilder::new(&previous_output_b).legacy_fund(bob.funding_tx()?).build();
+    let input_b = InputBuilder::new(&previous_output_b).legacy_fund(bob.funding_tx()?)?.build();
 
     // Build Alice's change output.
     let change = TxOut { value: change_value_a, script_pubkey: change_address_a.script_pubkey() };
