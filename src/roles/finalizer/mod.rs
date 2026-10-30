@@ -90,8 +90,7 @@ impl Psbt {
     ) -> Result<(), InterpreterCheckInputError> {
         let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
 
-        // TODO: Check that this is correct?
-        let cltv = input.lock_time();
+        let cltv = unsigned_tx.lock_time;
         // TODO: is this usage of MAX correct?
         let csv = input.sequence.unwrap_or(Sequence::MAX);
 

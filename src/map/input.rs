@@ -312,19 +312,6 @@ impl Input {
         Ok(ret)
     }
 
-    // TODO: Work out if this is in line with bip-370
-    #[cfg(feature = "miniscript")]
-    pub(crate) fn lock_time(&self) -> absolute::LockTime {
-        match (self.min_height, self.min_time) {
-            // If we have both, bip says use height.
-            (Some(height), Some(_)) => height.into(),
-            (Some(height), None) => height.into(),
-            (None, Some(time)) => time.into(),
-            // TODO: Check this is correct.
-            (None, None) => absolute::LockTime::ZERO,
-        }
-    }
-
     pub(crate) fn has_lock_time(&self) -> bool {
         self.min_time.is_some() || self.min_height.is_some()
     }

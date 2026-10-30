@@ -113,7 +113,11 @@ impl Finalizer {
         let (witness, script_sig) = {
             let spk =
                 &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
-            let sat = InputSatisfier { input };
+            let lock_time = self
+                .0
+                .determine_lock_time()
+                .expect("Finalizer guarantees lock time can be determined");
+            let sat = InputSatisfier { input, lock_time };
 
             if spk.is_p2tr() {
                 // Deal with taproot case separately, we cannot infer the full descriptor for taproot.
