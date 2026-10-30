@@ -452,14 +452,6 @@ impl Input {
         self.final_script_sig.is_some() || self.final_script_witness.is_some()
     }
 
-    /// TODO: Use this.
-    #[allow(dead_code)]
-    fn has_sig_data(&self) -> bool {
-        !(self.partial_sigs.is_empty()
-            && self.tap_key_sig.is_none()
-            && self.tap_script_sigs.is_empty())
-    }
-
     fn out_point(&self) -> OutPoint {
         OutPoint { txid: self.previous_txid, vout: u32::from(self.spent_output_index) }
     }
@@ -2192,7 +2184,6 @@ mod test {
         assert_eq!(finalized.unknowns, input.unknowns);
     }
 
-    // TODO: Remove once the BIP-375 finalizer and extractor vectors land in tests/bip375.rs.
     #[cfg(feature = "miniscript")]
     #[cfg(feature = "silent-payments")]
     #[test]
