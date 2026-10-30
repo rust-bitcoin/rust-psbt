@@ -233,7 +233,7 @@ mod tests {
 
     use super::*;
     use crate::roles::{Creator, Signer};
-    use crate::{Input, Output};
+    use crate::{Input, Output, RequiredHeightLockTime};
 
     const TEST_XPRIV: &str =
         "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu";
@@ -335,7 +335,7 @@ mod tests {
         // Sign with a required height lock time so the signature commits to the lock time.
         let mut unsigned = unsigned_psbt();
         unsigned.inputs[0].min_height =
-            Some(bitcoin::locktime::absolute::Height::from_consensus(800_000).unwrap());
+            Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
         unsigned.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let secp = Secp256k1::verification_only();

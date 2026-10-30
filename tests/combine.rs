@@ -11,7 +11,9 @@ use bitcoin::sighash::EcdsaSighashType;
 use bitcoin::{
     ecdsa, transaction, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Sequence, TxOut, Txid,
 };
-use psbt_v2::{CombineError, Count, Global, Input, Output, Psbt, PsbtSighashType};
+use psbt_v2::{
+    CombineError, Count, Global, Input, Output, Psbt, PsbtSighashType, RequiredHeightLockTime,
+};
 
 fn outpoint(label: &[u8]) -> OutPoint { OutPoint { txid: Txid::hash(label), vout: 0 } }
 
@@ -272,7 +274,7 @@ fn combine_errors_when_lock_time_becomes_undeterminable() {
     // PSBT B: input 0 has no lock time fields, input 1 requires height-based lock.
     let input_b0 = Input::new(&op0);
     let mut input_b1 = Input::new(&op1);
-    input_b1.min_height = Some(absolute::Height::from_consensus(800_000).unwrap());
+    input_b1.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
 
     let psbt_b = Psbt {
         global: Global {

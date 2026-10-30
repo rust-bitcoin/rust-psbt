@@ -11,7 +11,8 @@ use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
 use psbt_v2::{
-    Constructor, Count, Creator, Input, Modifiable, Output, Psbt, PsbtV0, Signer, TxModifiableFlags,
+    Constructor, Count, Creator, Input, Modifiable, Output, Psbt, PsbtV0, RequiredHeightLockTime,
+    Signer, TxModifiableFlags,
 };
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -209,7 +210,7 @@ fn v2_only_input_fields_surface_in_v0_unsigned_tx() {
 
     let height = absolute::Height::from_consensus(800_000).unwrap();
     let mut input = Input::new(&OutPoint::null());
-    input.min_height = Some(height);
+    input.min_height = Some(RequiredHeightLockTime::try_from(height).unwrap());
     input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
     let psbt = Creator::new()

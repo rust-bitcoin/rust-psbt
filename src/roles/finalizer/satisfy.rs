@@ -81,7 +81,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for InputSatisfier<'_> {
         match n {
             absolute::LockTime::Blocks(height) =>
                 if let Some(lock_time) = self.input.min_height {
-                    return height <= lock_time;
+                    return height <= lock_time.to_height();
                 },
             absolute::LockTime::Seconds(time) =>
                 if let Some(lock_time) = self.input.min_time {

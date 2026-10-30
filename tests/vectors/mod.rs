@@ -96,8 +96,7 @@ struct OutputUpdate {
 #[serde(rename_all = "snake_case")]
 enum Task {
     FailDeserialize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     FailSign {
         psbt: PsbtData,
@@ -106,8 +105,7 @@ enum Task {
         psbt: PsbtData,
     },
     Deserialize {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
     Create {
         inputs: Vec<OutPoint>,
@@ -163,8 +161,7 @@ enum Task {
         expected_lock_time: u32,
     },
     FailDetermineLockTime {
-        #[serde(default)]
-        psbts: Vec<PsbtData>,
+        psbt: PsbtData,
     },
 }
 
@@ -180,14 +177,11 @@ impl TestCase {
     fn execute(&self) {
         match &self.task {
             // FailDeserialize: the PSBT must be rejected during parsing.
-            Task::FailDeserialize { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    match self.version {
-                        Version::ZERO => assert_invalid_v0(base64),
-                        Version::TWO => assert_invalid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
-                    }
-                },
+            Task::FailDeserialize { psbt } => match self.version {
+                Version::ZERO => assert_invalid_v0(&psbt.base64),
+                Version::TWO => assert_invalid_v2(&psbt.base64),
+                _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
+            },
             // FailSign: the PSBT must fail the signer validity checks.
             Task::FailSign { psbt } => {
                 let psbt =
@@ -219,14 +213,11 @@ impl TestCase {
                 assert!(any_err, "expected signable_input() to fail");
             }
             // Deserialize: the PSBT must parse successfully.
-            Task::Deserialize { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    match self.version {
-                        Version::ZERO => assert_valid_v0(base64),
-                        Version::TWO => assert_valid_v2(base64),
-                        _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
-                    }
-                },
+            Task::Deserialize { psbt } => match self.version {
+                Version::ZERO => assert_valid_v0(&psbt.base64),
+                Version::TWO => assert_valid_v2(&psbt.base64),
+                _ => panic!("unknown PSBT version: {}", self.version.to_u32()),
+            },
             // Create: build a PSBT from the given inputs and outputs.
             Task::Create { inputs, outputs, expected } => {
                 let expected_v0 = PsbtV0::deserialize_base64(&expected.base64)
@@ -445,16 +436,17 @@ impl TestCase {
                 }
             }
             // FailDetermineLockTime: lock time determination must fail.
-            Task::FailDetermineLockTime { psbts } =>
-                for PsbtData { base64 } in psbts {
-                    let psbt =
-                        base64.parse::<psbt_v2::Psbt>().expect("failed to deserialize from base64");
+            Task::FailDetermineLockTime { psbt } => {
+                let psbt = psbt
+                    .base64
+                    .parse::<psbt_v2::Psbt>()
+                    .expect("failed to deserialize from base64");
 
-                    assert!(
-                        psbt.determine_lock_time().is_err(),
-                        "expected determine_lock_time to fail"
-                    );
-                },
+                assert!(
+                    psbt.determine_lock_time().is_err(),
+                    "expected determine_lock_time to fail"
+                );
+            }
         }
     }
 }

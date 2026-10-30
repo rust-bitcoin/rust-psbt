@@ -14,6 +14,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::framing::ValueDecoderError;
+use super::required_height_lock_time::RequiredHeightLockTimeDecodeError;
 use super::Key;
 use crate::encoding::codecs::ecdsa_signature::EcdsaSignatureDecodeError;
 use crate::encoding::codecs::key_source::KeySourceDecodeError;
@@ -22,8 +23,8 @@ use crate::encoding::codecs::taproot_signature::TaprootSignatureDecodeError;
 #[cfg(feature = "silent-payments")]
 use crate::encoding::codecs::CompressedPublicKeyDecodeError;
 use crate::encoding::codecs::{
-    HeightDecodeError, TapNodeHashDecodeError, TapTreeDecodeError, TimeDecodeError,
-    TxidDecodeError, XOnlyPublicKeyDecodeError,
+    TapNodeHashDecodeError, TapTreeDecodeError, TimeDecodeError, TxidDecodeError,
+    XOnlyPublicKeyDecodeError,
 };
 use crate::error::write_err;
 use crate::map::output::ValidationError;
@@ -325,7 +326,7 @@ pub enum InputDecodeError {
     /// Error decoding the minimum lock time.
     MinTime(ValueDecoderError<TimeDecodeError>),
     /// Error decoding the minimum lock height.
-    MinHeight(ValueDecoderError<HeightDecodeError>),
+    MinHeight(ValueDecoderError<RequiredHeightLockTimeDecodeError>),
     /// Error decoding the sighash type.
     SighashType(ValueDecoderError<UnexpectedEofError>),
     /// Error decoding the taproot internal key.

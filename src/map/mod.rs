@@ -51,6 +51,8 @@ pub mod global;
 pub mod input;
 /// The `output-map`.
 pub mod output;
+/// PSBT required height lock time (`PSBT_IN_REQUIRED_HEIGHT_LOCKTIME`).
+pub mod required_height_lock_time;
 #[cfg(feature = "serde")]
 pub(crate) mod serde;
 /// PSBT v0 (BIP-174) map encoders.
@@ -70,6 +72,7 @@ use bitcoin_consensus_encoding::{
     Decoder2, DecoderStatus, Encoder, Encoder2, Encoder3, EncoderStatus, ExactSizeEncoder,
     PrefixedBytesEncoder,
 };
+pub use required_height_lock_time::{RequiredHeightLockTime, RequiredHeightLockTimeError};
 pub use vout::Vout;
 
 use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};

@@ -11,7 +11,7 @@ use psbt_v2::bitcoin::transaction::Version;
 use psbt_v2::bitcoin::{
     Amount, Network, OutPoint, PrivateKey, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
 };
-use psbt_v2::{Creator, Input, Output, Psbt, PsbtSighashType, Updater};
+use psbt_v2::{Creator, Input, Output, Psbt, PsbtSighashType, RequiredHeightLockTime, Updater};
 
 /// A funded P2WPKH input worth 10,000 sats.
 fn funded_input(seed: u8, vout: u32) -> Input {
@@ -126,7 +126,7 @@ fn new_rejects_indeterminate_lock_time() {
     psbt.inputs[0].min_time = Some(absolute::Time::from_consensus(500_000_000).unwrap());
     psbt.inputs[0].min_height = None;
     // Input 1 requires height-based lock time (min_height only).
-    psbt.inputs[1].min_height = Some(absolute::Height::from_consensus(800_000).unwrap());
+    psbt.inputs[1].min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
     psbt.inputs[1].min_time = None;
 
     let result = Updater::new(psbt);
@@ -141,9 +141,9 @@ fn psbt_rejects_lock_time_made_indeterminate_by_mutation() {
 
     let mut psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
     // Initially both inputs require height-based lock time (determinable).
-    psbt.inputs[0].min_height = Some(absolute::Height::from_consensus(800_000).unwrap());
+    psbt.inputs[0].min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
     psbt.inputs[0].min_time = None;
-    psbt.inputs[1].min_height = Some(absolute::Height::from_consensus(800_000).unwrap());
+    psbt.inputs[1].min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
     psbt.inputs[1].min_time = None;
 
     let mut updater = Updater::new(psbt).unwrap();

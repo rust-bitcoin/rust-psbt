@@ -5,11 +5,9 @@
       "version": 2,
       "task": {
         "deserialize": {
-          "psbts": [
-            {
-              "base64": "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEBAAEOIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ8EAAAAAAABAwgQAAAAAAAAAAEEAAA="
-            }
-          ]
+          "psbt": {
+            "base64": "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEBAAEOIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ8EAAAAAAABAwgQAAAAAAAAAAEEAAA="
+          }
         }
       }
     },
@@ -61,18 +59,24 @@
       }
     },
     {
-      "description": "Invalid: PSBT v0 BIP32 derivation value too short (does not panic).",
+      "description": "Invalid: PSBT v0 BIP32 derivation value too short (does not panic) [key type 0x02].",
       "version": 0,
       "task": {
         "fail_deserialize": {
-          "psbts": [
-            {
-              "base64": "cHNidP8BADwCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/////AQAAAAAAAAAAAAAAAAAAACICAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAqq7AA=="
-            },
-            {
-              "base64": "cHNidP8BADwCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/////AQAAAAAAAAAAAAAAAAAAACIGAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAqq7AA=="
-            }
-          ]
+          "psbt": {
+            "base64": "cHNidP8BADwCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/////AQAAAAAAAAAAAAAAAAAAACICAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAqq7AA=="
+          }
+        }
+      }
+    },
+    {
+      "description": "Invalid: PSBT v0 BIP32 derivation value too short (does not panic) [key type 0x06].",
+      "version": 0,
+      "task": {
+        "fail_deserialize": {
+          "psbt": {
+            "base64": "cHNidP8BADwCAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/////AQAAAAAAAAAAAAAAAAAAACIGAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAqq7AA=="
+          }
         }
       }
     }

@@ -12,7 +12,10 @@ use psbt_v2::bitcoin::key::XOnlyPublicKey;
 use psbt_v2::bitcoin::locktime::absolute;
 use psbt_v2::bitcoin::taproot::TapNodeHash;
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
-use psbt_v2::{Count, Global, Input, Key, Output, ProprietaryKey, Psbt, PsbtSighashType};
+use psbt_v2::{
+    Count, Global, Input, Key, Output, ProprietaryKey, Psbt, PsbtSighashType,
+    RequiredHeightLockTime,
+};
 
 /// A populated PSBT survives a JSON serialize-deserialize round-trip.
 #[test]
@@ -35,7 +38,7 @@ fn round_trip_json() {
     input.witness_utxo = Some(utxo);
     input.sequence = Some(Sequence::MAX);
     input.min_time = Some(absolute::Time::from_consensus(1_700_000_000).unwrap());
-    input.min_height = Some(absolute::Height::from_consensus(700_000).unwrap());
+    input.min_height = Some(RequiredHeightLockTime::from_consensus(700_000).unwrap());
     input.sighash_type = Some(PsbtSighashType::ALL);
     input.redeem_script = Some(script.clone());
     input.witness_script = Some(script.clone());

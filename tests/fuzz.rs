@@ -26,7 +26,12 @@ mod valid {
     }
 
     #[test]
-    fn bip32_derivation_too_short_does_not_panic() {
-        fuzz("Invalid: PSBT v0 BIP32 derivation value too short (does not panic).");
+    fn bip32_derivation_too_short_does_not_panic_output_key_type_0x02() {
+        fuzz("Invalid: PSBT v0 BIP32 derivation value too short (does not panic) [key type 0x02].");
+    }
+
+    #[test]
+    fn bip32_derivation_too_short_does_not_panic_input_key_type_0x06() {
+        fuzz("Invalid: PSBT v0 BIP32 derivation value too short (does not panic) [key type 0x06].");
     }
 }

@@ -22,6 +22,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
+use super::required_height_lock_time::RequiredHeightLockTime;
 use super::vout::{Vout, VoutEncoder};
 use super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
@@ -72,7 +73,7 @@ pub struct Input {
     /// The minimum Unix timestamp that this input requires to be set as the transaction's lock time.
     pub min_time: Option<absolute::Time>,
     /// The minimum block height that this input requires to be set as the transaction's lock time.
-    pub min_height: Option<absolute::Height>,
+    pub min_height: Option<RequiredHeightLockTime>,
     /// The non-witness transaction this input spends from. Should only be
     /// `Option::Some` for inputs which spend non-segwit outputs or
     /// if it is unknown whether an input spends a segwit output.
@@ -554,7 +555,7 @@ pub struct InputDecoder {
     spent_output_index: Option<Vout>,
     sequence: Option<Sequence>,
     min_time: Option<absolute::Time>,
-    min_height: Option<absolute::Height>,
+    min_height: Option<RequiredHeightLockTime>,
     non_witness_utxo: Option<Transaction>,
     witness_utxo: Option<TxOut>,
     partial_sigs: BTreeMap<PublicKey, ecdsa::Signature>,
@@ -611,7 +612,7 @@ enum DecoderStage {
     /// Decoding a minimum height locktime value.
     DecodingMinHeight {
         key: Key,
-        decoder: ValueDecoder<absolute::Height>,
+        decoder: ValueDecoder<RequiredHeightLockTime>,
     },
     /// Decoding a non-witness UTXO (full transaction).
     DecodingNonWitnessUtxo {
@@ -1766,7 +1767,7 @@ impl InputBuilder {
     }
 
     /// Sets the [`Input::min_height`] field.
-    pub fn minimum_required_height_based_lock_time(mut self, lock: absolute::Height) -> Self {
+    pub fn minimum_required_height_based_lock_time(mut self, lock: RequiredHeightLockTime) -> Self {
         self.0.min_height = Some(lock);
         self
     }
@@ -1873,7 +1874,7 @@ pub(crate) type MinTimePair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <absolute::Time as PsbtEncode>::Encoder<'e>>;
 /// Encoder for the required-height-locktime key-value pair (PSBT_IN_REQUIRED_HEIGHT_LOCKTIME).
 pub(crate) type MinHeightPair<'e> =
-    KeyValueEncoder<CompactSizeEncoder, <absolute::Height as PsbtEncode>::Encoder<'e>>;
+    KeyValueEncoder<CompactSizeEncoder, <RequiredHeightLockTime as PsbtEncode>::Encoder<'e>>;
 /// Encoder for the sighash-type key-value pair (PSBT_IN_SIGHASH_TYPE).
 pub(crate) type SighashPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, <PsbtSighashType as PsbtEncode>::Encoder<'e>>;
@@ -2119,8 +2120,7 @@ mod test {
         input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
         input.min_time =
             Some(bitcoin::locktime::absolute::Time::from_consensus(1_700_000_000).unwrap());
-        input.min_height =
-            Some(bitcoin::locktime::absolute::Height::from_consensus(800_000).unwrap());
+        input.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
         check_input(&input);
     }
 
@@ -2159,8 +2159,7 @@ mod test {
         input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
         input.min_time =
             Some(bitcoin::locktime::absolute::Time::from_consensus(1_700_000_000).unwrap());
-        input.min_height =
-            Some(bitcoin::locktime::absolute::Height::from_consensus(800_000).unwrap());
+        input.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
 
         let finalized = input
             .finalize(ScriptBuf::new(), Witness::from_slice(&[vec![1u8]]))
