@@ -10,7 +10,7 @@
 
 mod vectors;
 
-use vectors::bip375;
+make_check_case!(bip375);
 
 mod invalid {
     use super::bip375;

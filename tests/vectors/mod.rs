@@ -1,11 +1,8 @@
 //! Data driven test vector framework and utilities for BIP standard compliance testing.
 
 #![cfg(all(feature = "std", feature = "base64", feature = "serde", feature = "miniscript"))]
-// Intergration test code always appears dead to the compiler, more [information in the Rust Book.](https://doc.rust-lang.org/book/ch11-03-test-organization.html)
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 
 use bitcoin::{Sequence, Transaction};
 use psbt_v2::bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
@@ -26,13 +23,13 @@ use util::{
 };
 
 #[derive(Debug, Deserialize)]
-struct PubKeyPath {
+pub struct PubKeyPath {
     pub key: PublicKey,
     pub path: DerivationPath,
 }
 
 #[derive(Debug, Deserialize)]
-struct PrivKeyPath {
+pub struct PrivKeyPath {
     pub key: PrivateKey,
     pub path: DerivationPath,
 }
@@ -50,13 +47,13 @@ fn deserialize_sighash<'de, D: Deserializer<'de>>(
 }
 
 #[derive(Debug, Deserialize)]
-struct TestFile {
-    cases: Vec<TestCase>,
+pub struct TestFile {
+    pub cases: Vec<TestCase>,
 }
 
 /// Holds the base64 encoding of a PSBT.
 #[derive(Debug, Deserialize)]
-struct PsbtData {
+pub struct PsbtData {
     base64: String,
 }
 
@@ -65,7 +62,7 @@ struct PsbtData {
 /// Matched to a PSBT input by computing `txid(previous_tx)` and finding the
 /// input whose `previous_output.txid` equals it.
 #[derive(Debug, Deserialize)]
-struct InputUpdate {
+pub struct InputUpdate {
     /// Consensus-encoded hex of the funding transaction.
     #[serde(default)]
     previous_tx: String,
@@ -83,7 +80,7 @@ struct InputUpdate {
 
 /// Per-output update data for the updater task (positional).
 #[derive(Debug, Deserialize, Default)]
-struct OutputUpdate {
+pub struct OutputUpdate {
     #[serde(default)]
     bip32_derivation: Vec<PubKeyPath>,
 }
@@ -94,7 +91,7 @@ struct OutputUpdate {
 /// task type; the value under that key holds the task-specific data.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Task {
+pub enum Task {
     FailDeserialize {
         psbt: PsbtData,
     },
@@ -174,7 +171,7 @@ pub struct TestCase {
 }
 
 impl TestCase {
-    fn execute(&self) {
+    pub fn execute(&self) {
         match &self.task {
             // FailDeserialize: the PSBT must be rejected during parsing.
             Task::FailDeserialize { psbt } => match self.version {
@@ -453,13 +450,15 @@ impl TestCase {
 
 /// Defines a public function `$spec(desc: &str)` that looks up a test case by its
 /// exact JSON `description` field and executes it via [`TestCase::execute`].
+#[macro_export]
 macro_rules! make_check_case {
     ($spec:ident) => {
-        pub fn $spec(desc: &str) {
-            static CASES: OnceLock<Vec<TestCase>> = OnceLock::new();
+        pub(crate) fn $spec(desc: &str) {
+            static CASES: std::sync::OnceLock<Vec<$crate::vectors::TestCase>> =
+                std::sync::OnceLock::new();
             let cases = CASES.get_or_init(|| {
-                serde_json::from_str::<TestFile>(include_str!(concat!(
-                    "../data/",
+                serde_json::from_str::<$crate::vectors::TestFile>(include_str!(concat!(
+                    "data/",
                     stringify!($spec),
                     ".json"
                 )))
@@ -473,9 +472,3 @@ macro_rules! make_check_case {
         }
     };
 }
-
-make_check_case!(bip174);
-make_check_case!(bip370);
-make_check_case!(bip371);
-make_check_case!(bip375);
-make_check_case!(fuzz);

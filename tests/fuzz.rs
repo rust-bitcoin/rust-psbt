@@ -5,7 +5,7 @@
 
 mod vectors;
 
-use vectors::fuzz;
+make_check_case!(fuzz);
 
 mod valid {
     use super::fuzz;
