@@ -488,11 +488,7 @@ impl Input {
         v2_combine_option!(min_time, self, other);
         v2_combine_option!(min_height, self, other);
         v2_combine_option!(non_witness_utxo, self, other);
-
-        if let (&None, Some(witness_utxo)) = (&self.witness_utxo, other.witness_utxo) {
-            self.witness_utxo = Some(witness_utxo);
-        }
-
+        v2_combine_option!(witness_utxo, self, other);
         v2_combine_map!(partial_sigs, self, other);
         v2_combine_option!(sighash_type, self, other);
         v2_combine_option!(redeem_script, self, other);
