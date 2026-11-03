@@ -152,6 +152,7 @@ impl Global {
                 }
             }
         }
+        self.tx_modifiable_flags.combine(other.tx_modifiable_flags);
 
         #[cfg(feature = "silent-payments")]
         v2_combine_map!(sp_ecdh_shares, self, other);
