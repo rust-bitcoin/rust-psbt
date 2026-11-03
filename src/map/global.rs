@@ -97,7 +97,9 @@ impl Global {
 
     /// Combines [`Global`] with `other`.
     ///
-    /// In accordance with BIP 174 this function is commutative i.e., `A.combine(B) == B.combine(A)`
+    /// Fields absent from `self` are filled in from `other`. When both sides carry a value the one
+    /// in `self` is kept, so the function is not commutative on conflicting values. The transaction
+    /// modifiable flags are the exception; they are merged, see [`TxModifiableFlags::combine`].
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         // Combining different versions of PSBT without explicit conversion is out of scope.
         if self.version != other.version {

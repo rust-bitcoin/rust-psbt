@@ -237,7 +237,9 @@ impl PsbtDecode for Psbt {
     type Decoder = PsbtV2Decoder;
 }
 
-/// This function is commutative `combine(this, that) = combine(that, this)`.
+/// Fields absent from `this` are filled in from `that`; when both sides carry a
+/// conflicting value the one in `this` is kept, so the function is not commutative on
+/// conflicting values (see [`Psbt::combine_with`]).
 pub fn combine(this: Psbt, that: Psbt) -> Result<Psbt, CombineError> { this.combine_with(that) }
 
 /// A Partially Signed Transaction.
@@ -378,9 +380,27 @@ impl Psbt {
 
     /// Combines this [`Psbt`] with `other` PSBT as described by BIP-174.
     ///
+    /// As BIP-174 specifies for the [Combiner] role:
+    /// > when a combiner is asked to combine PSBTs with conflicting fields, the combiner may
+    /// > arbitrarily choose the value for the combined PSBT from any of the original PSBTs.
+    /// > Alternatively, the combiner may refuse to combine PSBTs with conflicting content.
+    ///
+    /// This implementation chooses to fail on conflicting content that may invalidate signatures,
+    /// which includes mismatching:
+    /// - locktimes
+    /// - sequences
+    /// - unspent output data
+    /// - unspent output data across different fields
+    ///
+    /// Fields absent from `self` are filled in from `other`; when both sides carry a conflicting
+    /// value that does not affect signatures, the one in `self` is kept, so the function is not
+    /// commutative on conflicting values.
+    ///
     /// BIP-370 does not include any additional requirements for the Combiner role.
     ///
     /// See [`combine()`] for a non-consuming version of this function.
+    ///
+    /// [Combiner]: https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki#combiner
     pub fn combine_with(mut self, other: Self) -> Result<Self, CombineError> {
         let self_lock = self.determine_lock_time().map_err(CombineError::LockTime)?;
         let other_lock = other.determine_lock_time().map_err(CombineError::LockTime)?;
