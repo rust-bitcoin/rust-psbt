@@ -31,10 +31,15 @@ macro_rules! v2_combine_option {
     };
 }
 
-/// Combines two `BTreeMap` fields by extending the map in `self.thing`.
+/// Combines two `BTreeMap` fields.
+///
+/// Inserts entries from `other.thing` that are absent from `self.thing`. When a key exists on both
+/// sides the value in `self` is kept.
 macro_rules! v2_combine_map {
     ($thing:ident, $slf:ident, $other:ident) => {
-        $slf.$thing.extend($other.$thing)
+        for (key, value) in $other.$thing {
+            $slf.$thing.entry(key).or_insert(value);
+        }
     };
 }
 
