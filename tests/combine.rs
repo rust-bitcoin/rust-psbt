@@ -252,7 +252,7 @@ fn combine_is_commutative_when_no_fields_overlap() {
 }
 
 #[test]
-fn combine_errors_when_lock_time_becomes_undeterminable() {
+fn combine_rejects_lock_time_type_mismatch() {
     let op0 = outpoint(b"input 0");
     let op1 = outpoint(b"input 1");
 
@@ -290,5 +290,53 @@ fn combine_errors_when_lock_time_becomes_undeterminable() {
     assert!(psbt_b.determine_lock_time().is_ok());
 
     let err = psbt_a.combine_with(psbt_b).unwrap_err();
-    assert!(matches!(err, CombineError::LockTime(_)), "expected LockTime error, got {:?}", err);
+    assert!(
+        matches!(err, CombineError::LockTimeMismatch { .. }),
+        "expected LockTimeMismatch, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn combine_rejects_lock_time_value_mismatch() {
+    let op = outpoint(b"input 0");
+
+    // PSBT A and PSBT B require height-based locks on the same input, but at
+    // different heights. Each is individually determinable; the resolved lock
+    // times still differ, so the combination is rejected rather than silently
+    // keeping one of the values.
+    let mut input_a = Input::new(&op);
+    input_a.min_height = Some(RequiredHeightLockTime::from_consensus(700_000).unwrap());
+
+    let mut input_b = Input::new(&op);
+    input_b.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
+
+    let psbt_a = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![input_a],
+        outputs: vec![dummy_output()],
+    };
+    let psbt_b = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![input_b],
+        outputs: vec![dummy_output()],
+    };
+
+    assert!(psbt_a.determine_lock_time().is_ok());
+    assert!(psbt_b.determine_lock_time().is_ok());
+
+    let err = psbt_a.combine_with(psbt_b).unwrap_err();
+    assert!(
+        matches!(err, CombineError::LockTimeMismatch { .. }),
+        "expected LockTimeMismatch, got {:?}",
+        err
+    );
 }

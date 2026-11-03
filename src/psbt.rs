@@ -384,6 +384,29 @@ impl Psbt {
     ///
     /// See [`combine()`] for a non-consuming version of this function.
     pub fn combine_with(mut self, other: Self) -> Result<Self, CombineError> {
+        let self_lock = self.determine_lock_time().map_err(CombineError::LockTime)?;
+        let other_lock = other.determine_lock_time().map_err(CombineError::LockTime)?;
+
+        // Signatures become invalid if locktime changes, so only combine PSBTs that resolve to the
+        // same locktime
+        if self_lock != other_lock {
+            return Err(CombineError::LockTimeMismatch { this: self_lock, that: other_lock });
+        }
+
+        // Both PSBTs must describe the same transaction; a length mismatch means they do not.
+        if self.inputs.len() != other.inputs.len() {
+            return Err(CombineError::InputsLenMismatch {
+                this: self.inputs.len(),
+                that: other.inputs.len(),
+            });
+        }
+        if self.outputs.len() != other.outputs.len() {
+            return Err(CombineError::OutputsLenMismatch {
+                this: self.outputs.len(),
+                that: other.outputs.len(),
+            });
+        }
+
         self.global.combine(other.global).map_err(CombineError::Global)?;
 
         for (self_input, other_input) in self.inputs.iter_mut().zip(other.inputs) {
@@ -393,9 +416,6 @@ impl Psbt {
         for (self_output, other_output) in self.outputs.iter_mut().zip(other.outputs) {
             self_output.combine(other_output).map_err(CombineError::Output)?;
         }
-
-        // Combining can introduce a lock time conflict.
-        self.determine_lock_time().map_err(CombineError::LockTime)?;
 
         Ok(self)
     }
@@ -593,8 +613,29 @@ pub enum CombineError {
     Input(input::CombineError),
     /// Error while combining the output maps.
     Output(output::CombineError),
-    /// Combining introduced a lock time conflict that prevents determining the lock time.
+    /// The PSBTs spend a different number of inputs.
+    InputsLenMismatch {
+        /// Number of inputs in `self`.
+        this: usize,
+        /// Number of inputs in `other`.
+        that: usize,
+    },
+    /// The PSBTs create a different number of outputs.
+    OutputsLenMismatch {
+        /// Number of outputs in `self`.
+        this: usize,
+        /// Number of outputs in `other`.
+        that: usize,
+    },
+    /// One of the PSBTs has a lock time conflict that prevents combining.
     LockTime(DetermineLockTimeError),
+    /// Lock times differ across PSBTs, cannot merge without risking signature invalidation.
+    LockTimeMismatch {
+        /// The lock time of the base psbt being combined.
+        this: absolute::LockTime,
+        /// The lock time of the psbt with which the base psbt is combined.
+        that: absolute::LockTime,
+    },
 }
 
 impl fmt::Display for CombineError {
@@ -603,8 +644,17 @@ impl fmt::Display for CombineError {
             Self::Global(ref e) => write_err!(f, "error while combining the global maps"; e),
             Self::Input(ref e) => write_err!(f, "error while combining the input maps"; e),
             Self::Output(ref e) => write_err!(f, "error while combining the output maps"; e),
+            Self::InputsLenMismatch { ref this, ref that } => {
+                write!(f, "combine two PSBTs with different input counts: {} {}", this, that)
+            }
+            Self::OutputsLenMismatch { ref this, ref that } => {
+                write!(f, "combine two PSBTs with different output counts: {} {}", this, that)
+            }
+            Self::LockTimeMismatch { ref this, ref that } => {
+                write!(f, "combine two PSBTs with different locktimes: {} {}", this, that)
+            }
             Self::LockTime(ref e) =>
-                write_err!(f, "lock time could not be determined after combining"; e),
+                write_err!(f, "lock time could not be determined before combining"; e),
         }
     }
 }
@@ -617,6 +667,9 @@ impl std::error::Error for CombineError {
             Self::Input(ref e) => Some(e),
             Self::Output(ref e) => Some(e),
             Self::LockTime(ref e) => Some(e),
+            Self::InputsLenMismatch { .. }
+            | Self::OutputsLenMismatch { .. }
+            | Self::LockTimeMismatch { .. } => None,
         }
     }
 }
