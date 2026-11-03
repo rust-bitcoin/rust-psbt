@@ -10,7 +10,6 @@ use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
 };
 
-use crate::error::write_err;
 use crate::{PsbtDecode, PsbtEncode};
 
 const SIGHASH_ANYONECANPAY: u32 = 0x80;
@@ -102,13 +101,10 @@ impl PsbtSighashType {
 
     /// Returns the [`TapSighashType`] if the [`PsbtSighashType`] can be
     /// converted to one.
-    pub fn taproot_hash_ty(self) -> Result<TapSighashType, InvalidSighashTypeError> {
-        if self.inner > 0xffu32 {
-            return Err(InvalidSighashTypeError::Invalid(self.inner));
-        }
-
-        let ty = TapSighashType::from_consensus_u8(self.inner as u8)?;
-        Ok(ty)
+    pub fn taproot_hash_ty(self) -> Result<TapSighashType, sighash::InvalidSighashTypeError> {
+        let val =
+            u8::try_from(self.inner).map_err(|_| sighash::InvalidSighashTypeError(self.inner))?;
+        TapSighashType::from_consensus_u8(val)
     }
 
     /// Creates a [`PsbtSighashType`] from a raw `u32`.
@@ -172,41 +168,6 @@ impl std::error::Error for ParseSighashTypeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
 }
 
-// TODO: Remove this error after issue resolves.
-// https://github.com/rust-bitcoin/rust-bitcoin/issues/2423
-/// Integer is not a consensus valid sighash type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum InvalidSighashTypeError {
-    /// The real invalid sighash type error.
-    Bitcoin(sighash::InvalidSighashTypeError),
-    /// Hack required because of non_exhaustive on the real error.
-    Invalid(u32),
-}
-
-impl fmt::Display for InvalidSighashTypeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Bitcoin(ref e) => write_err!(f, "bitcoin"; e),
-            Self::Invalid(invalid) => write!(f, "invalid sighash type {}", invalid),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InvalidSighashTypeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Bitcoin(ref e) => Some(e),
-            Self::Invalid(_) => None,
-        }
-    }
-}
-
-impl From<sighash::InvalidSighashTypeError> for InvalidSighashTypeError {
-    fn from(e: sighash::InvalidSighashTypeError) -> Self { Self::Bitcoin(e) }
-}
-
 impl PsbtEncode for PsbtSighashType {
     type Encoder<'e>
         = ArrayEncoder<4>
@@ -222,6 +183,11 @@ impl PsbtEncode for PsbtSighashType {
 #[derive(Debug, Default)]
 pub struct SighashTypeDecoder {
     inner: ArrayDecoder<4>,
+}
+
+impl SighashTypeDecoder {
+    /// Constructs a new [`SighashTypeDecoder`].
+    pub const fn new() -> Self { Self { inner: ArrayDecoder::new() } }
 }
 
 impl Decoder for SighashTypeDecoder {
@@ -249,7 +215,6 @@ mod tests {
     use alloc::format;
 
     use super::*;
-    use crate::sighash_type::InvalidSighashTypeError;
 
     #[test]
     fn psbt_sighash_type_ecdsa() {
@@ -296,9 +261,8 @@ mod tests {
         let back = s.parse::<PsbtSighashType>().unwrap();
 
         assert_eq!(back, sighash);
-        // TODO: Add this assertion once we remove InvalidSighashTypeError
-        // assert_eq!(back.ecdsa_hash_ty(), Err(NonStandardSighashTypeError(nonstd)));
-        assert_eq!(back.taproot_hash_ty(), Err(InvalidSighashTypeError::Invalid(nonstd)));
+        assert_eq!(back.ecdsa_hash_ty(), Err(NonStandardSighashTypeError(nonstd)));
+        assert_eq!(back.taproot_hash_ty(), Err(sighash::InvalidSighashTypeError(nonstd)));
     }
 
     #[test]
@@ -337,18 +301,13 @@ mod tests {
     }
 
     #[test]
-    fn psbt_sighash_taproot_boundary_0xff() {
-        // 0xFF is the boundary between the two rejection layers.
-        // (This test killed a `>` → `>=` mutation.)
-        match PsbtSighashType::from_u32(0xff).taproot_hash_ty() {
-            Err(InvalidSighashTypeError::Bitcoin(_)) => {}
-            other => panic!("0xff must be rejected by consensus conversion, got {:?}", other),
-        }
+    fn read_limit_lifecycle() {
+        let mut decoder = SighashTypeDecoder::new();
+        assert_eq!(decoder.read_limit(), 4);
 
-        // The other side of the boundary takes the range-check layer.
-        match PsbtSighashType::from_u32(0x100).taproot_hash_ty() {
-            Err(InvalidSighashTypeError::Invalid(0x100)) => {}
-            other => panic!("0x100 must be rejected by the range check, got {:?}", other),
-        }
+        let mut bytes: &[u8] = &[0x01, 0x00, 0x00, 0x00];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
     }
 }

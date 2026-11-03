@@ -9,7 +9,9 @@ use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::locktime::absolute;
-use bitcoin::sighash::{EcdsaSighashType, NonStandardSighashTypeError, TapSighashType};
+use bitcoin::sighash::{
+    EcdsaSighashType, InvalidSighashTypeError, NonStandardSighashTypeError, TapSighashType,
+};
 use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
@@ -47,7 +49,7 @@ use crate::encoding::{ExactLenEncoder, PsbtEncode};
 use crate::error::FundingUtxoError;
 use crate::map::error::{InputDecodeError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
-use crate::sighash_type::{InvalidSighashTypeError, PsbtSighashType};
+use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::tap_key_origin::TapKeyOriginDecoder;
