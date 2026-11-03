@@ -28,13 +28,12 @@ use crate::consts::{
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
 use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::encoding::PsbtEncode;
-use crate::error::write_err;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::tx_modifiable_flags::{TxModifiableFlags, TxModifiableFlagsEncoder};
 use crate::version::{Version, VersionDecoderError, VersionEncoder};
-use crate::{InconsistentKeySourcesError, V2};
+use crate::V2;
 
 /// The global key-value map.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -113,45 +112,7 @@ impl Global {
             });
         }
 
-        // BIP 174: The Combiner must remove any duplicate key-value pairs, in accordance with
-        //          the specification. It can pick arbitrarily when conflicts occur.
-
-        // Merging xpubs
-        for (xpub, (fingerprint1, derivation1)) in other.xpubs {
-            match self.xpubs.entry(xpub) {
-                btree_map::Entry::Vacant(entry) => {
-                    entry.insert((fingerprint1, derivation1));
-                }
-                btree_map::Entry::Occupied(mut entry) => {
-                    // Here in case of the conflict we select the version with algorithm:
-                    // 1) if everything is equal we do nothing
-                    // 2) report an error if
-                    //    - derivation paths are equal and fingerprints are not
-                    //    - derivation paths are of the same length, but not equal
-                    //    - derivation paths has different length, but the shorter one
-                    //      is not the strict suffix of the longer one
-                    // 3) choose longest derivation otherwise
-
-                    let (fingerprint2, derivation2) = entry.get().clone();
-
-                    if (derivation1 == derivation2 && fingerprint1 == fingerprint2)
-                        || (derivation1.len() < derivation2.len()
-                            && derivation1[..]
-                                == derivation2[derivation2.len() - derivation1.len()..])
-                    {
-                        continue;
-                    } else if derivation2[..]
-                        == derivation1[derivation1.len() - derivation2.len()..]
-                    {
-                        entry.insert((fingerprint1, derivation1));
-                        continue;
-                    }
-                    return Err(CombineError::InconsistentKeySources(InconsistentKeySourcesError(
-                        xpub,
-                    )));
-                }
-            }
-        }
+        v2_combine_map!(xpubs, self, other);
         v2_combine_option!(fallback_lock_time, self, other);
         self.tx_modifiable_flags.combine(other.tx_modifiable_flags);
 
@@ -767,8 +728,6 @@ pub enum CombineError {
         /// Into a PSBT with `that` tx version.
         that: transaction::Version,
     },
-    /// Xpubs have inconsistent key sources.
-    InconsistentKeySources(InconsistentKeySourcesError),
 }
 
 impl fmt::Display for CombineError {
@@ -780,9 +739,6 @@ impl fmt::Display for CombineError {
             Self::TxVersionMismatch { ref this, ref that } => {
                 write!(f, "combine two PSBTs with different tx versions: {:?} {:?}", this, that)
             }
-            Self::InconsistentKeySources(ref e) => {
-                write_err!(f, "combine with inconsistent key sources"; e)
-            }
         }
     }
 }
@@ -791,7 +747,6 @@ impl fmt::Display for CombineError {
 impl std::error::Error for CombineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InconsistentKeySources(ref e) => Some(e),
             Self::VersionMismatch { .. } | Self::TxVersionMismatch { .. } => None,
         }
     }
