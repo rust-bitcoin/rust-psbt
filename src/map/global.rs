@@ -152,6 +152,7 @@ impl Global {
                 }
             }
         }
+        v2_combine_option!(fallback_lock_time, self, other);
         self.tx_modifiable_flags.combine(other.tx_modifiable_flags);
 
         #[cfg(feature = "silent-payments")]
