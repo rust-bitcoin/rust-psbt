@@ -1204,10 +1204,16 @@ impl GetKey for miniscript::descriptor::DescriptorSecretKey {
                     return Ok(Some(key));
                 }
 
-                if let Some(matched_path) = descriptor_xkey.matches(key_source, secp) {
+                if descriptor_xkey.matches(key_source, secp).is_some() {
                     let (_, full_path) = key_source;
 
-                    let derivation_path = &full_path[matched_path.len()..];
+                    // `xkey` is anchored at the origin, but the request path is master-relative, either:
+                    // - origin: strip the origin prefix and use the remaining suffix.
+                    // - no origin: use the full request path.
+                    let derivation_path = match &descriptor_xkey.origin {
+                        Some((_, origin_path)) => &full_path[origin_path.len()..],
+                        None => full_path.as_ref(),
+                    };
 
                     return Ok(Some(
                         descriptor_xkey
@@ -2089,6 +2095,40 @@ mod test {
 
             // Fingerprint mismatch but path nonempty and first segment matches child_number.
             assert_eq!(derived_key, None);
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn get_key_xpriv_with_key_origin_and_derivation_path() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::descriptor::DescriptorSecretKey;
+            use miniscript::hex::hex;
+
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let master_xprv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let fingerprint = master_xprv.fingerprint(&secp);
+
+            // An account-level xprv with origin info and a wildcard: the xprv is anchored
+            // at `m/84'/0'` while the request path is master-relative.
+            let account_xprv = master_xprv
+                .derive_priv(&secp, &"m/84'/0'".parse::<DerivationPath>().unwrap())
+                .unwrap();
+            let descriptor_sk = format!("[{}/84'/0']{}/0/*", fingerprint, account_xprv)
+                .parse::<DescriptorSecretKey>()
+                .unwrap();
+
+            let request_path: DerivationPath = "m/84'/0'/0/5".parse().unwrap();
+
+            let expected = master_xprv.derive_priv(&secp, &request_path).unwrap().to_priv();
+
+            let key_request = KeyRequest::Bip32((fingerprint, request_path));
+
+            assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), Some(expected));
         }
     }
 }
