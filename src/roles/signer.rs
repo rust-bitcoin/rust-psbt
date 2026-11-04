@@ -17,6 +17,8 @@ use bitcoin::{
     ecdsa, taproot, PrivateKey, PublicKey, ScriptBuf, TapLeafHash, TapSighashType, Transaction,
     TxOut, Txid, XOnlyPublicKey,
 };
+#[cfg(feature = "miniscript")]
+use miniscript::descriptor::Wildcard;
 
 use crate::error::{write_err, DetermineLockTimeError};
 use crate::psbt::Psbt;
@@ -1147,7 +1149,6 @@ impl_get_key_for_xonly_map!(BTreeMap);
 #[cfg(feature = "std")]
 impl_get_key_for_xonly_map!(HashMap);
 
-/// Fetches a private key from a [`miniscript::descriptor::KeyMap`] given a [`KeyRequest`].
 #[cfg(feature = "miniscript")]
 impl GetKey for miniscript::descriptor::KeyMap {
     type Error = GetKeyError;
@@ -1168,8 +1169,6 @@ impl GetKey for miniscript::descriptor::KeyMap {
     }
 }
 
-/// Fetches a private key from a [`miniscript::descriptor::DescriptorSecretKey`] given a
-/// [`KeyRequest`].
 #[cfg(feature = "miniscript")]
 impl GetKey for miniscript::descriptor::DescriptorSecretKey {
     type Error = GetKeyError;
@@ -1214,6 +1213,17 @@ impl GetKey for miniscript::descriptor::DescriptorSecretKey {
                     },
                     None => return Ok(None),
                 };
+
+                let last_step = full_path.as_ref().last();
+                let request_matches_wildcard_hardening = match descriptor_xkey.wildcard {
+                    Wildcard::None => true,
+                    Wildcard::Unhardened => last_step.is_some_and(|step| step.is_normal()),
+                    Wildcard::Hardened => last_step.is_some_and(|step| step.is_hardened()),
+                };
+
+                if !request_matches_wildcard_hardening {
+                    return Err(GetKeyError::NotSupported);
+                }
 
                 Ok(Some(
                     descriptor_xkey
@@ -2152,6 +2162,93 @@ mod test {
             let key_request = KeyRequest::Bip32((master_xprv.fingerprint(&secp), request_path));
 
             assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), None);
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn get_key_xpriv_checks_wildcard_step() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use miniscript::descriptor::DescriptorSecretKey;
+
+            struct TestCase {
+                name: &'static str,
+                /// Appended to the master_xprv.
+                key_suffix: &'static str,
+                /// Relative to the master key.
+                request_path: &'static str,
+                /// Expected key path, `None` for `NotSupported`.
+                exp_key_path: Option<&'static str>,
+            }
+
+            let cases = [
+                TestCase {
+                    name: "unhardened wildcard, unhardened step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1",
+                    exp_key_path: Some("0/1"),
+                },
+                TestCase {
+                    name: "unhardened wildcard, hardened step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1h",
+                    exp_key_path: None,
+                },
+                TestCase {
+                    name: "hardened wildcard, unhardened step",
+                    key_suffix: "/0/*h",
+                    request_path: "0/1",
+                    exp_key_path: None,
+                },
+                TestCase {
+                    name: "hardened wildcard, hardened step",
+                    key_suffix: "/0/*h",
+                    request_path: "0/1h",
+                    exp_key_path: Some("0/1h"),
+                },
+                TestCase {
+                    name: "wildcard, empty request path",
+                    key_suffix: "/*",
+                    request_path: "",
+                    exp_key_path: None,
+                },
+                TestCase {
+                    name: "multipath wildcard, hardened step",
+                    key_suffix: "/<0;1>/*",
+                    request_path: "0/1h",
+                    exp_key_path: None,
+                },
+            ];
+
+            let secp = Secp256k1::new();
+            let master_xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+                .parse::<Xpriv>()
+                .unwrap();
+            let fingerprint = master_xprv.fingerprint(&secp);
+
+            for test_case in &cases {
+                let descriptor_sk = format!("{}{}", master_xprv, test_case.key_suffix)
+                    .parse::<DescriptorSecretKey>()
+                    .unwrap();
+
+                let key_request = KeyRequest::Bip32((
+                    fingerprint,
+                    test_case.request_path.parse::<DerivationPath>().unwrap(),
+                ));
+
+                match (test_case.exp_key_path, descriptor_sk.get_key(&key_request, &secp)) {
+                    (Some(path), Ok(Some(key))) => {
+                        let exp = master_xprv
+                            .derive_priv(&secp, &path.parse::<DerivationPath>().unwrap())
+                            .unwrap()
+                            .to_priv();
+                        assert_eq!(key, exp, "{}", test_case.name);
+                    }
+                    (None, Err(GetKeyError::NotSupported)) => {}
+                    (exp, got) => panic!("{}: expected {:?}, got {:?}", test_case.name, exp, got),
+                }
+            }
         }
     }
 }
