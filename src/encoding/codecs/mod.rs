@@ -802,6 +802,91 @@ mod tests {
     }
 
     #[test]
+    fn read_limit_lifecycle_child_number() {
+        let mut decoder = ChildNumberDecoder::default();
+        assert_eq!(decoder.read_limit(), 4);
+
+        let mut bytes: &[u8] = &[0x01, 0x00, 0x00, 0x00];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_x_only_public_key() {
+        let mut decoder = XOnlyPublicKeyDecoder::default();
+        assert_eq!(decoder.read_limit(), 32);
+
+        let mut bytes: &[u8] = &[
+            0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce, 0x87,
+            0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81, 0x5b,
+            0x16, 0xf8, 0x17, 0x98,
+        ];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_txid() {
+        let mut decoder = TxidDecoder::default();
+        assert_eq!(decoder.read_limit(), 32);
+
+        let mut bytes: &[u8] = &[0x42; 32];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_tap_node_hash() {
+        let mut decoder = TapNodeHashDecoder::default();
+        assert_eq!(decoder.read_limit(), 32);
+
+        let mut bytes: &[u8] = &[0x42; 32];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_time() {
+        let mut decoder = TimeDecoder::default();
+        assert_eq!(decoder.read_limit(), 4);
+
+        let mut bytes: &[u8] = &[0x50, 0xca, 0x92, 0x62];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_tap_tree() {
+        let mut decoder = TapTreeDecoder::default();
+        assert!(decoder.read_limit() > 0);
+
+        let mut bytes: &[u8] = &[0x00, 0xc0, 0x01, 0x51];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn read_limit_lifecycle_compressed_public_key() {
+        let mut decoder = CompressedPublicKeyDecoder::default();
+        assert_eq!(decoder.read_limit(), 33);
+
+        let mut bytes: &[u8] = &[
+            0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce,
+            0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2, 0x81,
+            0x5b, 0x16, 0xf8, 0x17, 0x98,
+        ];
+        let status = decoder.push_bytes(&mut bytes).unwrap();
+        assert!(status.is_ready());
+        assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
     fn public_key_encoder_len_is_key_size() {
         use core::str::FromStr;
 
