@@ -1200,31 +1200,28 @@ impl GetKey for miniscript::descriptor::DescriptorSecretKey {
                 }
             }
             (Self::XPrv(descriptor_xkey), KeyRequest::Bip32(key_source)) => {
-                if let Some(key) = descriptor_xkey.xkey.get_key(key_request, secp)? {
-                    return Ok(Some(key));
-                }
-
-                if descriptor_xkey.matches(key_source, secp).is_some() {
-                    let (_, full_path) = key_source;
-
-                    // `xkey` is anchored at the origin, but the request path is master-relative, either:
-                    // - origin: strip the origin prefix and use the remaining suffix.
-                    // - no origin: use the full request path.
-                    let derivation_path = match &descriptor_xkey.origin {
+                // A successful `matches()` already guarantees the requested key source's fingerprint equals our origin
+                // (or, when there is no origin, the xkey's own) fingerprint.
+                //
+                // `xkey` is anchored at the origin, but the request path is master-relative, either:
+                // - origin: strip the origin prefix and use the remaining suffix.
+                // - no origin: use the full request path.
+                let (_, full_path) = key_source;
+                let derivation_path = match descriptor_xkey.matches(key_source, secp) {
+                    Some(_) => match &descriptor_xkey.origin {
                         Some((_, origin_path)) => &full_path[origin_path.len()..],
                         None => full_path.as_ref(),
-                    };
+                    },
+                    None => return Ok(None),
+                };
 
-                    return Ok(Some(
-                        descriptor_xkey
-                            .xkey
-                            .derive_priv(secp, &derivation_path)
-                            .map_err(GetKeyError::Bip32)?
-                            .to_priv(),
-                    ));
-                }
-
-                Ok(None)
+                Ok(Some(
+                    descriptor_xkey
+                        .xkey
+                        .derive_priv(secp, &derivation_path)
+                        .map_err(GetKeyError::Bip32)?
+                        .to_priv(),
+                ))
             }
             (Self::XPrv(_), KeyRequest::XOnlyPubkey(_)) => Err(GetKeyError::NotSupported),
             (desc_multi_sk @ Self::MultiXPrv(_), _) => {
@@ -2129,6 +2126,32 @@ mod test {
             let key_request = KeyRequest::Bip32((fingerprint, request_path));
 
             assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), Some(expected));
+        }
+
+        #[test]
+        #[cfg(feature = "miniscript")]
+        fn get_key_xpriv_rejects_sibling_path() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::descriptor::DescriptorSecretKey;
+            use miniscript::hex::hex;
+
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let master_xprv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+
+            let descriptor_sk =
+                format!("{}/0/*", master_xprv).parse::<DescriptorSecretKey>().unwrap();
+
+            // The request fingerprint matches the xprv itself, but `m/9/7` is a sibling of
+            // the descriptor's `0/*` branch.
+            let request_path: DerivationPath = "m/9/7".parse().unwrap();
+            let key_request = KeyRequest::Bip32((master_xprv.fingerprint(&secp), request_path));
+
+            assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), None);
         }
     }
 }
