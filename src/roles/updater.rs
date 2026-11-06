@@ -64,7 +64,6 @@ use crate::{Key, ProprietaryKey};
 ///
 /// [`Signer`]: crate::Signer
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Updater(pub(crate) Psbt);
 
 /// A mutable view of the updatable fields of a PSBT, lent by [`Updater::update`].

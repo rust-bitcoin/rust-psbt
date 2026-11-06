@@ -38,7 +38,6 @@ impl Mod for OutputsOnlyModifiable {}
 ///
 /// Uses the builder pattern, and generics to make adding inputs and outputs infallible.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Constructor<T>(pub(crate) Psbt, pub(crate) PhantomData<T>);
 
 impl<T: Mod> Constructor<T> {

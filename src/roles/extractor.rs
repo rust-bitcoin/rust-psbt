@@ -23,7 +23,6 @@ use crate::DetermineLockTimeError;
 
 /// Implements the BIP-370 Extractor role.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Extractor(Psbt);
 
 impl Extractor {
