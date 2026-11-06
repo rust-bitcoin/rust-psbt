@@ -6,8 +6,6 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use bitcoin::bip32::{KeySource, Xpub};
-#[cfg(feature = "silent-payments")]
-use bitcoin::CompressedPublicKey;
 use bitcoin::Txid;
 
 use crate::error::DetermineLockTimeError;
@@ -15,8 +13,6 @@ use crate::input::Input;
 use crate::output::Output;
 use crate::psbt::Psbt;
 use crate::roles::signer::Signer;
-#[cfg(feature = "silent-payments")]
-use crate::DleqProof;
 use crate::{Key, ProprietaryKey};
 
 /// Implements the BIP-370 Updater role.
@@ -84,15 +80,11 @@ pub struct UpdaterView<'a> {
 ///
 /// Excludes `input_count`, `output_count`, `tx_version`, `version`, `fallback_lock_time`,
 /// and `tx_modifiable_flags` since those are managed by the Creator, Constructor, and Signer.
+/// The silent-payments global ECDH shares and DLEQ proofs are excluded as well:
+/// BIP-375 assigns them to the Signer.
 pub struct UpdaterGlobalView<'a> {
     /// Global xpubs used for BIP-32 key derivation.
     pub xpubs: &'a mut BTreeMap<Xpub, KeySource>,
-    /// BIP-375: per-PSBT ECDH shares for silent payments.
-    #[cfg(feature = "silent-payments")]
-    pub sp_ecdh_shares: &'a mut BTreeMap<CompressedPublicKey, CompressedPublicKey>,
-    /// BIP-375: per-PSBT DLEQ proofs for silent payments.
-    #[cfg(feature = "silent-payments")]
-    pub sp_dleq_proofs: &'a mut BTreeMap<CompressedPublicKey, DleqProof>,
     /// Proprietary key-value pairs in the global map.
     pub proprietaries: &'a mut BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs in the global map.
@@ -123,10 +115,6 @@ impl Updater {
         let mut view = UpdaterView {
             global: UpdaterGlobalView {
                 xpubs: &mut self.0.global.xpubs,
-                #[cfg(feature = "silent-payments")]
-                sp_ecdh_shares: &mut self.0.global.sp_ecdh_shares,
-                #[cfg(feature = "silent-payments")]
-                sp_dleq_proofs: &mut self.0.global.sp_dleq_proofs,
                 proprietaries: &mut self.0.global.proprietaries,
                 unknowns: &mut self.0.global.unknowns,
             },
