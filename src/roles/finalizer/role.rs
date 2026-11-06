@@ -21,8 +21,8 @@ use miniscript::{
 use super::satisfy::InputSatisfier;
 use super::InterpreterCheckError;
 use crate::error::{write_err, FundingUtxoError};
-use crate::map::input::{self, Input};
-use crate::psbt::Psbt;
+use crate::map::input::{FinalScripts, Input};
+use crate::psbt::{OutputType, Psbt};
 use crate::{DetermineLockTimeError, PartialSigsSighashTypeError};
 
 /// Implements the BIP-370 Finalized role.
@@ -81,9 +81,8 @@ impl Finalizer {
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
     fn finalize_input(&self, input: &Input) -> Result<Input, FinalizeInputError> {
         let allow_mall = true; // TODO: Add mall and no-mall versions.
-        let (script_sig, witness) = self.final_script_sig_and_witness(input, allow_mall)?;
-
-        input.finalize(script_sig, witness).map_err(From::from)
+        let fields = self.final_script_sig_and_witness(input, allow_mall)?;
+        Ok(input.finalize(fields))
     }
 
     /// Returns the final script_sig and final witness for this input.
@@ -109,7 +108,7 @@ impl Finalizer {
         &self,
         input: &Input,
         allow_mall: bool,
-    ) -> Result<(ScriptBuf, Witness), InputError> {
+    ) -> Result<FinalScripts, InputError> {
         let (witness, script_sig) = {
             let spk =
                 &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
@@ -133,7 +132,13 @@ impl Finalizer {
         };
 
         let witness = Witness::from_slice(&witness);
-        Ok((script_sig, witness))
+        let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
+
+        Ok(match output_type {
+            OutputType::Wpkh | OutputType::Wsh | OutputType::Tr => FinalScripts::Segwit { witness },
+            OutputType::ShWpkh | OutputType::ShWsh => FinalScripts::Wrapped { script_sig, witness },
+            OutputType::Bare | OutputType::Sh => FinalScripts::Legacy { script_sig },
+        })
     }
 
     /// Creates a descriptor from an unfinalized PSBT input.
@@ -459,15 +464,12 @@ impl From<InterpreterCheckError> for FinalizeError {
 pub enum FinalizeInputError {
     /// Failed to get final script_sig and final witness.
     Final(InputError),
-    /// Failed to create a finalized input from final fields.
-    Input(input::FinalizeError),
 }
 
 impl fmt::Display for FinalizeInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Final(ref e) => write_err!(f, "final"; e),
-            Self::Input(ref e) => write_err!(f, "input"; e),
         }
     }
 }
@@ -477,17 +479,12 @@ impl std::error::Error for FinalizeInputError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Final(ref e) => Some(e),
-            Self::Input(ref e) => Some(e),
         }
     }
 }
 
 impl From<InputError> for FinalizeInputError {
     fn from(e: InputError) -> Self { Self::Final(e) }
-}
-
-impl From<input::FinalizeError> for FinalizeInputError {
-    fn from(e: input::FinalizeError) -> Self { Self::Input(e) }
 }
 
 /// Error type for Pbst Input
@@ -552,6 +549,8 @@ pub enum InputError {
         /// the corresponding publickey
         pubkey: bitcoin::PublicKey,
     },
+    /// Unable to determine the output type from the script pubkey.
+    UnknownOutputType,
 }
 
 #[cfg(feature = "std")]
@@ -570,7 +569,8 @@ impl std::error::Error for InputError {
             | Self::NonEmptyWitnessScript
             | Self::NonEmptyRedeemScript
             | Self::NonStandardSighashType(_)
-            | Self::WrongSighashFlag { .. } => None,
+            | Self::WrongSighashFlag { .. }
+            | Self::UnknownOutputType => None,
             Self::SecpErr(e) => Some(e),
             Self::KeyErr(e) => Some(e),
             Self::Interpreter(e) => Some(e),
@@ -621,6 +621,7 @@ impl fmt::Display for InputError {
 
             Self::CouldNotSatisfyTr => write!(f, "Could not satisfy Tr descriptor"),
             Self::NonStandardSighashType(ref e) => write!(f, "Non-standard sighash type {}", e),
+            Self::UnknownOutputType => write!(f, "unable to determine the output type"),
         }
     }
 }
