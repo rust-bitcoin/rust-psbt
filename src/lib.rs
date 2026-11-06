@@ -105,9 +105,9 @@ pub use crate::{
     roles::{
         sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,
         Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
-        GetKey, GetKeyError, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable,
-        OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
-        Updater, UpdaterGlobalView, UpdaterView,
+        GetKey, GetKeyError, GlobalPatch, InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest,
+        Mod, Modifiable, OutputPatch, OutputsOnlyModifiable, SignableInput, Signer, SigningErrors,
+        SigningKeys, SigningSession, Updater, UpdaterPatch,
     },
     sighash_type::{ParseSighashTypeError, PsbtSighashType},
     tx_modifiable_flags::TxModifiableFlags,

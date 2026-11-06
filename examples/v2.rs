@@ -88,10 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The updater role.
 
     // We can act as updater.
-    let mut updater = Updater::new(psbt)?;
-    updater.update(|view| {
-        view.inputs[1].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
-    });
+    let updater = Updater::new(psbt)?;
+    let updater = updater.update(|mut draft| {
+        draft.inputs[1].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+        draft
+    })?;
     let psbt = updater.psbt()?;
 
     // Or we can get Alice and Bob to act as updaters.
