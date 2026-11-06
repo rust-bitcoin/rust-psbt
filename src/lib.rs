@@ -47,6 +47,8 @@ mod consts;
 mod encoding;
 mod error;
 mod map;
+#[cfg(feature = "musig")]
+mod musig;
 mod psbt;
 mod roles;
 mod sighash_type;
