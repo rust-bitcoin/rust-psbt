@@ -314,7 +314,7 @@ impl Psbt {
                     .iter()
                     .map(|input| input.min_time)
                     .max()
-                    .expect("we know we have at least one non-none min_height field")
+                    .expect("we know we have at least one non-none min_time field")
                     .expect("so we know that max is non-none");
                 absolute::LockTime::from(time)
             }
