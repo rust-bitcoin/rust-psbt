@@ -442,7 +442,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
             .psbt
             .checked_input(input.index)
             .expect("the index is already checked by SignableInput");
-        for (&xonly, (leaf_hashes, key_source)) in psbt_input.tap_key_origins.iter() {
+        for (&xonly, (leaf_hashes, key_source)) in &psbt_input.tap_key_origins {
             let sk = if let Ok(Some(secret_key)) =
                 k.get_key(&KeyRequest::Bip32(key_source.clone()), secp)
             {
@@ -530,7 +530,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
             .checked_input(input.index)
             .expect("the index is already checked by SignableInput");
         let (msg, sighash_type) = self.ecdsa_sighash(input);
-        for (pk, key_source) in psbt_input.bip32_derivations.iter() {
+        for (pk, key_source) in &psbt_input.bip32_derivations {
             // Try BIP-32 derivation first, then raw pubkey. Key-provider errors are swallowed
             // per-key; an input we hold no key for is simply skipped (partial signing is a normal
             // multisig flow).
