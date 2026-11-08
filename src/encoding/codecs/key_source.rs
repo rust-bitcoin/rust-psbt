@@ -66,9 +66,8 @@ impl Decoder for KeySourceDecoder {
 
         // Decode the compact-size length prefix.
         if matches!(self.state, ReadingPrefix(_)) {
-            let mut prefix = match core::mem::replace(&mut self.state, Errored) {
-                ReadingPrefix(p) => p,
-                _ => unreachable!(),
+            let ReadingPrefix(mut prefix) = core::mem::replace(&mut self.state, Errored) else {
+                unreachable!()
             };
             if prefix.push_bytes(bytes).map_err(KeySourceDecodeError::LengthPrefix)?.needs_more() {
                 self.state = ReadingPrefix(prefix);
