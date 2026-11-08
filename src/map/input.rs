@@ -213,10 +213,10 @@ impl Input {
         }
 
         if spk.is_p2sh() {
-            if self.redeem_script.as_ref().map(|s| s.is_p2wpkh()).unwrap_or(false) {
+            if self.redeem_script.as_ref().is_some_and(|s| s.is_p2wpkh()) {
                 return Ok(OutputType::ShWpkh);
             }
-            if self.redeem_script.as_ref().map(|x| x.is_p2wsh()).unwrap_or(false) {
+            if self.redeem_script.as_ref().is_some_and(|s| s.is_p2wsh()) {
                 return Ok(OutputType::ShWsh);
             }
             return Ok(OutputType::Sh);
