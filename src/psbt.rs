@@ -434,17 +434,14 @@ impl Psbt {
     /// and outputs i.e., the difference in value of the total inputs and the total outputs.
     pub fn fee(&self) -> Result<Amount, FeeError> {
         // For the inputs we have to get the value from the input UTXOs.
-        let mut input_value: u64 = 0;
-        for input in self.iter_funding_utxos() {
-            input_value =
-                input_value.checked_add(input?.value.to_sat()).ok_or(FeeError::InputOverflow)?;
-        }
+        let input_value = self.iter_funding_utxos().try_fold(0u64, |acc, input| {
+            let val = input?.value.to_sat();
+            acc.checked_add(val).ok_or(FeeError::InputOverflow)
+        })?;
         // For the outputs we have the value directly in the `Output`.
-        let mut output_value: u64 = 0;
-        for output in &self.outputs {
-            output_value =
-                output_value.checked_add(output.amount.to_sat()).ok_or(FeeError::OutputOverflow)?;
-        }
+        let output_value = self.outputs.iter().try_fold(0u64, |acc, output| {
+            acc.checked_add(output.amount.to_sat()).ok_or(FeeError::OutputOverflow)
+        })?;
 
         input_value.checked_sub(output_value).map(Amount::from_sat).ok_or(FeeError::Negative)
     }
