@@ -310,7 +310,6 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// Strictly creates the complete set of [`SignableInput`]s for every input.
     ///
     /// All-or-nothing: if any input fails its checks, returns the per-input errors and no signable
-    /// inputs.
     /// inputs. The returned [`AllSignableInputs`] proves every input was validated, which is what
     /// makes non-ANYONECANPAY taproot inputs signable through [`Self::get_all`].
     pub fn signable_inputs(
