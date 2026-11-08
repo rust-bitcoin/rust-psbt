@@ -62,7 +62,7 @@ impl Decoder for KeySourceDecoder {
     type Error = KeySourceDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        use DecoderState::*;
+        use DecoderState::{Errored, ReadingPrefix, ReadingValue};
 
         // Decode the compact-size length prefix.
         if matches!(self.state, ReadingPrefix(_)) {

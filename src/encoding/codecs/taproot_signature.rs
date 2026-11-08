@@ -86,7 +86,7 @@ impl Decoder for TaprootSignatureDecoder {
     type Error = TaprootSignatureDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        use DecoderState::*;
+        use DecoderState::{Errored, Reading64, Reading65, ReadingPrefix};
 
         if matches!(self.state, ReadingPrefix(_)) {
             let mut prefix = match core::mem::replace(&mut self.state, Errored) {
