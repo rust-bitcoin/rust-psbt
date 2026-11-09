@@ -4,7 +4,6 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
-use alloc::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -15,8 +14,7 @@ use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::{
-    sighash, Address, Network, Script, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness,
-    XOnlyPublicKey,
+    sighash, Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
 };
 use miniscript::{
     interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
@@ -109,48 +107,36 @@ impl Finalizer {
             .collect();
         let utxos = &Prevouts::All(&utxos);
         for (index, input) in psbt.inputs.iter().enumerate() {
-            Self::interpreter_check_input(
-                secp,
-                &unsigned_tx,
-                index,
-                input,
-                utxos,
-                input.final_script_witness.as_ref().unwrap_or(&Witness::default()),
-                input.final_script_sig.as_deref().unwrap_or(Script::new()),
-            )?;
+            let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+
+            // Use the resolved lock time from the unsigned transaction rather
+            // than per-input min_height/min_time fields, which may be None
+            // after a v0 roundtrip (the v0 format collapses them into the
+            // single nLockTime).
+            let cltv = unsigned_tx.lock_time;
+            // TODO: is this usage of MAX correct?
+            let csv = input.sequence.unwrap_or(Sequence::MAX);
+
+            let empty_witness = Witness::default();
+            let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
+
+            let empty_script = ScriptBuf::new();
+            let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
+
+            let interpreter = Interpreter::from_txdata(spk, script_sig, witness, csv, cltv)
+                .map_err(|error| {
+                    InterpreterCheckError::InterpreterCheckInput(
+                        InterpreterCheckInputError::Constructor { input_index: index, error },
+                    )
+                })?;
+
+            let iter = interpreter.iter(secp, &unsigned_tx, index, utxos);
+            if let Some(error) = iter.filter_map(Result::err).next() {
+                return Err(InterpreterCheckError::InterpreterCheckInput(
+                    InterpreterCheckInputError::Satisfaction { input_index: index, error },
+                ));
+            };
         }
-        Ok(())
-    }
-
-    /// Runs the miniscript interpreter on a single psbt input.
-    #[allow(clippy::too_many_arguments)]
-    fn interpreter_check_input<C: Verification, T: Borrow<TxOut>>(
-        secp: &Secp256k1<C>,
-        unsigned_tx: &Transaction,
-        index: usize,
-        input: &Input,
-        utxos: &Prevouts<T>,
-        witness: &Witness,
-        script_sig: &Script,
-    ) -> Result<(), InterpreterCheckInputError> {
-        let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
-
-        // Use the resolved lock time from the unsigned transaction rather than
-        // per-input min_height/min_time fields, which may be None after a v0 roundtrip.
-        let cltv = unsigned_tx.lock_time;
-        // TODO: is this usage of MAX correct?
-        let csv = input.sequence.unwrap_or(Sequence::MAX);
-
-        let interpreter =
-            Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
-                InterpreterCheckInputError::Constructor { input_index: index, error }
-            })?;
-
-        let iter = interpreter.iter(secp, unsigned_tx, index, utxos);
-        if let Some(error) = iter.filter_map(Result::err).next() {
-            return Err(InterpreterCheckInputError::Satisfaction { input_index: index, error });
-        };
-
         Ok(())
     }
 
