@@ -106,6 +106,8 @@ impl Finalizer {
             .map(|res| res.expect("finalized PSBT has funding utxos"))
             .collect();
         let utxos = &Prevouts::All(&utxos);
+        let empty_witness = Witness::default();
+        let empty_script = ScriptBuf::new();
         for (index, input) in psbt.inputs.iter().enumerate() {
             let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
 
@@ -117,10 +119,7 @@ impl Finalizer {
             // Assumed MAX if omitted.
             let csv = input.sequence.unwrap_or(Sequence::MAX);
 
-            let empty_witness = Witness::default();
             let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
-
-            let empty_script = ScriptBuf::new();
             let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
 
             let interpreter = Interpreter::from_txdata(spk, script_sig, witness, csv, cltv)
