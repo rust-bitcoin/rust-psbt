@@ -258,7 +258,7 @@ impl Psbt {
         let mut tx = self.unsigned_tx()?;
         // Updaters may change the sequence so to calculate ID we set it to zero.
         tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
-        tx.output = self.outputs.iter().map(|output| output.id_tx_out()).collect();
+        tx.output = self.outputs.iter().map(Output::id_tx_out).collect();
 
         Ok(tx.compute_txid())
     }
@@ -273,8 +273,8 @@ impl Psbt {
         Ok(Transaction {
             version: self.global.tx_version,
             lock_time,
-            input: self.inputs.iter().map(|input| input.unsigned_tx_in()).collect(),
-            output: self.outputs.iter().map(|ouput| ouput.tx_out()).collect(),
+            input: self.inputs.iter().map(Input::unsigned_tx_in).collect(),
+            output: self.outputs.iter().map(Output::tx_out).collect(),
         })
     }
 
@@ -283,19 +283,19 @@ impl Psbt {
     /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#determining-lock-time>
     pub fn determine_lock_time(&self) -> Result<absolute::LockTime, DetermineLockTimeError> {
         let require_time_based_lock_time =
-            self.inputs.iter().any(|input| input.requires_time_based_lock_time());
+            self.inputs.iter().any(Input::requires_time_based_lock_time);
         let require_height_based_lock_time =
-            self.inputs.iter().any(|input| input.requires_height_based_lock_time());
+            self.inputs.iter().any(Input::requires_height_based_lock_time);
 
         if require_time_based_lock_time && require_height_based_lock_time {
             return Err(DetermineLockTimeError);
         }
 
-        let have_lock_time = self.inputs.iter().any(|input| input.has_lock_time());
+        let have_lock_time = self.inputs.iter().any(Input::has_lock_time);
 
         let lock = if have_lock_time {
             let all_inputs_satisfied_with_height_based_lock_time =
-                self.inputs.iter().all(|input| input.is_satisfied_with_height_based_lock_time());
+                self.inputs.iter().all(Input::is_satisfied_with_height_based_lock_time);
 
             // > The lock time chosen is then the maximum value of the chosen type of lock time.
             if all_inputs_satisfied_with_height_based_lock_time {
@@ -314,7 +314,7 @@ impl Psbt {
                     .iter()
                     .map(|input| input.min_time)
                     .max()
-                    .expect("we know we have at least one non-none min_height field")
+                    .expect("we know we have at least one non-none min_time field")
                     .expect("so we know that max is non-none");
                 absolute::LockTime::from(time)
             }
@@ -329,7 +329,7 @@ impl Psbt {
     }
 
     /// Returns true if all inputs for this PSBT have been finalized.
-    pub fn is_finalized(&self) -> bool { self.inputs.iter().all(|input| input.is_finalized()) }
+    pub fn is_finalized(&self) -> bool { self.inputs.iter().all(Input::is_finalized) }
 
     /// Serializes a value as bytes in hex.
     pub fn serialize_hex(&self) -> String { self.serialize().to_lower_hex_string() }
@@ -373,7 +373,7 @@ impl Psbt {
     ///
     /// The function returns error when UTXO information is not present or is invalid.
     pub fn iter_funding_utxos(&self) -> impl Iterator<Item = Result<&TxOut, FundingUtxoError>> {
-        self.inputs.iter().map(|input| input.funding_utxo())
+        self.inputs.iter().map(Input::funding_utxo)
     }
 
     /// Combines this [`Psbt`] with `other` PSBT as described by BIP-174.
@@ -434,17 +434,14 @@ impl Psbt {
     /// and outputs i.e., the difference in value of the total inputs and the total outputs.
     pub fn fee(&self) -> Result<Amount, FeeError> {
         // For the inputs we have to get the value from the input UTXOs.
-        let mut input_value: u64 = 0;
-        for input in self.iter_funding_utxos() {
-            input_value =
-                input_value.checked_add(input?.value.to_sat()).ok_or(FeeError::InputOverflow)?;
-        }
+        let input_value = self.iter_funding_utxos().try_fold(0u64, |acc, input| {
+            let val = input?.value.to_sat();
+            acc.checked_add(val).ok_or(FeeError::InputOverflow)
+        })?;
         // For the outputs we have the value directly in the `Output`.
-        let mut output_value: u64 = 0;
-        for output in &self.outputs {
-            output_value =
-                output_value.checked_add(output.amount.to_sat()).ok_or(FeeError::OutputOverflow)?;
-        }
+        let output_value = self.outputs.iter().try_fold(0u64, |acc, output| {
+            acc.checked_add(output.amount.to_sat()).ok_or(FeeError::OutputOverflow)
+        })?;
 
         input_value.checked_sub(output_value).map(Amount::from_sat).ok_or(FeeError::Negative)
     }

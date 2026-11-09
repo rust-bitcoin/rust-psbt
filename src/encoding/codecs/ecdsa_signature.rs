@@ -88,12 +88,11 @@ impl Decoder for EcdsaSignatureDecoder {
     type Error = EcdsaSignatureDecodeError;
 
     fn push_bytes(&mut self, bytes: &mut &[u8]) -> Result<DecoderStatus, Self::Error> {
-        use DecoderState::*;
+        use DecoderState::{Errored, ReadingPrefix, ReadingValue};
 
         if matches!(self.state, ReadingPrefix(_)) {
-            let mut prefix = match core::mem::replace(&mut self.state, Errored) {
-                ReadingPrefix(p) => p,
-                _ => unreachable!(),
+            let ReadingPrefix(mut prefix) = core::mem::replace(&mut self.state, Errored) else {
+                unreachable!()
             };
             if prefix
                 .push_bytes(bytes)

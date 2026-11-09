@@ -130,9 +130,9 @@ impl PsbtSighashType {
     /// Returns `false` for non-standard sighash values, which fail
     /// [`Self::ecdsa_hash_ty`] anyway.
     pub fn is_none(self) -> bool {
-        self.ecdsa_hash_ty()
-            .map(|ty| matches!(ty, EcdsaSighashType::None | EcdsaSighashType::NonePlusAnyoneCanPay))
-            .unwrap_or(false)
+        self.ecdsa_hash_ty().is_ok_and(|ty| {
+            matches!(ty, EcdsaSighashType::None | EcdsaSighashType::NonePlusAnyoneCanPay)
+        })
     }
 
     /// True for `SIGHASH_SINGLE`, with or without `SIGHASH_ANYONECANPAY`.
@@ -142,9 +142,7 @@ impl PsbtSighashType {
     ///
     /// Returns `false` for non-standard sighash values, which fail
     /// [`Self::ecdsa_hash_ty`] anyway.
-    pub fn is_single(self) -> bool {
-        self.ecdsa_hash_ty().map(|ty| ty.is_single()).unwrap_or(false)
-    }
+    pub fn is_single(self) -> bool { self.ecdsa_hash_ty().is_ok_and(|ty| ty.is_single()) }
 }
 
 /// Error returned for failure during parsing one of the sighash types.

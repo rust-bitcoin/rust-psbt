@@ -213,10 +213,10 @@ impl Input {
         }
 
         if spk.is_p2sh() {
-            if self.redeem_script.as_ref().map(|s| s.is_p2wpkh()).unwrap_or(false) {
+            if self.redeem_script.as_ref().is_some_and(|s| s.is_p2wpkh()) {
                 return Ok(OutputType::ShWpkh);
             }
-            if self.redeem_script.as_ref().map(|x| x.is_p2wsh()).unwrap_or(false) {
+            if self.redeem_script.as_ref().is_some_and(|s| s.is_p2wsh()) {
                 return Ok(OutputType::ShWsh);
             }
             return Ok(OutputType::Sh);
@@ -451,9 +451,7 @@ impl Input {
     ///
     /// If the `sighash_type` field is set to a non-standard ECDSA sighash value.
     pub fn ecdsa_hash_ty(&self) -> Result<EcdsaSighashType, NonStandardSighashTypeError> {
-        self.sighash_type
-            .map(|sighash_type| sighash_type.ecdsa_hash_ty())
-            .unwrap_or(Ok(EcdsaSighashType::All))
+        self.sighash_type.map_or(Ok(EcdsaSighashType::All), PsbtSighashType::ecdsa_hash_ty)
     }
 
     /// Obtains the [`TapSighashType`] for this input if one is specified. If no sighash type is
@@ -463,9 +461,7 @@ impl Input {
     ///
     /// If the `sighash_type` field is set to an invalid Taproot sighash value.
     pub fn taproot_hash_ty(&self) -> Result<TapSighashType, InvalidSighashTypeError> {
-        self.sighash_type
-            .map(|sighash_type| sighash_type.taproot_hash_ty())
-            .unwrap_or(Ok(TapSighashType::Default))
+        self.sighash_type.map_or(Ok(TapSighashType::Default), PsbtSighashType::taproot_hash_ty)
     }
 
     /// Combines this [`Input`] with `other`.
