@@ -502,3 +502,48 @@ fn combine_utxo_conflicts() {
         err
     );
 }
+
+#[test]
+fn combine_rejects_cross_form_utxo_mismatch() {
+    let op = outpoint(b"in");
+
+    // A witness UTXO from one PSBT and a non-witness UTXO from the other must describe the same
+    // spent output: segwit and taproot signatures commit to the spent output's amount.
+    let mut input_a = Input::new(&op);
+    input_a.witness_utxo =
+        Some(TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new() });
+    let mut input_b = Input::new(&op);
+    let mut funding_tx = dummy_tx(b"funding tx");
+    funding_tx.output[0].value = Amount::from_sat(2_000);
+    input_b.non_witness_utxo = Some(funding_tx);
+
+    let psbt = |input| Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![input],
+        outputs: vec![dummy_output()],
+    };
+
+    // The check is symmetric: it fires regardless of which side carries which utxo form.
+    for err in [
+        psbt(input_a.clone()).combine_with(psbt(input_b.clone())).unwrap_err(),
+        psbt(input_b).combine_with(psbt(input_a)).unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                err,
+                CombineError::Input(input::CombineError::UtxoMismatch {
+                    ref witness,
+                    ref non_witness,
+                })
+                    if witness.value == Amount::from_sat(1_000)
+                        && non_witness.value == Amount::from_sat(2_000)
+            ),
+            "expected UtxoMismatch, got {:?}",
+            err
+        );
+    }
+}

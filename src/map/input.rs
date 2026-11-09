@@ -507,6 +507,34 @@ impl Input {
             }
         }
 
+        // `witness_utxo` and `non_witness_utxo`, once merged, must describe the same spent output
+        // An out-of-bounds index is not a combine conflict, so it's ignored.
+        let vout = usize::from(self.spent_output_index);
+        if let (Some(witness_utxo), Some(non_witness_utxo)) =
+            (&self.witness_utxo, &other.non_witness_utxo)
+        {
+            if let Some(non_witness_utxo) = non_witness_utxo.output.get(vout) {
+                if non_witness_utxo != witness_utxo {
+                    return Err(CombineError::UtxoMismatch {
+                        witness: witness_utxo.clone(),
+                        non_witness: non_witness_utxo.clone(),
+                    });
+                }
+            }
+        }
+        if let (Some(witness_utxo), Some(non_witness_utxo)) =
+            (&other.witness_utxo, &self.non_witness_utxo)
+        {
+            if let Some(non_witness_utxo) = non_witness_utxo.output.get(vout) {
+                if non_witness_utxo != witness_utxo {
+                    return Err(CombineError::UtxoMismatch {
+                        witness: witness_utxo.clone(),
+                        non_witness: non_witness_utxo.clone(),
+                    });
+                }
+            }
+        }
+
         // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
         // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
         // when combinging, an explicit Sequence::MAX is viewed as a decision by the user, and
@@ -1857,6 +1885,13 @@ pub enum CombineError {
         /// Into a PSBT spending `that` transaction.
         that: Txid,
     },
+    /// The witness UTXO and the non-witness UTXO describe different spent outputs.
+    UtxoMismatch {
+        /// The output in the `witness_utxo` field.
+        witness: TxOut,
+        /// The output at the spent output index of the `non_witness_utxo` transaction.
+        non_witness: TxOut,
+    },
 }
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1876,6 +1911,11 @@ impl fmt::Display for CombineError {
                 "combine two PSBTs with different non-witness UTXOs: {:?} {:?}",
                 this, that
             ),
+            Self::UtxoMismatch { ref witness, ref non_witness } => write!(
+                f,
+                "combine two PSBTs with conflicting witness and non-witness UTXOs: {:?} {:?}",
+                witness, non_witness
+            ),
         }
     }
 }
@@ -1887,7 +1927,8 @@ impl std::error::Error for CombineError {
             Self::PreviousTxidMismatch { .. }
             | Self::SpentOutputIndexMismatch { .. }
             | Self::WitnessUtxoMismatch { .. }
-            | Self::NonWitnessUtxoMismatch { .. } => None,
+            | Self::NonWitnessUtxoMismatch { .. }
+            | Self::UtxoMismatch { .. } => None,
         }
     }
 }
