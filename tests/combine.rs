@@ -547,3 +547,64 @@ fn combine_rejects_cross_form_utxo_mismatch() {
         );
     }
 }
+
+#[test]
+fn combine_rejects_inputs_len_mismatch() {
+    // Two PSBTs describing transactions with different input counts cannot describe the same
+    // transaction; the length pre-check rejects them before any field is merged.
+    let psbt_a = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![Input::new(&outpoint(b"in"))],
+        outputs: vec![dummy_output()],
+    };
+    let psbt_b = Psbt {
+        global: Global {
+            input_count: Count::from(2),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![Input::new(&outpoint(b"in")), Input::new(&outpoint(b"other in"))],
+        outputs: vec![dummy_output()],
+    };
+
+    let err = psbt_a.combine_with(psbt_b).unwrap_err();
+    assert!(
+        matches!(err, CombineError::InputsLenMismatch { this: 1, that: 2 }),
+        "expected InputsLenMismatch, got {:?}",
+        err
+    );
+}
+
+#[test]
+fn combine_rejects_outputs_len_mismatch() {
+    // Same for the output count.
+    let psbt_a = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(1),
+            ..Global::default()
+        },
+        inputs: vec![Input::new(&outpoint(b"in"))],
+        outputs: vec![dummy_output()],
+    };
+    let psbt_b = Psbt {
+        global: Global {
+            input_count: Count::from(1),
+            output_count: Count::from(2),
+            ..Global::default()
+        },
+        inputs: vec![Input::new(&outpoint(b"in"))],
+        outputs: vec![dummy_output(), dummy_output()],
+    };
+
+    let err = psbt_a.combine_with(psbt_b).unwrap_err();
+    assert!(
+        matches!(err, CombineError::OutputsLenMismatch { this: 1, that: 2 }),
+        "expected OutputsLenMismatch, got {:?}",
+        err
+    );
+}
