@@ -14,7 +14,7 @@ exclude = ["api", "tests", "contrib"]
 
 [package.metadata]
 rbmt.version = "0.5.4"
-rbmt.toolchains = { nightly = "nightly-2026-10-31", stable = "1.99.1" }
+rbmt.toolchains = { nightly = "nightly-2026-11-07", stable = "1.99.1" }
 rbmt.tools = { cargo-mutants = "27.1.0" }
 rbmt.lock.lockfiles = [ "minimal", "maximum" ]
 
