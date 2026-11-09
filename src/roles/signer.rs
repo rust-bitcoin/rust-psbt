@@ -2171,14 +2171,24 @@ mod test {
             use bitcoin::bip32::DerivationPath;
             use miniscript::descriptor::DescriptorSecretKey;
 
+            /// Expected outcome of a test case.
+            #[derive(Debug)]
+            enum Exp {
+                /// Expect the key derived at this path relative to the master key.
+                Key(&'static str),
+                /// Expect `Ok(None)`: the request path does not match the descriptor key.
+                NoMatch,
+                /// Expect `Err(GetKeyError::NotSupported)`.
+                NotSupported,
+            }
+
             struct TestCase {
                 name: &'static str,
                 /// Appended to the master_xprv.
                 key_suffix: &'static str,
                 /// Relative to the master key.
                 request_path: &'static str,
-                /// Expected key path, `None` for `NotSupported`.
-                exp_key_path: Option<&'static str>,
+                exp: Exp,
             }
 
             let cases = [
@@ -2186,37 +2196,49 @@ mod test {
                     name: "unhardened wildcard, unhardened step",
                     key_suffix: "/0/*",
                     request_path: "0/1",
-                    exp_key_path: Some("0/1"),
+                    exp: Exp::Key("0/1"),
                 },
                 TestCase {
                     name: "unhardened wildcard, hardened step",
                     key_suffix: "/0/*",
                     request_path: "0/1h",
-                    exp_key_path: None,
+                    exp: Exp::NotSupported,
                 },
                 TestCase {
                     name: "hardened wildcard, unhardened step",
                     key_suffix: "/0/*h",
                     request_path: "0/1",
-                    exp_key_path: None,
+                    exp: Exp::NotSupported,
                 },
                 TestCase {
                     name: "hardened wildcard, hardened step",
                     key_suffix: "/0/*h",
                     request_path: "0/1h",
-                    exp_key_path: Some("0/1h"),
+                    exp: Exp::Key("0/1h"),
                 },
                 TestCase {
                     name: "wildcard, empty request path",
                     key_suffix: "/*",
                     request_path: "",
-                    exp_key_path: None,
+                    exp: Exp::NotSupported,
                 },
                 TestCase {
                     name: "multipath wildcard, hardened step",
                     key_suffix: "/<0;1>/*",
                     request_path: "0/1h",
-                    exp_key_path: None,
+                    exp: Exp::NotSupported,
+                },
+                TestCase {
+                    name: "no wildcard, request path longer than key path",
+                    key_suffix: "",
+                    request_path: "9/7",
+                    exp: Exp::NoMatch,
+                },
+                TestCase {
+                    name: "wildcard, request path longer than key path plus one step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1/2",
+                    exp: Exp::NoMatch,
                 },
             ];
 
@@ -2236,15 +2258,16 @@ mod test {
                     test_case.request_path.parse::<DerivationPath>().unwrap(),
                 ));
 
-                match (test_case.exp_key_path, descriptor_sk.get_key(&key_request, &secp)) {
-                    (Some(path), Ok(Some(key))) => {
+                match (&test_case.exp, descriptor_sk.get_key(&key_request, &secp)) {
+                    (Exp::Key(path), Ok(Some(key))) => {
                         let exp = master_xprv
                             .derive_priv(&secp, &path.parse::<DerivationPath>().unwrap())
                             .unwrap()
                             .to_priv();
                         assert_eq!(key, exp, "{}", test_case.name);
                     }
-                    (None, Err(GetKeyError::NotSupported)) => {}
+                    (Exp::NoMatch, Ok(None)) => {}
+                    (Exp::NotSupported, Err(GetKeyError::NotSupported)) => {}
                     (exp, got) => panic!("{}: expected {:?}, got {:?}", test_case.name, exp, got),
                 }
             }
