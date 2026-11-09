@@ -23,7 +23,6 @@ use crate::roles::{Constructor, InputsOnlyModifiable, Modifiable, OutputsOnlyMod
 ///
 /// See `examples/v2-separate-creator-constructor.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Creator(Psbt);
 
 impl Creator {
