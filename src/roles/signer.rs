@@ -1594,6 +1594,23 @@ mod test {
     }
 
     #[test]
+    fn verify_rejects_existing_sig_differing_from_default_sighash_type() {
+        // Matches Bitcoin Core: with no declared type, existing signatures must use the default.
+        let pubkey = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let script_pubkey = ScriptBuf::new_p2wpkh(&pubkey.wpubkey_hash().unwrap());
+        let mut psbt = funded_psbt(TxOut { value: Amount::from_sat(1_000), script_pubkey });
+        psbt.inputs[0].partial_sigs.insert(
+            pubkey,
+            ecdsa::Signature {
+                signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::None,
+            },
+        );
+
+        assert_eq!(SignableInput::verify(&psbt, 0), Err(SignError::SighashMismatch));
+    }
+
+    #[test]
     fn assume_checked_accepts_sighash_single_with_output() {
         // SIGHASH_SINGLE with a matching output at the same index is accepted.
         let mut psbt = wpkh_psbt();
