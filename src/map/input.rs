@@ -440,6 +440,15 @@ impl Input {
         self.final_script_sig.is_some() || self.final_script_witness.is_some()
     }
 
+    /// Returns true if this input carries any signature data.
+    pub(crate) fn has_signature_data(&self) -> bool {
+        !self.partial_sigs.is_empty()
+            || self.tap_key_sig.is_some()
+            || !self.tap_script_sigs.is_empty()
+            || self.final_script_sig.is_some()
+            || self.final_script_witness.is_some()
+    }
+
     fn out_point(&self) -> OutPoint {
         OutPoint { txid: self.previous_txid, vout: u32::from(self.spent_output_index) }
     }
@@ -480,19 +489,61 @@ impl Input {
             });
         }
 
+        // A disagreement about which UTXO is being spent is never legitimate, signatures usually
+        // commit to the amount and scriptPubKey of the spent output, so merging signature data
+        // across PSBTs that carry conflicting UTXOs would produce invalid signatures.
+        if let (Some(this), Some(that)) = (&self.witness_utxo, &other.witness_utxo) {
+            if this != that {
+                return Err(CombineError::WitnessUtxoMismatch {
+                    this: this.clone(),
+                    that: that.clone(),
+                });
+            }
+        }
+        if let (Some(this), Some(that)) = (&self.non_witness_utxo, &other.non_witness_utxo) {
+            let (this, that) = (this.compute_txid(), that.compute_txid());
+            if this != that {
+                return Err(CombineError::NonWitnessUtxoMismatch { this, that });
+            }
+        }
+
+        // `witness_utxo` and `non_witness_utxo`, once merged, must describe the same spent output
+        // An out-of-bounds index is not a combine conflict, so it's ignored.
+        let vout = usize::from(self.spent_output_index);
+        if let (Some(witness_utxo), Some(non_witness_utxo)) =
+            (&self.witness_utxo, &other.non_witness_utxo)
+        {
+            if let Some(non_witness_utxo) = non_witness_utxo.output.get(vout) {
+                if non_witness_utxo != witness_utxo {
+                    return Err(CombineError::UtxoMismatch {
+                        witness: witness_utxo.clone(),
+                        non_witness: non_witness_utxo.clone(),
+                    });
+                }
+            }
+        }
+        if let (Some(witness_utxo), Some(non_witness_utxo)) =
+            (&other.witness_utxo, &self.non_witness_utxo)
+        {
+            if let Some(non_witness_utxo) = non_witness_utxo.output.get(vout) {
+                if non_witness_utxo != witness_utxo {
+                    return Err(CombineError::UtxoMismatch {
+                        witness: witness_utxo.clone(),
+                        non_witness: non_witness_utxo.clone(),
+                    });
+                }
+            }
+        }
+
         // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
         // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
-        // when combinging, an explicit Sequence::MAX is viewed as a decision by the user, and
+        // when combining, an explicit Sequence::MAX is viewed as a decision by the user, and
         // should not be assumed to be an unset default.
         v2_combine_option!(sequence, self, other);
         v2_combine_option!(min_time, self, other);
         v2_combine_option!(min_height, self, other);
         v2_combine_option!(non_witness_utxo, self, other);
-
-        if let (&None, Some(witness_utxo)) = (&self.witness_utxo, other.witness_utxo) {
-            self.witness_utxo = Some(witness_utxo);
-        }
-
+        v2_combine_option!(witness_utxo, self, other);
         v2_combine_map!(partial_sigs, self, other);
         v2_combine_option!(sighash_type, self, other);
         v2_combine_option!(redeem_script, self, other);
@@ -1880,6 +1931,27 @@ pub enum CombineError {
         /// Into a PSBT with `that` spent output index.
         that: u32,
     },
+    /// The witness UTXOs are not the same.
+    WitnessUtxoMismatch {
+        /// Attempted to combine a PSBT with `this` witness UTXO.
+        this: TxOut,
+        /// Into a PSBT with `that` witness UTXO.
+        that: TxOut,
+    },
+    /// The non-witness UTXOs are not the same transaction.
+    NonWitnessUtxoMismatch {
+        /// Attempted to combine a PSBT spending `this` transaction.
+        this: Txid,
+        /// Into a PSBT spending `that` transaction.
+        that: Txid,
+    },
+    /// The witness UTXO and the non-witness UTXO describe different spent outputs.
+    UtxoMismatch {
+        /// The output in the `witness_utxo` field.
+        witness: TxOut,
+        /// The output at the spent output index of the `non_witness_utxo` transaction.
+        non_witness: TxOut,
+    },
 }
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1892,6 +1964,18 @@ impl fmt::Display for CombineError {
                 "combine two PSBTs with different spent output indecies: {:?} {:?}",
                 this, that
             ),
+            Self::WitnessUtxoMismatch { ref this, ref that } =>
+                write!(f, "combine two PSBTs with different witness UTXOs: {:?} {:?}", this, that),
+            Self::NonWitnessUtxoMismatch { ref this, ref that } => write!(
+                f,
+                "combine two PSBTs with different non-witness UTXOs: {:?} {:?}",
+                this, that
+            ),
+            Self::UtxoMismatch { ref witness, ref non_witness } => write!(
+                f,
+                "combine two PSBTs with conflicting witness and non-witness UTXOs: {:?} {:?}",
+                witness, non_witness
+            ),
         }
     }
 }
@@ -1900,7 +1984,11 @@ impl fmt::Display for CombineError {
 impl std::error::Error for CombineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::PreviousTxidMismatch { .. } | Self::SpentOutputIndexMismatch { .. } => None,
+            Self::PreviousTxidMismatch { .. }
+            | Self::SpentOutputIndexMismatch { .. }
+            | Self::WitnessUtxoMismatch { .. }
+            | Self::NonWitnessUtxoMismatch { .. }
+            | Self::UtxoMismatch { .. } => None,
         }
     }
 }
@@ -2299,6 +2387,60 @@ mod test {
 
         assert_eq!(input.unsigned_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
         assert_eq!(input.signed_tx_in().sequence, Sequence::ENABLE_LOCKTIME_NO_RBF);
+    }
+
+    #[test]
+    fn has_signature_data_detects_each_signature_source() {
+        use bitcoin::secp256k1;
+
+        let input = Input::new(&out_point());
+        assert!(!input.has_signature_data());
+
+        let secp = secp256k1::Secp256k1::new();
+        let sk = secp256k1::SecretKey::from_slice(&[4u8; 32]).unwrap();
+        let secp_pk = sk.public_key(&secp);
+        let pk = PublicKey::new(secp_pk);
+        let (xonly, _parity) = secp_pk.x_only_public_key();
+
+        // ECDSA partial signature.
+        let mut input = Input::new(&out_point());
+        input.partial_sigs.insert(
+            pk,
+            ecdsa::Signature {
+                signature: secp256k1::ecdsa::Signature::from_compact(&[5u8; 64]).unwrap(),
+                sighash_type: EcdsaSighashType::All,
+            },
+        );
+        assert!(input.has_signature_data());
+
+        // Taproot key path signature.
+        let mut input = Input::new(&out_point());
+        input.tap_key_sig = Some(taproot::Signature {
+            signature: secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
+            sighash_type: TapSighashType::Default,
+        });
+        assert!(input.has_signature_data());
+
+        // Taproot script path signature.
+        let mut input = Input::new(&out_point());
+        input.tap_script_sigs.insert(
+            (xonly, TapLeafHash::from_slice(&[12u8; 32]).unwrap()),
+            taproot::Signature {
+                signature: secp256k1::schnorr::Signature::from_slice(&[13u8; 64]).unwrap(),
+                sighash_type: TapSighashType::Default,
+            },
+        );
+        assert!(input.has_signature_data());
+
+        // Final scriptSig.
+        let mut input = Input::new(&out_point());
+        input.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
+        assert!(input.has_signature_data());
+
+        // Final scriptWitness.
+        let mut input = Input::new(&out_point());
+        input.final_script_witness = Some(Witness::from_slice(&[vec![1u8]]));
+        assert!(input.has_signature_data());
     }
 
     #[test]

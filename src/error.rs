@@ -2,7 +2,6 @@
 
 use core::fmt;
 
-use bitcoin::bip32::Xpub;
 use bitcoin::sighash::{self, EcdsaSighashType, NonStandardSighashTypeError};
 use bitcoin::{transaction, PublicKey};
 use bitcoin_consensus_encoding::VecDecoderError;
@@ -417,22 +416,6 @@ impl std::error::Error for PartialSigsSighashTypeError {
             Self::WrongSighashFlag { .. } => None,
         }
     }
-}
-
-/// Error combining two PSBTs, global extended public key has inconsistent key sources.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct InconsistentKeySourcesError(pub Xpub);
-
-impl fmt::Display for InconsistentKeySourcesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "combining PSBT, key-source conflict for xpub {}", self.0)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InconsistentKeySourcesError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { None }
 }
 
 /// An error while calculating the fee.

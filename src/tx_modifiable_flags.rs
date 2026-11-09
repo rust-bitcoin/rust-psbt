@@ -94,6 +94,18 @@ impl TxModifiableFlags {
             self.set_sighash_single();
         }
     }
+
+    /// Merges the flags of two PSBTs being combined.
+    ///
+    /// All bits are ANDed (a part stays modifiable only if both PSBTs say so)
+    /// except the SIGHASH_SINGLE bit, which is ORed (set if either PSBT has it).
+    pub fn combine(&mut self, other: Self) {
+        let sighash_single = self.has_sighash_single() || other.has_sighash_single();
+        self.0 &= other.0;
+        if sighash_single {
+            self.set_sighash_single();
+        }
+    }
 }
 
 impl fmt::Display for TxModifiableFlags {
@@ -204,6 +216,27 @@ mod tests {
         assert!(f.is_inputs_modifiable());
         assert!(f.is_outputs_modifiable());
         assert!(!f.has_sighash_single());
+    }
+
+    #[test]
+    fn combine() {
+        // (self, other) -> expected. Modifiable bits are ANDed, SIGHASH_SINGLE is
+        // ORed, undefined bits are ANDed (cleared unless set in both).
+        let cases = [
+            // AND clears bits absent from other; OR keeps SIGHASH_SINGLE from one side.
+            (INPUTS_MODIFIABLE | SIGHASH_SINGLE, 0x00, SIGHASH_SINGLE),
+            // AND keeps bits set in both.
+            (INPUTS_MODIFIABLE, INPUTS_MODIFIABLE, INPUTS_MODIFIABLE),
+            // SIGHASH_SINGLE set in both stays set (OR, not XOR).
+            (SIGHASH_SINGLE, SIGHASH_SINGLE, SIGHASH_SINGLE),
+            // Undefined bits are ANDed, not kept from self.
+            (0b1000_0001, 0x01, 0x01),
+        ];
+        for (a, b, expected) in cases {
+            let mut flags = TxModifiableFlags(a);
+            flags.combine(TxModifiableFlags(b));
+            assert_eq!(flags.0, expected);
+        }
     }
 
     #[test]
