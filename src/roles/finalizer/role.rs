@@ -114,7 +114,7 @@ impl Finalizer {
             // after a v0 roundtrip (the v0 format collapses them into the
             // single nLockTime).
             let cltv = unsigned_tx.lock_time;
-            // TODO: is this usage of MAX correct?
+            // Assumed MAX if omitted.
             let csv = input.sequence.unwrap_or(Sequence::MAX);
 
             let empty_witness = Witness::default();

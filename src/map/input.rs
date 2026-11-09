@@ -74,7 +74,7 @@ pub struct Input {
     pub spent_output_index: Vout,
     /// The sequence number of this input.
     ///
-    /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]).
+    /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]) as stated in BIP-370.
     pub sequence: Option<Sequence>,
     /// The minimum Unix timestamp that this input requires to be set as the transaction's lock time.
     pub min_time: Option<absolute::Time>,
