@@ -25,9 +25,12 @@ jobs:
       - name: Open issue when new mutants are found
         if: steps.mutants.outputs.exit_code == '2'
         run: |
+          summary=$(cat mutants.out/missed.txt | wc -l)
           jq -n \
             --arg title "Mutants Found" \
-            --arg body "See the full list in the run log: ${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
+            --arg body "$summary outstanding mutants.
+
+          See the full list in the run log: ${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
             '{title: $title, body: $body}' | \
           curl -sSf \
             -X POST \
