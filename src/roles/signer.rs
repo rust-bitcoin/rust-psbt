@@ -17,6 +17,8 @@ use bitcoin::{
     ecdsa, taproot, PrivateKey, PublicKey, ScriptBuf, TapLeafHash, TapSighashType, Transaction,
     TxOut, Txid, XOnlyPublicKey,
 };
+#[cfg(feature = "miniscript")]
+use miniscript::descriptor::Wildcard;
 
 use crate::error::{write_err, DetermineLockTimeError};
 use crate::psbt::Psbt;
@@ -1146,6 +1148,105 @@ impl_get_key_for_xonly_map!(BTreeMap);
 #[cfg(feature = "std")]
 impl_get_key_for_xonly_map!(HashMap);
 
+#[cfg(feature = "miniscript")]
+impl GetKey for miniscript::descriptor::KeyMap {
+    type Error = GetKeyError;
+
+    fn get_key<C: Signing>(
+        &self,
+        key_request: &KeyRequest,
+        secp: &Secp256k1<C>,
+    ) -> Result<Option<PrivateKey>, Self::Error> {
+        Ok(self.clone().into_iter().find_map(|(_desc_pk, desc_sk)| -> Option<PrivateKey> {
+            match desc_sk.get_key(key_request, secp) {
+                Ok(Some(pk)) => Some(pk),
+                // When looking up keys in a map, we eat errors on individual keys, on
+                // the assumption that some other key in the map might not error.
+                Ok(None) | Err(_) => None,
+            }
+        }))
+    }
+}
+
+#[cfg(feature = "miniscript")]
+impl GetKey for miniscript::descriptor::DescriptorSecretKey {
+    type Error = GetKeyError;
+
+    fn get_key<C: Signing>(
+        &self,
+        key_request: &KeyRequest,
+        secp: &Secp256k1<C>,
+    ) -> Result<Option<PrivateKey>, Self::Error> {
+        match (self, key_request) {
+            (Self::Single(single_priv), key_request) => {
+                let sk = single_priv.key;
+                let pk = sk.public_key(secp);
+                let pubkey_map = BTreeMap::from([(pk, sk)]);
+                pubkey_map.get_key(key_request, secp)
+            }
+            (Self::XPrv(descriptor_xkey), KeyRequest::Pubkey(public_key)) => {
+                let xpriv = descriptor_xkey
+                    .xkey
+                    .derive_priv(secp, &descriptor_xkey.derivation_path)
+                    .map_err(GetKeyError::Bip32)?;
+                let pk = xpriv.private_key.public_key(secp);
+
+                if public_key.inner.eq(&pk) {
+                    Ok(Some(xpriv.to_priv()))
+                } else {
+                    Ok(None)
+                }
+            }
+            (Self::XPrv(descriptor_xkey), KeyRequest::Bip32(key_source)) => {
+                // A successful `matches()` already guarantees the requested key source's fingerprint equals our origin
+                // (or, when there is no origin, the xkey's own) fingerprint.
+                //
+                // `xkey` is anchored at the origin, but the request path is master-relative, either:
+                // - origin: strip the origin prefix and use the remaining suffix.
+                // - no origin: use the full request path.
+                let (_, full_path) = key_source;
+                let derivation_path = match descriptor_xkey.matches(key_source, secp) {
+                    Some(_) => match &descriptor_xkey.origin {
+                        Some((_, origin_path)) => &full_path[origin_path.len()..],
+                        None => full_path.as_ref(),
+                    },
+                    None => return Ok(None),
+                };
+
+                let last_step = full_path.as_ref().last();
+                let request_matches_wildcard_hardening = match descriptor_xkey.wildcard {
+                    Wildcard::None => true,
+                    Wildcard::Unhardened => last_step.is_some_and(|step| step.is_normal()),
+                    Wildcard::Hardened => last_step.is_some_and(|step| step.is_hardened()),
+                };
+
+                if !request_matches_wildcard_hardening {
+                    return Err(GetKeyError::NotSupported);
+                }
+
+                Ok(Some(
+                    descriptor_xkey
+                        .xkey
+                        .derive_priv(secp, &derivation_path)
+                        .map_err(GetKeyError::Bip32)?
+                        .to_priv(),
+                ))
+            }
+            (Self::XPrv(_), KeyRequest::XOnlyPubkey(_)) => Err(GetKeyError::NotSupported),
+            (desc_multi_sk @ Self::MultiXPrv(_), _) => {
+                for desc_sk in &desc_multi_sk.clone().into_single_keys() {
+                    // If any key is an error, then all of them will, so here we propagate errors
+                    // with `?`.
+                    if let Some(pk) = desc_sk.get_key(key_request, secp)? {
+                        return Ok(Some(pk));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+}
+
 /// Errors when getting a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1879,12 +1980,18 @@ mod test {
         );
     }
 
-    #[cfg(all(feature = "rand", feature = "std"))]
+    #[cfg(all(feature = "miniscript", feature = "rand", feature = "std"))]
     mod get_key {
-        #[cfg(any(feature = "miniscript", all(feature = "rand", feature = "std")))]
+        use std::format;
+        use std::str::FromStr;
+
+        use bitcoin::bip32::{ChildNumber, DerivationPath, IntoDerivationPath, Xpriv};
+        use bitcoin::secp256k1::{Secp256k1, Signing};
+        use bitcoin::PrivateKey;
+        use miniscript::descriptor::{Descriptor, DescriptorSecretKey};
+
         use super::*;
 
-        #[cfg(all(feature = "rand", feature = "std"))]
         fn gen_keys() -> (PrivateKey, PublicKey, Secp256k1<bitcoin::secp256k1::All>) {
             use bitcoin::secp256k1::{rand, SecretKey};
             use bitcoin::Network;
@@ -1898,7 +2005,6 @@ mod test {
         }
 
         #[test]
-        #[cfg(all(feature = "rand", feature = "std"))]
         fn pubkey_map_get_key_negates_odd_parity_keys() {
             let (mut priv_key, mut pk, secp) = gen_keys();
             let (xonly, parity) = pk.inner.x_only_public_key();
@@ -1932,7 +2038,6 @@ mod test {
         }
 
         #[test]
-        #[cfg(feature = "miniscript")]
         fn xpriv_bip32_request_succeeds() {
             use bitcoin::bip32::DerivationPath;
             use bitcoin::Network;
@@ -1956,7 +2061,6 @@ mod test {
         }
 
         #[test]
-        #[cfg(feature = "miniscript")]
         fn xpriv_bip32_request_wrong_first_segment() {
             use bitcoin::bip32::DerivationPath;
             use bitcoin::Network;
@@ -1979,7 +2083,6 @@ mod test {
         }
 
         #[test]
-        #[cfg(feature = "miniscript")]
         fn xpriv_bip32_request_fp_mismatch() {
             use bitcoin::bip32::DerivationPath;
             use bitcoin::Network;
@@ -2000,6 +2103,350 @@ mod test {
 
             // Fingerprint mismatch but path nonempty and first segment matches child_number.
             assert_eq!(derived_key, None);
+        }
+
+        #[test]
+        fn get_key_xpriv_with_key_origin_and_derivation_path() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::descriptor::DescriptorSecretKey;
+            use miniscript::hex::hex;
+
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let master_xprv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let fingerprint = master_xprv.fingerprint(&secp);
+
+            // An account-level xprv with origin info and a wildcard: the xprv is anchored
+            // at `m/84'/0'` while the request path is master-relative.
+            let account_xprv = master_xprv
+                .derive_priv(&secp, &"m/84'/0'".parse::<DerivationPath>().unwrap())
+                .unwrap();
+            let descriptor_sk = format!("[{}/84'/0']{}/0/*", fingerprint, account_xprv)
+                .parse::<DescriptorSecretKey>()
+                .unwrap();
+
+            let request_path: DerivationPath = "m/84'/0'/0/5".parse().unwrap();
+
+            let expected = master_xprv.derive_priv(&secp, &request_path).unwrap().to_priv();
+
+            let key_request = KeyRequest::Bip32((fingerprint, request_path));
+
+            assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), Some(expected));
+        }
+
+        #[test]
+        fn get_key_xpriv_rejects_sibling_path() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use bitcoin::Network;
+            use miniscript::descriptor::DescriptorSecretKey;
+            use miniscript::hex::hex;
+
+            let secp = Secp256k1::new();
+
+            let seed = hex!("000102030405060708090a0b0c0d0e0f");
+            let master_xprv: Xpriv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+
+            let descriptor_sk =
+                format!("{}/0/*", master_xprv).parse::<DescriptorSecretKey>().unwrap();
+
+            // The request fingerprint matches the xprv itself, but `m/9/7` is a sibling of
+            // the descriptor's `0/*` branch.
+            let request_path: DerivationPath = "m/9/7".parse().unwrap();
+            let key_request = KeyRequest::Bip32((master_xprv.fingerprint(&secp), request_path));
+
+            assert_eq!(descriptor_sk.get_key(&key_request, &secp).unwrap(), None);
+        }
+
+        #[test]
+        fn get_key_xpriv_checks_wildcard_step() {
+            use alloc::format;
+
+            use bitcoin::bip32::DerivationPath;
+            use miniscript::descriptor::DescriptorSecretKey;
+
+            /// Expected outcome of a test case.
+            #[derive(Debug)]
+            enum Exp {
+                /// Expect the key derived at this path relative to the master key.
+                Key(&'static str),
+                /// Expect `Ok(None)`: the request path does not match the descriptor key.
+                NoMatch,
+                /// Expect `Err(GetKeyError::NotSupported)`.
+                NotSupported,
+            }
+
+            struct TestCase {
+                name: &'static str,
+                /// Appended to the master_xprv.
+                key_suffix: &'static str,
+                /// Relative to the master key.
+                request_path: &'static str,
+                exp: Exp,
+            }
+
+            let cases = [
+                TestCase {
+                    name: "unhardened wildcard, unhardened step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1",
+                    exp: Exp::Key("0/1"),
+                },
+                TestCase {
+                    name: "unhardened wildcard, hardened step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1h",
+                    exp: Exp::NotSupported,
+                },
+                TestCase {
+                    name: "hardened wildcard, unhardened step",
+                    key_suffix: "/0/*h",
+                    request_path: "0/1",
+                    exp: Exp::NotSupported,
+                },
+                TestCase {
+                    name: "hardened wildcard, hardened step",
+                    key_suffix: "/0/*h",
+                    request_path: "0/1h",
+                    exp: Exp::Key("0/1h"),
+                },
+                TestCase {
+                    name: "wildcard, empty request path",
+                    key_suffix: "/*",
+                    request_path: "",
+                    exp: Exp::NotSupported,
+                },
+                TestCase {
+                    name: "multipath wildcard, hardened step",
+                    key_suffix: "/<0;1>/*",
+                    request_path: "0/1h",
+                    exp: Exp::NotSupported,
+                },
+                TestCase {
+                    name: "no wildcard, request path longer than key path",
+                    key_suffix: "",
+                    request_path: "9/7",
+                    exp: Exp::NoMatch,
+                },
+                TestCase {
+                    name: "wildcard, request path longer than key path plus one step",
+                    key_suffix: "/0/*",
+                    request_path: "0/1/2",
+                    exp: Exp::NoMatch,
+                },
+            ];
+
+            let secp = Secp256k1::new();
+            let master_xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+                .parse::<Xpriv>()
+                .unwrap();
+            let fingerprint = master_xprv.fingerprint(&secp);
+
+            for test_case in &cases {
+                let descriptor_sk = format!("{}{}", master_xprv, test_case.key_suffix)
+                    .parse::<DescriptorSecretKey>()
+                    .unwrap();
+
+                let key_request = KeyRequest::Bip32((
+                    fingerprint,
+                    test_case.request_path.parse::<DerivationPath>().unwrap(),
+                ));
+
+                match (&test_case.exp, descriptor_sk.get_key(&key_request, &secp)) {
+                    (Exp::Key(path), Ok(Some(key))) => {
+                        let exp = master_xprv
+                            .derive_priv(&secp, &path.parse::<DerivationPath>().unwrap())
+                            .unwrap()
+                            .to_priv();
+                        assert_eq!(key, exp, "{}", test_case.name);
+                    }
+                    (Exp::NoMatch, Ok(None)) => {}
+                    (Exp::NotSupported, Err(GetKeyError::NotSupported)) => {}
+                    (exp, got) => panic!("{}: expected {:?}, got {:?}", test_case.name, exp, got),
+                }
+            }
+        }
+
+        /// GetKey on a `KeyMap` built from `descriptor`, returning the private key for `request`.
+        fn keymap_get_key<C: Signing>(
+            descriptor: &str,
+            request: &KeyRequest,
+            secp: &Secp256k1<C>,
+        ) -> Result<Option<PrivateKey>, crate::GetKeyError> {
+            let (_, keymap) = Descriptor::parse_descriptor(secp, descriptor).unwrap();
+            keymap.get_key(request, secp)
+        }
+
+        #[test]
+        fn get_key_single_key() {
+            let secp = Secp256k1::new();
+
+            let descriptor_sk_s =
+                "[90b6a706/44'/0'/0'/0/0]cMk8gWmj1KpjdYnAWwsEDekodMYhbyYBhG8gMtCCxucJ98JzcNij";
+
+            let single = match descriptor_sk_s.parse::<DescriptorSecretKey>().unwrap() {
+                DescriptorSecretKey::Single(single) => single,
+                _ => panic!("unexpected DescriptorSecretKey variant"),
+            };
+
+            let want_sk = single.key;
+            let descriptor_s = format!("wpkh({})", descriptor_sk_s);
+
+            let pk = want_sk.public_key(&secp);
+            let request = KeyRequest::Pubkey(pk);
+            let got_sk = keymap_get_key(&descriptor_s, &request, &secp)
+                .expect("get_key call errored")
+                .expect("failed to find the key");
+            assert_eq!(got_sk, want_sk)
+        }
+
+        #[test]
+        fn get_key_xpriv_child_depth_one() {
+            let secp = Secp256k1::new();
+
+            let s = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+            let master = s.parse::<Xpriv>().unwrap();
+
+            let child_number = ChildNumber::from_hardened_idx(44).unwrap();
+            let child = master.derive_priv(&secp, &[child_number]).unwrap();
+
+            let want_sk = child.to_priv();
+            let descriptor_s = format!("wpkh({}/44')", s);
+
+            let pk = want_sk.public_key(&secp);
+            let request = KeyRequest::Pubkey(pk);
+            let got_sk = keymap_get_key(&descriptor_s, &request, &secp)
+                .expect("get_key call errored")
+                .expect("failed to find the key");
+            assert_eq!(got_sk, want_sk)
+        }
+
+        #[test]
+        fn get_key_xpriv_with_path() {
+            let secp = Secp256k1::new();
+
+            let s = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+            let master = s.parse::<Xpriv>().unwrap();
+
+            let first_external_child = "44'/0'/0'/0/0";
+            let derivation_path = first_external_child.into_derivation_path().unwrap();
+            let child = master.derive_priv(&secp, &derivation_path).unwrap();
+
+            let want_sk = child.to_priv();
+            let descriptor_s = format!("wpkh({}/44'/0'/0'/0/*)", s);
+
+            let key_source = (master.fingerprint(&secp), derivation_path);
+            let request = KeyRequest::Bip32(key_source);
+            let got_sk = keymap_get_key(&descriptor_s, &request, &secp)
+                .expect("get_key call errored")
+                .expect("failed to find the key");
+
+            assert_eq!(got_sk, want_sk)
+        }
+
+        #[test]
+        fn get_key_xpriv_with_key_origin() {
+            let secp = Secp256k1::new();
+
+            let descriptor_str = "wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)";
+            let descriptor_sk = DescriptorSecretKey::from_str("[d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*").unwrap();
+            let xpriv = match descriptor_sk {
+                DescriptorSecretKey::XPrv(descriptor_xkey) => descriptor_xkey,
+                _ => unreachable!(),
+            };
+
+            let expected_deriv_path: DerivationPath =
+                (&[ChildNumber::Normal { index: 0 }][..]).into();
+            let expected_pk =
+                xpriv.xkey.derive_priv(&secp, &expected_deriv_path).unwrap().to_priv();
+
+            let derivation_path = DerivationPath::from_str("84'/1'/0'/0").unwrap();
+            let (fp, _) = xpriv.origin.unwrap();
+            let request = KeyRequest::Bip32((fp, derivation_path));
+
+            let pk = keymap_get_key(descriptor_str, &request, &secp)
+                .expect("get_key should not fail")
+                .expect("get_key should return a `PrivateKey`");
+
+            assert_eq!(pk, expected_pk);
+        }
+
+        #[test]
+        fn get_key_keymap_no_match() {
+            let secp = Secp256k1::new();
+
+            // Create a keymap with one key.
+            let descriptor_s = "wpkh(cMk8gWmj1KpjdYnAWwsEDekodMYhbyYBhG8gMtCCxucJ98JzcNij)";
+
+            // Request a different public key that doesn't exist in the keymap.
+            let different_sk =
+                PrivateKey::from_str("cNJFgo1driFnPcBdBX8BrJrpxchBWXwXCvNH5SoSkdcF6JXXwHMm")
+                    .unwrap();
+            let different_pk = different_sk.public_key(&secp);
+            let request = KeyRequest::Pubkey(different_pk);
+
+            let result = keymap_get_key(descriptor_s, &request, &secp).unwrap();
+            assert!(result.is_none(), "Should return None when no matching key is found");
+        }
+
+        #[test]
+        fn get_key_descriptor_secret_key_xonly_not_supported() {
+            let secp = Secp256k1::new();
+
+            let descriptor_sk = DescriptorSecretKey::from_str("xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi").unwrap();
+
+            // Create an x-only public key request.
+            let sk = PrivateKey::from_str("cMk8gWmj1KpjdYnAWwsEDekodMYhbyYBhG8gMtCCxucJ98JzcNij")
+                .unwrap();
+            let xonly_pk = sk.public_key(&secp).inner.x_only_public_key().0;
+            let request = KeyRequest::XOnlyPubkey(xonly_pk);
+
+            let result = descriptor_sk.get_key(&request, &secp);
+            assert!(matches!(result, Err(crate::GetKeyError::NotSupported)));
+
+            // Also test with a KeyMap.
+            let descriptor_s = "wpkh(xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi)";
+            // While requesting an x-only key from an individual xprv, that's an error. But from a
+            // keymap, which might have both x-only keys and regular xprvs, we treat errors as
+            // "key not found".
+            let result = keymap_get_key(descriptor_s, &request, &secp);
+            assert!(matches!(result, Ok(None)));
+        }
+
+        #[test]
+        fn get_key_descriptor_secret_key_xonly_multipath() {
+            let secp = Secp256k1::new();
+
+            let descriptor_sk = DescriptorSecretKey::from_str("[d34db33f/84h/0h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/<0;1>").unwrap();
+
+            // Request with a different fingerprint.
+            let different_fingerprint = bitcoin::bip32::Fingerprint::from([0x12, 0x34, 0x56, 0x78]);
+            let path = DerivationPath::from_str("84'/1'/0'/0").unwrap();
+            let request = KeyRequest::Bip32((different_fingerprint, path));
+
+            let result = descriptor_sk.get_key(&request, &secp).unwrap();
+            assert!(result.is_none(), "Should return None when fingerprint doesn't match");
+
+            // Create an x-only public key request -- now we get "not supported".
+            let sk = PrivateKey::from_str("cMk8gWmj1KpjdYnAWwsEDekodMYhbyYBhG8gMtCCxucJ98JzcNij")
+                .unwrap();
+            let xonly_pk = sk.public_key(&secp).inner.x_only_public_key().0;
+            let request_x = KeyRequest::XOnlyPubkey(xonly_pk);
+
+            let result = descriptor_sk.get_key(&request_x, &secp);
+            assert!(matches!(result, Err(crate::GetKeyError::NotSupported)));
+
+            // Also test with a KeyMap; as in the previous test, the error turns to None.
+            let descriptor_s = "wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/<0;1>/*)";
+            let result = keymap_get_key(descriptor_s, &request, &secp).unwrap();
+            assert!(result.is_none(), "Should return None when fingerprint doesn't match");
+            let result = keymap_get_key(descriptor_s, &request_x, &secp).unwrap();
+            assert!(result.is_none(), "Should return None even on error");
         }
     }
 }
