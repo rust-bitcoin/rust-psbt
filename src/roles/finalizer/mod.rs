@@ -21,93 +21,18 @@
 mod role;
 mod satisfy;
 
-use alloc::borrow::Borrow;
 use alloc::vec::Vec;
 use core::fmt;
 
 use bitcoin::consensus::encode::VarInt;
-use bitcoin::secp256k1::{Secp256k1, Verification};
-use bitcoin::sighash::Prevouts;
-use bitcoin::{Script, Sequence, Transaction, TxOut, Witness};
 use miniscript::miniscript::satisfy::Placeholder;
-use miniscript::{interpreter, Interpreter, MiniscriptKey};
+use miniscript::{interpreter, MiniscriptKey};
 
 use crate::error::write_err;
-use crate::map::input::Input;
-use crate::psbt::Psbt;
 use crate::DetermineLockTimeError;
 
 #[rustfmt::skip]                // Keep public exports separate.
 pub use self::role::{InputError, Finalizer, FinalizeError, FinalizeInputError};
-
-impl Psbt {
-    // TODO: Should this be on a Role? Finalizer/Extractor? Then we can remove the debug_assert
-    /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
-    /// to the context.
-    ///
-    /// The psbt must have included final script sig and final witness. In other words, this checks
-    /// whether the finalized psbt interprets correctly
-    pub fn interpreter_check<C: Verification>(
-        &self,
-        secp: &Secp256k1<C>,
-    ) -> Result<(), InterpreterCheckError> {
-        debug_assert!(self.is_finalized());
-
-        let unsigned_tx = self.unsigned_tx()?; // Used to verify signatures.
-
-        let utxos: Vec<&TxOut> = self
-            .iter_funding_utxos()
-            .map(|res| res.expect("finalized PSBT has funding utxos"))
-            .collect();
-        let utxos = &Prevouts::All(&utxos);
-        // Inputs spending legacy outputs have no final script witness, and vice versa for the
-        // final script sig of witness spends.
-        for (index, input) in self.inputs.iter().enumerate() {
-            self.interpreter_check_input(
-                secp,
-                &unsigned_tx,
-                index,
-                input,
-                utxos,
-                input.final_script_witness.as_ref().unwrap_or(&Witness::default()),
-                input.final_script_sig.as_deref().unwrap_or(Script::new()),
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Runs the miniscript interpreter on a single psbt input.
-    #[allow(clippy::too_many_arguments)] // TODO: Remove this.
-    fn interpreter_check_input<C: Verification, T: Borrow<TxOut>>(
-        &self,
-        secp: &Secp256k1<C>,
-        unsigned_tx: &Transaction,
-        index: usize,
-        input: &Input,
-        utxos: &Prevouts<T>,
-        witness: &Witness,
-        script_sig: &Script,
-    ) -> Result<(), InterpreterCheckInputError> {
-        let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
-
-        let cltv = unsigned_tx.lock_time;
-        // TODO: is this usage of MAX correct?
-        let csv = input.sequence.unwrap_or(Sequence::MAX);
-
-        let interpreter =
-            Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
-                InterpreterCheckInputError::Constructor { input_index: index, error }
-            })?;
-
-        let iter = interpreter.iter(secp, unsigned_tx, index, utxos);
-        // TODO: Ok to just return the first satisfaction error?
-        if let Some(error) = iter.filter_map(Result::err).next() {
-            return Err(InterpreterCheckInputError::Satisfaction { input_index: index, error });
-        };
-
-        Ok(())
-    }
-}
 
 pub(crate) trait ItemSize {
     fn size(&self) -> usize;
@@ -233,12 +158,15 @@ mod tests {
 
     use bitcoin::bip32::{IntoDerivationPath, Xpriv};
     use bitcoin::hashes::Hash as _;
-    use bitcoin::{absolute, Amount, OutPoint, PublicKey, ScriptBuf, TxOut, Txid};
+    use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::{absolute, Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut, Txid};
     use miniscript::{Miniscript, Segwitv0};
 
     use super::*;
+    use crate::map::input::Input;
+    use crate::psbt::Psbt;
     use crate::roles::{Creator, Signer};
-    use crate::{Count, Input, Output, RequiredHeightLockTime};
+    use crate::{Count, Output, RequiredHeightLockTime};
 
     const TEST_XPRIV: &str =
         "xprv9s21ZrQH143K3GJpoapnV8SFfukcVBSfeCficPSGfubmSFDxo1kuHnLisriDvSnRRuL2Qrg5ggqHKNVpxR86QEC8w35uxmGoggxtQTPvfUu";
@@ -388,7 +316,7 @@ mod tests {
         let mut finalized = finalizer.finalize(&secp).expect("valid psbt must finalize");
 
         // A correctly finalized PSBT passes the interpreter check.
-        finalized.interpreter_check(&secp).expect("valid finalized psbt must pass");
+        Finalizer::interpreter_check(&finalized, &secp).expect("valid finalized psbt must pass");
 
         // Tamper with the final script witness so the interpreter rejects the input.
         let witness = finalized.inputs[0].final_script_witness.as_mut().unwrap();
@@ -396,7 +324,10 @@ mod tests {
         witness.push([1u8; 64]); // garbage "signature"
         witness.push(pk_bytes);
 
-        assert!(finalized.interpreter_check(&secp).is_err(), "tampered witness must be rejected");
+        assert!(
+            Finalizer::interpreter_check(&finalized, &secp).is_err(),
+            "tampered witness must be rejected"
+        );
     }
 
     #[test]

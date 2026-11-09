@@ -4,6 +4,7 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+use alloc::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -11,15 +12,19 @@ use core::fmt;
 
 use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
+use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{sighash, Address, Network, Script, ScriptBuf, Txid, Witness, XOnlyPublicKey};
+use bitcoin::{
+    sighash, Address, Network, Script, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness,
+    XOnlyPublicKey,
+};
 use miniscript::{
-    interpreter, BareCtx, Descriptor, Legacy, Miniscript, Satisfier, Segwitv0, SigType, Tap,
-    ToPublicKey,
+    interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
+    SigType, Tap, ToPublicKey,
 };
 
 use super::satisfy::InputSatisfier;
-use super::InterpreterCheckError;
+use super::{InterpreterCheckError, InterpreterCheckInputError};
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt};
@@ -83,8 +88,68 @@ impl Finalizer {
         let finalized =
             Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() };
 
-        finalized.interpreter_check(secp)?;
+        Self::interpreter_check(&finalized, secp)?;
         Ok(finalized)
+    }
+
+    /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
+    /// to the context.
+    ///
+    /// The psbt must have included final script sig and final witness. In other words, this checks
+    /// whether the finalized psbt interprets correctly.
+    pub(crate) fn interpreter_check<C: Verification>(
+        psbt: &Psbt,
+        secp: &Secp256k1<C>,
+    ) -> Result<(), InterpreterCheckError> {
+        let unsigned_tx = psbt.unsigned_tx()?;
+
+        let utxos: Vec<&TxOut> = psbt
+            .iter_funding_utxos()
+            .map(|res| res.expect("finalized PSBT has funding utxos"))
+            .collect();
+        let utxos = &Prevouts::All(&utxos);
+        for (index, input) in psbt.inputs.iter().enumerate() {
+            Self::interpreter_check_input(
+                secp,
+                &unsigned_tx,
+                index,
+                input,
+                utxos,
+                input.final_script_witness.as_ref().unwrap_or(&Witness::default()),
+                input.final_script_sig.as_deref().unwrap_or(Script::new()),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Runs the miniscript interpreter on a single psbt input.
+    #[allow(clippy::too_many_arguments)]
+    fn interpreter_check_input<C: Verification, T: Borrow<TxOut>>(
+        secp: &Secp256k1<C>,
+        unsigned_tx: &Transaction,
+        index: usize,
+        input: &Input,
+        utxos: &Prevouts<T>,
+        witness: &Witness,
+        script_sig: &Script,
+    ) -> Result<(), InterpreterCheckInputError> {
+        let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+
+        let cltv = unsigned_tx.lock_time;
+        // TODO: is this usage of MAX correct?
+        let csv = input.sequence.unwrap_or(Sequence::MAX);
+
+        let interpreter =
+            Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
+                InterpreterCheckInputError::Constructor { input_index: index, error }
+            })?;
+
+        let iter = interpreter.iter(secp, unsigned_tx, index, utxos);
+        if let Some(error) = iter.filter_map(Result::err).next() {
+            return Err(InterpreterCheckInputError::Satisfaction { input_index: index, error });
+        };
+
+        Ok(())
     }
 
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
