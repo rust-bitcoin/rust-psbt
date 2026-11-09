@@ -135,6 +135,8 @@ impl Finalizer {
     ) -> Result<(), InterpreterCheckInputError> {
         let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
 
+        // Use the resolved lock time from the unsigned transaction rather than
+        // per-input min_height/min_time fields, which may be None after a v0 roundtrip.
         let cltv = unsigned_tx.lock_time;
         // TODO: is this usage of MAX correct?
         let csv = input.sequence.unwrap_or(Sequence::MAX);
