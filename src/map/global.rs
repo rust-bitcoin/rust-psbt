@@ -211,18 +211,42 @@ impl DecoderStage {
     /// Select the appropriate value-decoding stage based on the decoded key.
     fn from_key(key: Key) -> Result<Self, GlobalDecodeError> {
         match key.type_value {
-            PSBT_GLOBAL_VERSION =>
-                Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
-            PSBT_GLOBAL_TX_VERSION =>
-                Ok(Self::DecodingTxVersion { key, decoder: TxVersionValueDecoder::default() }),
-            PSBT_GLOBAL_FALLBACK_LOCKTIME =>
-                Ok(Self::DecodingLockTime { key, decoder: FallbackLockTimeValueDecoder::default() }),
-            PSBT_GLOBAL_INPUT_COUNT =>
-                Ok(Self::DecodingInputCount { key, decoder: CountValueDecoder::default() }),
-            PSBT_GLOBAL_OUTPUT_COUNT =>
-                Ok(Self::DecodingOutputCount { key, decoder: CountValueDecoder::default() }),
-            PSBT_GLOBAL_TX_MODIFIABLE =>
-                Ok(Self::DecodingTxModifiable { key, decoder: FlagsValueDecoder::default() }),
+            PSBT_GLOBAL_VERSION => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() })
+            }
+            PSBT_GLOBAL_TX_VERSION => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTxVersion { key, decoder: TxVersionValueDecoder::default() })
+            }
+            PSBT_GLOBAL_FALLBACK_LOCKTIME => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingLockTime { key, decoder: FallbackLockTimeValueDecoder::default() })
+            }
+            PSBT_GLOBAL_INPUT_COUNT => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingInputCount { key, decoder: CountValueDecoder::default() })
+            }
+            PSBT_GLOBAL_OUTPUT_COUNT => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingOutputCount { key, decoder: CountValueDecoder::default() })
+            }
+            PSBT_GLOBAL_TX_MODIFIABLE => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTxModifiable { key, decoder: FlagsValueDecoder::default() })
+            }
             PSBT_GLOBAL_XPUB =>
                 Ok(Self::DecodingXpub { key, decoder: KeySourceDecoder::default() }),
             PSBT_GLOBAL_PROPRIETARY =>
@@ -983,5 +1007,41 @@ mod tests {
             "expected Xpub error for xpub value too short, got {:?}",
             res,
         );
+    }
+
+    #[test]
+    fn key_data_validation() {
+        let cases: &[(u64, bool)] = &[
+            (PSBT_GLOBAL_VERSION, true),
+            (PSBT_GLOBAL_TX_VERSION, true),
+            (PSBT_GLOBAL_FALLBACK_LOCKTIME, true),
+            (PSBT_GLOBAL_INPUT_COUNT, true),
+            (PSBT_GLOBAL_OUTPUT_COUNT, true),
+            (PSBT_GLOBAL_TX_MODIFIABLE, true),
+            (PSBT_GLOBAL_XPUB, false),
+            (PSBT_GLOBAL_PROPRIETARY, false),
+            #[cfg(feature = "silent-payments")]
+            (PSBT_GLOBAL_SP_ECDH_SHARE, false),
+            #[cfg(feature = "silent-payments")]
+            (PSBT_GLOBAL_SP_DLEQ, false),
+        ];
+        for &(type_value, is_unkeyed) in cases {
+            let key = Key { type_value, key: alloc::vec![0x42] };
+            if is_unkeyed {
+                assert!(
+                    matches!(
+                        DecoderStage::from_key(key).unwrap_err(),
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))
+                    ),
+                    "type {type_value:#04x} should reject non-empty key data"
+                );
+            } else {
+                let stage = DecoderStage::from_key(key).unwrap();
+                assert!(
+                    !matches!(stage, DecoderStage::DecodingUnknown { .. }),
+                    "type {type_value:#04x} should route to a specific stage"
+                );
+            }
+        }
     }
 }

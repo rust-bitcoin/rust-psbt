@@ -717,36 +717,96 @@ impl DecoderStage {
     /// Select the appropriate value-decoding stage based on the decoded key.
     fn from_key(key: Key) -> Result<Self, InputDecodeError> {
         match key.type_value {
-            PSBT_IN_PREVIOUS_TXID =>
-                Ok(Self::DecodingPreviousTxid { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_OUTPUT_INDEX =>
-                Ok(Self::DecodingOutputIndex { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_SEQUENCE =>
-                Ok(Self::DecodingSequence { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_REQUIRED_TIME_LOCKTIME =>
-                Ok(Self::DecodingMinTime { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME =>
-                Ok(Self::DecodingMinHeight { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_NON_WITNESS_UTXO =>
-                Ok(Self::DecodingNonWitnessUtxo { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_WITNESS_UTXO =>
-                Ok(Self::DecodingWitnessUtxo { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_SIGHASH_TYPE =>
-                Ok(Self::DecodingSighashType { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_REDEEM_SCRIPT =>
-                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() }),
-            PSBT_IN_WITNESS_SCRIPT =>
-                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() }),
-            PSBT_IN_FINAL_SCRIPTSIG =>
-                Ok(Self::DecodingFinalScriptSig { key, decoder: Default::default() }),
-            PSBT_IN_FINAL_SCRIPTWITNESS =>
-                Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_TAP_KEY_SIG =>
-                Ok(Self::DecodingTapKeySig { key, decoder: TaprootSignatureDecoder::default() }),
-            PSBT_IN_TAP_INTERNAL_KEY =>
-                Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() }),
-            PSBT_IN_TAP_MERKLE_ROOT =>
-                Ok(Self::DecodingTapMerkleRoot { key, decoder: ValueDecoder::default() }),
+            PSBT_IN_PREVIOUS_TXID => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingPreviousTxid { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_OUTPUT_INDEX => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingOutputIndex { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_SEQUENCE => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingSequence { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_REQUIRED_TIME_LOCKTIME => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingMinTime { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingMinHeight { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_NON_WITNESS_UTXO => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingNonWitnessUtxo { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_WITNESS_UTXO => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingWitnessUtxo { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_SIGHASH_TYPE => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingSighashType { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_REDEEM_SCRIPT => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() })
+            }
+            PSBT_IN_WITNESS_SCRIPT => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() })
+            }
+            PSBT_IN_FINAL_SCRIPTSIG => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingFinalScriptSig { key, decoder: Default::default() })
+            }
+            PSBT_IN_FINAL_SCRIPTWITNESS => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_TAP_KEY_SIG => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTapKeySig { key, decoder: TaprootSignatureDecoder::default() })
+            }
+            PSBT_IN_TAP_INTERNAL_KEY => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_IN_TAP_MERKLE_ROOT => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTapMerkleRoot { key, decoder: ValueDecoder::default() })
+            }
             PSBT_IN_PARTIAL_SIG =>
                 Ok(Self::DecodingPartialSig { key, decoder: EcdsaSignatureDecoder::default() }),
             PSBT_IN_BIP32_DERIVATION =>
@@ -2430,5 +2490,49 @@ mod test {
         let err = InputBuilder::new(&out_point).legacy_fund(funding_tx).unwrap_err();
 
         assert_eq!(err, FundingUtxoError::OutOfBounds { vout: 5, len: 1 });
+    }
+
+    #[test]
+    fn key_data_validation() {
+        let cases: &[(u64, bool)] = &[
+            (PSBT_IN_NON_WITNESS_UTXO, true),
+            (PSBT_IN_WITNESS_UTXO, true),
+            (PSBT_IN_SIGHASH_TYPE, true),
+            (PSBT_IN_REDEEM_SCRIPT, true),
+            (PSBT_IN_WITNESS_SCRIPT, true),
+            (PSBT_IN_FINAL_SCRIPTSIG, true),
+            (PSBT_IN_FINAL_SCRIPTWITNESS, true),
+            (PSBT_IN_TAP_KEY_SIG, true),
+            (PSBT_IN_TAP_INTERNAL_KEY, true),
+            (PSBT_IN_TAP_MERKLE_ROOT, true),
+            (PSBT_IN_PREVIOUS_TXID, true),
+            (PSBT_IN_OUTPUT_INDEX, true),
+            (PSBT_IN_SEQUENCE, true),
+            (PSBT_IN_REQUIRED_TIME_LOCKTIME, true),
+            (PSBT_IN_REQUIRED_HEIGHT_LOCKTIME, true),
+            (PSBT_IN_RIPEMD160, false),
+            (PSBT_IN_SHA256, false),
+            (PSBT_IN_HASH160, false),
+            (PSBT_IN_HASH256, false),
+            (PSBT_IN_PROPRIETARY, false),
+        ];
+        for &(type_value, is_unkeyed) in cases {
+            let key = Key { type_value, key: alloc::vec![0x42] };
+            if is_unkeyed {
+                assert!(
+                    matches!(
+                        DecoderStage::from_key(key).unwrap_err(),
+                        InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))
+                    ),
+                    "type {type_value:#04x} should reject non-empty key data"
+                );
+            } else {
+                let stage = DecoderStage::from_key(key).unwrap();
+                assert!(
+                    !matches!(stage, DecoderStage::DecodingUnknown { .. }),
+                    "type {type_value:#04x} should route to a specific stage"
+                );
+            }
+        }
     }
 }

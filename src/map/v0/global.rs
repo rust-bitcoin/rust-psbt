@@ -219,12 +219,20 @@ enum Stage {
 impl Stage {
     fn from_key(key: Key) -> Result<Self, GlobalDecodeError> {
         match key.type_value {
-            PSBT_GLOBAL_UNSIGNED_TX =>
-                Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() }),
+            PSBT_GLOBAL_UNSIGNED_TX => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() })
+            }
             PSBT_GLOBAL_XPUB =>
                 Ok(Self::DecodingXpub { key, decoder: KeySourceDecoder::default() }),
-            PSBT_GLOBAL_VERSION =>
-                Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() }),
+            PSBT_GLOBAL_VERSION => {
+                if !key.key.is_empty() {
+                    return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() })
+            }
             PSBT_GLOBAL_PROPRIETARY =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             #[cfg(feature = "silent-payments")]
@@ -369,11 +377,6 @@ impl Decoder for GlobalMapDecoder {
                     if version != V0 {
                         return Err(GlobalDecodeError::WrongVersion(version.to_u32()));
                     }
-                    if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
-                            key,
-                        )));
-                    }
                     if self.version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -381,11 +384,6 @@ impl Decoder for GlobalMapDecoder {
                     self.stage = Stage::DecodingSeparator;
                 }
                 Stage::DecodingUnsignedTx { key, decoder } => {
-                    if !key.key.is_empty() {
-                        return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
-                            key,
-                        )));
-                    }
                     if self.tx_version.is_some() {
                         return Err(GlobalDecodeError::DuplicateKey(key));
                     }
@@ -631,5 +629,37 @@ mod tests {
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub.encode(), &value))
             .unwrap_err();
         assert!(matches!(err, GlobalDecodeError::Xpub(_)));
+    }
+
+    #[test]
+    fn key_data_validation() {
+        let cases: &[(u64, bool)] = &[
+            (PSBT_GLOBAL_UNSIGNED_TX, true),
+            (PSBT_GLOBAL_VERSION, true),
+            (PSBT_GLOBAL_XPUB, false),
+            (PSBT_GLOBAL_PROPRIETARY, false),
+            #[cfg(feature = "silent-payments")]
+            (PSBT_GLOBAL_SP_ECDH_SHARE, false),
+            #[cfg(feature = "silent-payments")]
+            (PSBT_GLOBAL_SP_DLEQ, false),
+        ];
+        for &(type_value, is_unkeyed) in cases {
+            let key = Key { type_value, key: alloc::vec![0x42] };
+            if is_unkeyed {
+                assert!(
+                    matches!(
+                        Stage::from_key(key).unwrap_err(),
+                        GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))
+                    ),
+                    "type {type_value:#04x} should reject non-empty key data"
+                );
+            } else {
+                let stage = Stage::from_key(key).unwrap();
+                assert!(
+                    !matches!(stage, Stage::DecodingUnknown { .. }),
+                    "type {type_value:#04x} should route to a specific stage"
+                );
+            }
+        }
     }
 }
