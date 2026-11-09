@@ -245,28 +245,62 @@ enum DecoderStage {
 impl DecoderStage {
     fn from_key(key: Key) -> Result<Self, OutputDecodeError> {
         match key.type_value {
-            PSBT_OUT_AMOUNT => Ok(Self::DecodingAmount { key, decoder: ValueDecoder::default() }),
-            PSBT_OUT_SCRIPT => Ok(Self::DecodingScript { key, decoder: Default::default() }),
-            PSBT_OUT_REDEEM_SCRIPT =>
-                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() }),
-            PSBT_OUT_WITNESS_SCRIPT =>
-                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() }),
+            PSBT_OUT_AMOUNT => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingAmount { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_OUT_SCRIPT => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingScript { key, decoder: Default::default() })
+            }
+            PSBT_OUT_REDEEM_SCRIPT => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingRedeemScript { key, decoder: Default::default() })
+            }
+            PSBT_OUT_WITNESS_SCRIPT => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingWitnessScript { key, decoder: Default::default() })
+            }
             PSBT_OUT_BIP32_DERIVATION =>
                 Ok(Self::DecodingBip32Derivation { key, decoder: KeySourceDecoder::default() }),
-            PSBT_OUT_TAP_INTERNAL_KEY =>
-                Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() }),
-            PSBT_OUT_TAP_TREE =>
-                Ok(Self::DecodingTapTree { key, decoder: TapTreeDecoder::default() }),
+            PSBT_OUT_TAP_INTERNAL_KEY => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() })
+            }
+            PSBT_OUT_TAP_TREE => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingTapTree { key, decoder: TapTreeDecoder::default() })
+            }
             PSBT_OUT_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
                 key,
                 decoder: TapKeyOriginDecoder::default(),
             }),
             #[cfg(feature = "silent-payments")]
-            PSBT_OUT_SP_V0_INFO =>
-                Ok(Self::DecodingSpV0Info { key, decoder: ValueDecoder::default() }),
+            PSBT_OUT_SP_V0_INFO => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingSpV0Info { key, decoder: ValueDecoder::default() })
+            }
             #[cfg(feature = "silent-payments")]
-            PSBT_OUT_SP_V0_LABEL =>
-                Ok(Self::DecodingSpV0Label { key, decoder: ValueDecoder::default() }),
+            PSBT_OUT_SP_V0_LABEL => {
+                if !key.key.is_empty() {
+                    return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingSpV0Label { key, decoder: ValueDecoder::default() })
+            }
             PSBT_OUT_PROPRIETARY =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
@@ -458,11 +492,6 @@ impl Decoder for OutputDecoder {
                     if self.sp_v0_info.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
                     }
-                    if !key.key.is_empty() {
-                        return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
-                            key,
-                        )));
-                    }
                     self.sp_v0_info = Some(info);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
@@ -471,11 +500,6 @@ impl Decoder for OutputDecoder {
                     let label = decoder.end().map_err(OutputDecodeError::SpV0Label)?;
                     if self.sp_v0_label.is_some() {
                         return Err(OutputDecodeError::DuplicateKey(key));
-                    }
-                    if !key.key.is_empty() {
-                        return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(
-                            key,
-                        )));
                     }
                     self.sp_v0_label = Some(label.0);
                     self.stage = DecoderStage::DecodingSeparator;
@@ -1051,5 +1075,49 @@ mod tests {
         let decoded = crate::encoding::decode_from_slice::<Output>(&encoded)
             .expect("roundtrip decode failed");
         assert_eq!(decoded, output);
+    }
+
+    #[test]
+    fn key_data_validation() {
+        #[cfg(not(feature = "silent-payments"))]
+        let cases: &[(u64, bool)] = &[
+            (PSBT_OUT_AMOUNT, true),
+            (PSBT_OUT_SCRIPT, true),
+            (PSBT_OUT_REDEEM_SCRIPT, true),
+            (PSBT_OUT_WITNESS_SCRIPT, true),
+            (PSBT_OUT_TAP_INTERNAL_KEY, true),
+            (PSBT_OUT_TAP_TREE, true),
+            (PSBT_OUT_PROPRIETARY, false),
+        ];
+        #[cfg(feature = "silent-payments")]
+        let cases: &[(u64, bool)] = &[
+            (PSBT_OUT_AMOUNT, true),
+            (PSBT_OUT_SCRIPT, true),
+            (PSBT_OUT_REDEEM_SCRIPT, true),
+            (PSBT_OUT_WITNESS_SCRIPT, true),
+            (PSBT_OUT_TAP_INTERNAL_KEY, true),
+            (PSBT_OUT_TAP_TREE, true),
+            (PSBT_OUT_SP_V0_INFO, true),
+            (PSBT_OUT_SP_V0_LABEL, true),
+            (PSBT_OUT_PROPRIETARY, false),
+        ];
+        for &(type_value, is_unkeyed) in cases {
+            let key = Key { type_value, key: alloc::vec![0x42] };
+            if is_unkeyed {
+                assert!(
+                    matches!(
+                        DecoderStage::from_key(key).unwrap_err(),
+                        OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(_))
+                    ),
+                    "type {type_value:#04x} should reject non-empty key data"
+                );
+            } else {
+                let stage = DecoderStage::from_key(key).unwrap();
+                assert!(
+                    !matches!(stage, DecoderStage::DecodingUnknown { .. }),
+                    "type {type_value:#04x} should route to a specific stage"
+                );
+            }
+        }
     }
 }
