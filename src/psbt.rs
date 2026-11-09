@@ -380,8 +380,6 @@ impl Psbt {
     ///
     /// BIP-370 does not include any additional requirements for the Combiner role.
     ///
-    /// This function is commutative `A.combine_with(B) = B.combine_with(A)`.
-    ///
     /// See [`combine()`] for a non-consuming version of this function.
     pub fn combine_with(mut self, other: Self) -> Result<Self, CombineError> {
         let self_lock = self.determine_lock_time().map_err(CombineError::LockTime)?;
@@ -405,6 +403,28 @@ impl Psbt {
                 this: self.outputs.len(),
                 that: other.outputs.len(),
             });
+        }
+
+        // Signatures commit to the input sequences for most sighash flags.
+        // Merging signature data from PSBTs whose effective sequences disagree would produce
+        // invalid signatures. When neither PSBT carries signature data the conflict is resolved in
+        // favor of `self`, as documented above.
+        // This doesn't affect segwit/taproot SIGHASH_NONE/SINGLE/ANYONECANPAY signatures, which
+        // commit to no sequences, but as these cases are rare, we prefer to keep the strictness.
+        if self.inputs.iter().chain(other.inputs.iter()).any(Input::has_signature_data) {
+            for (index, (this_input, that_input)) in
+                self.inputs.iter().zip(other.inputs.iter()).enumerate()
+            {
+                let this_sequence = this_input.sequence.unwrap_or(Sequence::MAX);
+                let that_sequence = that_input.sequence.unwrap_or(Sequence::MAX);
+                if this_sequence != that_sequence {
+                    return Err(CombineError::SequenceMismatch {
+                        input: index,
+                        this: this_sequence,
+                        that: that_sequence,
+                    });
+                }
+            }
         }
 
         self.global.combine(other.global).map_err(CombineError::Global)?;
@@ -636,6 +656,16 @@ pub enum CombineError {
         /// The lock time of the psbt with which the base psbt is combined.
         that: absolute::LockTime,
     },
+    /// Input sequences differ across PSBTs that carry signature data, cannot merge without risking
+    /// signature invalidation.
+    SequenceMismatch {
+        /// The index of the input with conflicting sequences.
+        input: usize,
+        /// The effective sequence of the input in the base psbt being combined.
+        this: Sequence,
+        /// The effective sequence of the input in the psbt with which the base psbt is combined.
+        that: Sequence,
+    },
 }
 
 impl fmt::Display for CombineError {
@@ -653,6 +683,11 @@ impl fmt::Display for CombineError {
             Self::LockTimeMismatch { ref this, ref that } => {
                 write!(f, "combine two PSBTs with different locktimes: {} {}", this, that)
             }
+            Self::SequenceMismatch { ref input, ref this, ref that } => write!(
+                f,
+                "combine two PSBTs with different sequences for input {}: {} {}",
+                input, this, that
+            ),
             Self::LockTime(ref e) =>
                 write_err!(f, "lock time could not be determined before combining"; e),
         }
@@ -669,7 +704,8 @@ impl std::error::Error for CombineError {
             Self::LockTime(ref e) => Some(e),
             Self::InputsLenMismatch { .. }
             | Self::OutputsLenMismatch { .. }
-            | Self::LockTimeMismatch { .. } => None,
+            | Self::LockTimeMismatch { .. }
+            | Self::SequenceMismatch { .. } => None,
         }
     }
 }
