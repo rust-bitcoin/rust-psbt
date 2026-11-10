@@ -22,7 +22,6 @@ use miniscript::{
 };
 
 use super::satisfy::InputSatisfier;
-use super::{InterpreterCheckError, InterpreterCheckInputError};
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt};
@@ -37,7 +36,7 @@ impl Finalizer {
     ///
     /// A finalizer can only be created if all inputs have a funding UTXO, the lock time can be
     /// determined, and every signature's sighash type matches the input's required type.
-    pub fn new(psbt: Psbt) -> Result<Self, Error> {
+    pub fn new(psbt: Psbt) -> Result<Self, FinalizeError> {
         // TODO: Consider doing this with combinators.
         for input in psbt.inputs.iter() {
             let _ = input.funding_utxo()?;
@@ -45,7 +44,7 @@ impl Finalizer {
         let _ = psbt.determine_lock_time()?;
         for (input_index, input) in psbt.inputs.iter().enumerate() {
             if let Some((source, got)) = input.sighash_mismatch() {
-                return Err(Error::SignatureSighashType(SignatureSighashTypeError {
+                return Err(FinalizeError::SignatureSighashType(SignatureSighashTypeError {
                     input_index,
                     source,
                     got,
@@ -79,7 +78,7 @@ impl Finalizer {
             match self.finalize_input(input) {
                 Ok(input) => inputs.push(input),
                 // TODO: Do we want to continue loop and return a vector of errors?
-                Err(error) => return Err(FinalizeError::FinalizeInput { input_index, error }),
+                Err(error) => return Err(FinalizeError::Input { input_index, error }),
             }
         }
 
@@ -98,7 +97,7 @@ impl Finalizer {
     pub(crate) fn interpreter_check<C: Verification>(
         psbt: &Psbt,
         secp: &Secp256k1<C>,
-    ) -> Result<(), InterpreterCheckError> {
+    ) -> Result<(), FinalizeError> {
         let unsigned_tx = psbt.unsigned_tx()?;
 
         let utxos: Vec<&TxOut> = psbt
@@ -122,25 +121,21 @@ impl Finalizer {
             let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
             let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
 
-            let interpreter = Interpreter::from_txdata(spk, script_sig, witness, csv, cltv)
-                .map_err(|error| {
-                    InterpreterCheckError::InterpreterCheckInput(
-                        InterpreterCheckInputError::Constructor { input_index: index, error },
-                    )
+            let interpreter =
+                Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
+                    FinalizeError::InterpreterConstructor { input_index: index, error }
                 })?;
 
             let iter = interpreter.iter(secp, &unsigned_tx, index, utxos);
             if let Some(error) = iter.filter_map(Result::err).next() {
-                return Err(InterpreterCheckError::InterpreterCheckInput(
-                    InterpreterCheckInputError::Satisfaction { input_index: index, error },
-                ));
+                return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
             };
         }
         Ok(())
     }
 
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
-    fn finalize_input(&self, input: &Input) -> Result<Input, FinalizeInputError> {
+    fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
         let allow_mall = true; // TODO: Add mall and no-mall versions.
         let fields = self.final_script_sig_and_witness(input, allow_mall)?;
         Ok(input.finalize(fields))
@@ -440,73 +435,52 @@ fn construct_tap_witness(
     }
 }
 
-/// Error constructing a [`Finalizer`].
+/// Error constructing a [`Finalizer`] or finalizing a PSBT.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Error {
+pub enum FinalizeError {
     /// An input is missing its funding UTXO.
     FundingUtxo(FundingUtxoError),
     /// Finalizer must be able to determine the lock time.
     DetermineLockTime(DetermineLockTimeError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::FundingUtxo(ref e) => write_err!(f, "Finalizer missing funding UTXO"; e),
-            Self::DetermineLockTime(ref e) =>
-                write_err!(f, "Finalizer must be able to determine the lock time"; e),
-            Self::SignatureSighashType(ref e) => write_err!(f, "Finalizer sighash type error"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::FundingUtxo(ref e) => Some(e),
-            Self::DetermineLockTime(ref e) => Some(e),
-            Self::SignatureSighashType(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<FundingUtxoError> for Error {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
-}
-
-impl From<DetermineLockTimeError> for Error {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
-impl From<SignatureSighashTypeError> for Error {
-    fn from(e: SignatureSighashTypeError) -> Self { Self::SignatureSighashType(e) }
-}
-
-/// Error finalizing an input.
-#[derive(Debug)]
-pub enum FinalizeError {
-    /// Error finalizing an input.
-    FinalizeInput {
+    /// Failed to finalize an input.
+    Input {
         /// The associated input index for `error`.
         input_index: usize,
         /// Error finalizing input.
-        error: FinalizeInputError,
+        error: InputError,
     },
-    /// Error running the interpreter checks.
-    InterpreterCheck(InterpreterCheckError),
+    /// Failed to construct a [`miniscript::Interpreter`] during the interpreter check.
+    InterpreterConstructor {
+        /// Index of the input causing this error.
+        input_index: usize,
+        /// The interpreter error returned from `rust-miniscript`.
+        error: interpreter::Error,
+    },
+    /// Interpreter satisfaction failed for an input during the interpreter check.
+    InterpreterSatisfaction {
+        /// Index of the input causing this error.
+        input_index: usize,
+        /// The interpreter error returned from `rust-miniscript`.
+        error: interpreter::Error,
+    },
 }
 
 impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FinalizeInput { input_index, ref error } =>
+            Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
+            Self::DetermineLockTime(ref e) =>
+                write_err!(f, "finalizer must be able to determine the lock time"; e),
+            Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
+            Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
-            Self::InterpreterCheck(ref e) =>
-                write_err!(f, "error running the interpreter checks"; e),
+            Self::InterpreterConstructor { input_index, ref error } =>
+                write_err!(f, "interpreter constructor failed for input {}", input_index; error),
+            Self::InterpreterSatisfaction { input_index, ref error } =>
+                write_err!(f, "interpreter satisfaction failed for input {}", input_index; error),
         }
     }
 }
@@ -515,42 +489,26 @@ impl fmt::Display for FinalizeError {
 impl std::error::Error for FinalizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::FinalizeInput { input_index: _, ref error } => Some(error),
-            Self::InterpreterCheck(ref error) => Some(error),
+            Self::FundingUtxo(ref e) => Some(e),
+            Self::DetermineLockTime(ref e) => Some(e),
+            Self::SignatureSighashType(ref e) => Some(e),
+            Self::Input { input_index: _, ref error } => Some(error),
+            Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
+            Self::InterpreterSatisfaction { input_index: _, ref error } => Some(error),
         }
     }
 }
 
-impl From<InterpreterCheckError> for FinalizeError {
-    fn from(e: InterpreterCheckError) -> Self { Self::InterpreterCheck(e) }
+impl From<FundingUtxoError> for FinalizeError {
+    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
 }
 
-/// Error finalizing an input.
-#[derive(Debug)]
-pub enum FinalizeInputError {
-    /// Failed to get final script_sig and final witness.
-    Final(InputError),
+impl From<DetermineLockTimeError> for FinalizeError {
+    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
 }
 
-impl fmt::Display for FinalizeInputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Final(ref e) => write_err!(f, "final"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for FinalizeInputError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Final(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<InputError> for FinalizeInputError {
-    fn from(e: InputError) -> Self { Self::Final(e) }
+impl From<SignatureSighashTypeError> for FinalizeError {
+    fn from(e: SignatureSighashTypeError) -> Self { Self::SignatureSighashType(e) }
 }
 
 /// Error type for Pbst Input

@@ -22,17 +22,13 @@ mod role;
 mod satisfy;
 
 use alloc::vec::Vec;
-use core::fmt;
 
 use bitcoin::consensus::encode::VarInt;
 use miniscript::miniscript::satisfy::Placeholder;
-use miniscript::{interpreter, MiniscriptKey};
-
-use crate::error::write_err;
-use crate::DetermineLockTimeError;
+use miniscript::MiniscriptKey;
 
 #[rustfmt::skip]                // Keep public exports separate.
-pub use self::role::{InputError, Finalizer, FinalizeError, FinalizeInputError};
+pub use self::role::{InputError, Finalizer, FinalizeError};
 
 pub(crate) trait ItemSize {
     fn size(&self) -> usize;
@@ -68,86 +64,6 @@ pub(crate) fn witness_size<T: ItemSize>(wit: &[T]) -> usize {
 }
 
 pub(crate) fn varint_len(n: usize) -> usize { VarInt(n as u64).size() }
-
-/// Error type for Pbst Input
-#[derive(Debug)]
-pub enum InterpreterCheckError {
-    /// Failed to determine lock time for unsigned transaction.
-    DetermineLockTime(DetermineLockTimeError),
-    /// Interpreter check failed for an input.
-    InterpreterCheckInput(InterpreterCheckInputError),
-}
-
-impl fmt::Display for InterpreterCheckError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DetermineLockTime(ref e) =>
-                write_err!(f, "interpreter check determine locktime"; e),
-            Self::InterpreterCheckInput(ref e) =>
-                write_err!(f, "interpreter check failed for input"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InterpreterCheckError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DetermineLockTime(ref e) => Some(e),
-            Self::InterpreterCheckInput(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<DetermineLockTimeError> for InterpreterCheckError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
-impl From<InterpreterCheckInputError> for InterpreterCheckError {
-    fn from(e: InterpreterCheckInputError) -> Self { Self::InterpreterCheckInput(e) }
-}
-
-/// Error type for Pbst Input
-#[derive(Debug)]
-pub enum InterpreterCheckInputError {
-    /// Failed to construct a [`miniscript::Interpreter`].
-    Constructor {
-        /// Index of the input causing this error.
-        input_index: usize,
-        /// The interpreter error returned from `rust-miniscript`.
-        error: interpreter::Error,
-    },
-    /// Interpreter satisfaction failed for input.
-    Satisfaction {
-        /// Index of the input causing this error.
-        input_index: usize,
-        /// The interpreter error returned from `rust-miniscript`.
-        error: interpreter::Error,
-    },
-}
-
-impl fmt::Display for InterpreterCheckInputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Constructor { input_index, ref error } => {
-                write_err!(f, "interpreter constructor failed for input {}", input_index; error)
-            }
-            Self::Satisfaction { input_index, ref error } => {
-                write_err!(f, "interpreter satisfaction failed for input {}", input_index; error)
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for InterpreterCheckInputError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Constructor { input_index: _, ref error } => Some(error),
-            Self::Satisfaction { input_index: _, ref error } => Some(error),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -197,7 +113,7 @@ mod tests {
         };
 
         match Finalizer::new(psbt) {
-            Err(role::Error::SignatureSighashType(e)) => {
+            Err(FinalizeError::SignatureSighashType(e)) => {
                 assert_eq!(e.input_index, 0);
                 assert_eq!(e.source, crate::SignatureSource::TapKey);
                 assert!(alloc::format!("{}", e).starts_with("input 0 taproot key-spend signature "));
@@ -215,7 +131,7 @@ mod tests {
         signed.inputs[0].sighash_type = None;
 
         assert!(
-            matches!(Finalizer::new(signed), Err(role::Error::SignatureSighashType(_))),
+            matches!(Finalizer::new(signed), Err(FinalizeError::SignatureSighashType(_))),
             "finalizer must reject undeclared SIGHASH_NONE with a sighash type error"
         );
     }
@@ -223,7 +139,7 @@ mod tests {
     /// Returns the sighash type error `Finalizer::new` reports for `psbt`.
     fn sighash_type_error(psbt: Psbt) -> crate::SignatureSighashTypeError {
         match Finalizer::new(psbt) {
-            Err(role::Error::SignatureSighashType(e)) => e,
+            Err(FinalizeError::SignatureSighashType(e)) => e,
             other => panic!("expected a sighash type error, got {:?}", other),
         }
     }

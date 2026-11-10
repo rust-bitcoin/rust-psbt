@@ -14,10 +14,7 @@ pub use constructor::{Constructor, InputsOnlyModifiable, Mod, Modifiable, Output
 pub use creator::Creator;
 pub use extractor::{ExtractError, Extractor};
 #[cfg(feature = "miniscript")]
-pub use finalizer::{
-    FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
-    InterpreterCheckInputError,
-};
+pub use finalizer::{FinalizeError, Finalizer, InputError};
 pub use signer::{
     sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs, GetKey,
     GetKeyError, InputSigs, KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys,

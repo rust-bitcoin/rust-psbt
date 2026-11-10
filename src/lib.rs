@@ -80,10 +80,7 @@ pub use crate::encoding::{decode_from_reader, encode_to_writer};
 pub use crate::psbt::ParsePsbtError;
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
-pub use crate::roles::{
-    FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
-    InterpreterCheckInputError,
-};
+pub use crate::roles::{FinalizeError, Finalizer, InputError};
 #[cfg(feature = "silent-payments")]
 #[doc(inline)]
 pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
