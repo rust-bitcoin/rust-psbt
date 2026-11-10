@@ -22,7 +22,7 @@ mod valid {
 
     #[test]
     fn strict_signer_with_funding_tx_succeeds() {
-        fuzz("Valid: strict signer with prevout full tx succeeds to sign non-p2tr input.");
+        fuzz("Valid: strict signer with prevout full tx succeeds to produce low-R signature for non-p2tr input.");
     }
 
     #[test]
