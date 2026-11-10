@@ -14,7 +14,7 @@ use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::{
-    sighash, Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
+    Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
 };
 use miniscript::{
     interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
@@ -184,9 +184,9 @@ impl Finalizer {
 
                 // Generate the satisfaction witness and scriptsig.
                 if !allow_mall {
-                    desc.get_satisfaction(sat)?
+                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
                 } else {
-                    desc.get_satisfaction_mall(sat)?
+                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
                 }
             }
         };
@@ -230,7 +230,7 @@ impl Finalizer {
             let pk_bytes = &script_pubkey.to_bytes();
             match bitcoin::PublicKey::from_slice(&pk_bytes[1..script_pubkey_len - 1]) {
                 Ok(pk) => Ok(Descriptor::new_pk(pk)),
-                Err(e) => Err(InputError::from(e)),
+                Err(e) => Err(InputError::KeyErr(e)),
             }
         } else if script_pubkey.is_p2pkh() {
             // 2. `Pkh`: creates a `PkH` descriptor if partial_sigs has the corresponding pk
@@ -245,7 +245,7 @@ impl Finalizer {
                 *script_pubkey == addr.script_pubkey()
             });
             match partial_sig_contains_pk {
-                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::from),
+                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::MiniscriptError),
                 None => Err(InputError::MissingPubkey),
             }
         } else if script_pubkey.is_p2wpkh() {
@@ -262,7 +262,8 @@ impl Finalizer {
                 }
             });
             match partial_sig_contains_pk {
-                Some((pk, _sig)) => Ok(Descriptor::new_wpkh(*pk)?),
+                Some((pk, _sig)) =>
+                    Ok(Descriptor::new_wpkh(*pk).map_err(InputError::MiniscriptError)?),
                 None => Err(InputError::MissingPubkey),
             }
         } else if script_pubkey.is_p2wsh() {
@@ -278,8 +279,10 @@ impl Finalizer {
                     });
                 }
                 let ms =
-                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)?;
-                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))?)
+                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)
+                        .map_err(InputError::MiniscriptError)?;
+                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))
+                    .map_err(InputError::MiniscriptError)?)
             } else {
                 Err(InputError::MissingWitnessScript)
             }
@@ -304,8 +307,10 @@ impl Finalizer {
                             }
                             let ms = Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(
                                 witness_script,
-                            )?;
-                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))?)
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))
+                                .map_err(InputError::MiniscriptError)?)
                         } else {
                             Err(InputError::MissingWitnessScript)
                         }
@@ -325,7 +330,8 @@ impl Finalizer {
                                 }
                             });
                         match partial_sig_contains_pk {
-                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)?),
+                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)
+                                .map_err(InputError::MiniscriptError)?),
                             None => Err(InputError::MissingPubkey),
                         }
                     } else {
@@ -336,8 +342,9 @@ impl Finalizer {
                         if let Some(ref redeem_script) = input.redeem_script {
                             let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_consensus(
                                 redeem_script,
-                            )?;
-                            Ok(Descriptor::new_sh(ms)?)
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh(ms).map_err(InputError::MiniscriptError)?)
                         } else {
                             Err(InputError::MissingWitnessScript)
                         }
@@ -352,8 +359,10 @@ impl Finalizer {
             if input.redeem_script.is_some() {
                 return Err(InputError::NonEmptyRedeemScript);
             }
-            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)?;
-            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))?)
+            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)
+                .map_err(InputError::MiniscriptError)?;
+            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))
+                .map_err(InputError::MiniscriptError)?)
         }
     }
 }
@@ -514,8 +523,6 @@ impl From<SignatureSighashTypeError> for FinalizeError {
 /// Error type for Pbst Input
 #[derive(Debug)]
 pub enum InputError {
-    /// Get the secp Errors directly
-    SecpErr(bitcoin::secp256k1::Error),
     /// Key errors
     KeyErr(bitcoin::key::FromSliceError),
     /// Could not satisfy taproot descriptor
@@ -523,8 +530,6 @@ pub enum InputError {
     /// satisfied. We cannot return a detailed error because we try all miniscripts
     /// in script spend path, we cannot know which miniscript failed.
     CouldNotSatisfyTr,
-    /// Error doing an interpreter-check on a finalized psbt
-    Interpreter(interpreter::Error),
     /// Redeem script does not match the p2sh hash
     InvalidRedeemScript {
         /// Redeem script
@@ -539,40 +544,18 @@ pub enum InputError {
         /// Expected p2wsh script
         p2wsh_expected: ScriptBuf,
     },
-    /// Invalid sig
-    InvalidSignature {
-        /// The bitcoin public key
-        pubkey: bitcoin::PublicKey,
-        /// The (incorrect) signature
-        sig: Vec<u8>,
-    },
     /// Pass through the underlying errors in miniscript
     MiniscriptError(miniscript::Error),
     /// Missing redeem script for p2sh
     MissingRedeemScript,
-    /// Missing witness
-    MissingWitness,
     /// used for public key corresponding to pkh/wpkh
     MissingPubkey,
     /// Missing witness script for segwit descriptors
     MissingWitnessScript,
-    ///Missing both the witness and non-witness utxo
-    MissingUtxo,
     /// Non empty Witness script for p2sh
     NonEmptyWitnessScript,
     /// Non empty Redeem script
     NonEmptyRedeemScript,
-    /// Non Standard sighash type
-    NonStandardSighashType(sighash::NonStandardSighashTypeError),
-    /// Sighash did not match
-    WrongSighashFlag {
-        /// required sighash type
-        required: sighash::EcdsaSighashType,
-        /// the sighash type we got
-        got: sighash::EcdsaSighashType,
-        /// the corresponding publickey
-        pubkey: bitcoin::PublicKey,
-    },
     /// Unable to determine the output type from the script pubkey.
     UnknownOutputType,
 }
@@ -584,20 +567,13 @@ impl std::error::Error for InputError {
             Self::CouldNotSatisfyTr
             | Self::InvalidRedeemScript { .. }
             | Self::InvalidWitnessScript { .. }
-            | Self::InvalidSignature { .. }
             | Self::MissingRedeemScript
-            | Self::MissingWitness
             | Self::MissingPubkey
             | Self::MissingWitnessScript
-            | Self::MissingUtxo
             | Self::NonEmptyWitnessScript
             | Self::NonEmptyRedeemScript
-            | Self::NonStandardSighashType(_)
-            | Self::WrongSighashFlag { .. }
             | Self::UnknownOutputType => None,
-            Self::SecpErr(e) => Some(e),
             Self::KeyErr(e) => Some(e),
-            Self::Interpreter(e) => Some(e),
             Self::MiniscriptError(e) => Some(e),
         }
     }
@@ -606,12 +582,7 @@ impl std::error::Error for InputError {
 impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::InvalidSignature { ref pubkey, ref sig } => {
-                write!(f, "PSBT: bad signature {} for key {:?}", pubkey, sig)
-            }
             Self::KeyErr(ref e) => write!(f, "Key Err: {}", e),
-            Self::Interpreter(ref e) => write!(f, "Interpreter: {}", e),
-            Self::SecpErr(ref e) => write!(f, "Secp Err: {}", e),
             Self::InvalidRedeemScript { ref redeem, ref p2sh_expected } => write!(
                 f,
                 "Redeem script {} does not match the p2sh script {}",
@@ -623,11 +594,7 @@ impl fmt::Display for InputError {
                 witness_script, p2wsh_expected
             ),
             Self::MiniscriptError(ref e) => write!(f, "Miniscript Error: {}", e),
-            Self::MissingWitness => write!(f, "PSBT is missing witness"),
             Self::MissingRedeemScript => write!(f, "PSBT is Redeem script"),
-            Self::MissingUtxo => {
-                write!(f, "PSBT is missing both witness and non-witness UTXO")
-            }
             Self::MissingWitnessScript => write!(f, "PSBT is missing witness script"),
             Self::MissingPubkey => write!(f, "Missing pubkey for a pkh/wpkh"),
             Self::NonEmptyRedeemScript => {
@@ -636,32 +603,8 @@ impl fmt::Display for InputError {
             Self::NonEmptyWitnessScript => {
                 write!(f, "PSBT has non-empty witness script at for legacy input")
             }
-            Self::WrongSighashFlag { required, got, pubkey } => write!(
-                f,
-                "PSBT: signature with key {:?} had \
-                 sighashflag {:?} rather than required {:?}",
-                pubkey, got, required
-            ),
-
             Self::CouldNotSatisfyTr => write!(f, "Could not satisfy Tr descriptor"),
-            Self::NonStandardSighashType(ref e) => write!(f, "Non-standard sighash type {}", e),
             Self::UnknownOutputType => write!(f, "unable to determine the output type"),
         }
     }
-}
-
-impl From<crate::miniscript::Error> for InputError {
-    fn from(e: crate::miniscript::Error) -> Self { Self::MiniscriptError(e) }
-}
-
-impl From<interpreter::Error> for InputError {
-    fn from(e: interpreter::Error) -> Self { Self::Interpreter(e) }
-}
-
-impl From<bitcoin::secp256k1::Error> for InputError {
-    fn from(e: bitcoin::secp256k1::Error) -> Self { Self::SecpErr(e) }
-}
-
-impl From<bitcoin::key::FromSliceError> for InputError {
-    fn from(e: bitcoin::key::FromSliceError) -> Self { Self::KeyErr(e) }
 }
