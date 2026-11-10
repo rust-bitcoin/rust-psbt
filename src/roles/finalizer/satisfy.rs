@@ -10,15 +10,21 @@ use crate::bitcoin::{absolute, ecdsa, relative, ScriptBuf, Sequence};
 use crate::map::input::Input;
 use crate::miniscript::{MiniscriptKey, Preimage32, Satisfier, SigType, ToPublicKey};
 
-/// A PSBT [`Satisfier`] for an input.
+/// Provides signatures, preimages, and lock-time information from a PSBT input
+/// to the miniscript [`Satisfier`] trait.
 ///
-/// Contains reference to the [`Psbt`] because multiple inputs will share the same PSBT. All
-/// operations on this structure will panic if index is more than number of inputs in pbst
-///
-/// [`Satisfier`]: crate::miniscript::Satisfier
+/// Used by the [`Finalizer`](super::Finalizer) to determine whether the spending
+/// conditions of an input can be satisfied and, if so, to produce the satisfaction
+/// witness and script sig.
 pub(crate) struct InputSatisfier<'a> {
+    /// The PSBT input whose signing material is exposed.
     pub(crate) input: &'a Input,
-    /// The lock time of the transaction, as BIP-370 determines it from all inputs.
+    /// The transaction lock time as resolved from all inputs per [BIP-370].
+    ///
+    /// Used by [`check_after`](Self::check_after) to evaluate `OP_CHECKLOCKTIMEVERIFY`
+    /// conditions.
+    ///
+    /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
     pub(crate) lock_time: absolute::LockTime,
 }
 
@@ -79,18 +85,16 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for InputSatisfier<'_> {
     }
 
     fn check_after(&self, n: absolute::LockTime) -> bool {
+        // Sequence defaults to MAX if not set.
         self.input.sequence.unwrap_or(Sequence::MAX).enables_absolute_lock_time()
             && n.is_implied_by(self.lock_time)
     }
 
-    // TODO: Verify this is correct.
     fn check_older(&self, n: relative::LockTime) -> bool {
-        match self.input.sequence {
-            Some(seq) => match relative::LockTime::from_sequence(seq) {
-                Err(_) => false,
-                Ok(lock_time) => n.is_implied_by(lock_time),
-            },
-            None => false,
+        // Sequence defaults to MAX if not set.
+        match relative::LockTime::from_sequence(self.input.sequence.unwrap_or(Sequence::MAX)) {
+            Err(_) => false,
+            Ok(lock_time) => n.is_implied_by(lock_time),
         }
     }
 
