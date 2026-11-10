@@ -587,4 +587,84 @@ mod tests {
         let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
         assert!(result.is_err(), "CLTV fails on an input whose sequence is final");
     }
+
+    #[test]
+    fn finalize_rejects_older_on_input_with_final_sequence() {
+        // An omitted sequence is `Sequence::MAX`, under which CSV fails.
+        let secp = Secp256k1::new();
+        let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
+        let path = "m/0".into_derivation_path().unwrap();
+        let sk = xpriv.derive_priv(&secp, &path).unwrap();
+        let pk = PublicKey::new(sk.to_keypair(&secp).public_key());
+        let origin = (xpriv.fingerprint(&secp), path);
+
+        let witness_script =
+            Miniscript::<PublicKey, Segwitv0>::from_str(&format!("and_v(v:pk({pk}),older(10))"))
+                .unwrap()
+                .encode();
+        let mut input = Input::new(&OutPoint::new(Txid::all_zeros(), 0));
+        input.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(123_456),
+            script_pubkey: ScriptBuf::new_p2wsh(&witness_script.wscript_hash()),
+        });
+        input.witness_script = Some(witness_script);
+        input.bip32_derivations.insert(pk, origin);
+        // Omitted sequence defaults to Sequence::MAX — CSV is disabled, so older(10) fails.
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .output(Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            }))
+            .expect("fixture output must be valid")
+            .psbt()
+            .unwrap();
+
+        let v_secp = Secp256k1::verification_only();
+        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
+        assert!(result.is_err(), "CSV fails on an input whose sequence is final");
+    }
+
+    #[test]
+    fn finalize_satisfies_older_with_sufficient_sequence() {
+        // A sequence of 10 blocks satisfies `older(10)`.
+        let secp = Secp256k1::new();
+        let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
+        let path = "m/0".into_derivation_path().unwrap();
+        let sk = xpriv.derive_priv(&secp, &path).unwrap();
+        let pk = PublicKey::new(sk.to_keypair(&secp).public_key());
+        let origin = (xpriv.fingerprint(&secp), path);
+
+        let witness_script =
+            Miniscript::<PublicKey, Segwitv0>::from_str(&format!("and_v(v:pk({pk}),older(10))"))
+                .unwrap()
+                .encode();
+        let mut input = Input::new(&OutPoint::new(Txid::all_zeros(), 0));
+        input.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(123_456),
+            script_pubkey: ScriptBuf::new_p2wsh(&witness_script.wscript_hash()),
+        });
+        input.witness_script = Some(witness_script);
+        input.bip32_derivations.insert(pk, origin);
+        input.sequence = Some(Sequence::from_consensus(10));
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .output(Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            }))
+            .expect("fixture output must be valid")
+            .psbt()
+            .unwrap();
+
+        let v_secp = Secp256k1::verification_only();
+        Finalizer::new(sign(psbt))
+            .unwrap()
+            .finalize(&v_secp)
+            .expect("the sequence meets the older(10) relative time lock");
+    }
 }

@@ -128,3 +128,43 @@ fn try_vec_as_preimage32(vec: &Vec<u8>) -> Option<Preimage32> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bitcoin::{self, absolute, OutPoint, Sequence};
+    use crate::map::input::Input;
+
+    type Pk = bitcoin::PublicKey;
+
+    fn assert_check_older(expected: bool, sequence: Option<Sequence>, required_height: u16) {
+        let mut input = Input::new(&OutPoint::null());
+        input.sequence = sequence;
+        let sat = InputSatisfier { input: &input, lock_time: absolute::LockTime::ZERO };
+        assert_eq!(
+            expected,
+            <InputSatisfier as Satisfier<Pk>>::check_older(
+                &sat,
+                bitcoin::relative::LockTime::from_height(required_height),
+            ),
+        );
+    }
+
+    #[test]
+    fn check_older_rejects_disabled_csv() {
+        // An omitted/max sequence disables CSV, check_older must return false.
+        assert_check_older(false, None, 10);
+    }
+
+    #[test]
+    fn check_older_rejects_insufficient_sequence() {
+        // CSV is enabled but the sequence is less than required.
+        assert_check_older(false, Some(Sequence::from_consensus(10)), 100);
+    }
+
+    #[test]
+    fn check_older_accepts_sufficient_sequence() {
+        // CSV is enabled and the sequence meets the required lock time.
+        assert_check_older(true, Some(Sequence::from_consensus(10)), 10);
+    }
+}
