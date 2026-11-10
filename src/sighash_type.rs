@@ -31,7 +31,6 @@ const SIGHASH_ANYONECANPAY: u32 = 0x80;
 /// let _tap_sighash_all: PsbtSighashType = TapSighashType::All.into();
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PsbtSighashType {
     pub(crate) inner: u32,
 }
@@ -67,6 +66,37 @@ impl FromStr for PsbtSighashType {
         Err(ParseSighashTypeError { unrecognized: s.to_owned() })
     }
 }
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for PsbtSighashType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            self.inner.serialize(serializer)
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for PsbtSighashType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = alloc::string::String::deserialize(deserializer)?;
+            s.parse::<Self>().map_err(serde::de::Error::custom)
+        } else {
+            let inner = u32::deserialize(deserializer)?;
+            Ok(Self { inner })
+        }
+    }
+}
+
 impl From<EcdsaSighashType> for PsbtSighashType {
     fn from(ecdsa_hash_ty: EcdsaSighashType) -> Self { Self { inner: ecdsa_hash_ty as u32 } }
 }
@@ -307,5 +337,38 @@ mod tests {
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_roundtrip() {
+        let cases = [
+            PsbtSighashType::from(EcdsaSighashType::All),
+            PsbtSighashType::from(EcdsaSighashType::None),
+            PsbtSighashType::from(EcdsaSighashType::Single),
+            PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay),
+            PsbtSighashType::from(TapSighashType::Default),
+            PsbtSighashType::from(TapSighashType::All),
+            PsbtSighashType::from(TapSighashType::NonePlusAnyoneCanPay),
+            // Non-standard values round-trip through hex fallback.
+            PsbtSighashType::from_u32(0xdddddddd),
+        ];
+
+        for original in &cases {
+            let json = serde_json::to_string(original).unwrap();
+            let parsed: PsbtSighashType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, *original, "roundtrip failed for {json}");
+        }
+
+        // Non-standard value serializes as a hex string.
+        let nonstd = PsbtSighashType::from_u32(0xdddddddd);
+        assert_eq!(serde_json::to_string(&nonstd).unwrap(), r#""0xdddddddd""#);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_rejects_invalid() {
+        assert!(serde_json::from_str::<PsbtSighashType>(r#""NOT_A_SIGHASH""#).is_err());
+        assert!(serde_json::from_str::<PsbtSighashType>("42").is_err());
     }
 }

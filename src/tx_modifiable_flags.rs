@@ -10,7 +10,9 @@
 //!
 //! [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
 
+use alloc::string::String;
 use core::fmt;
+use core::str::FromStr;
 
 use bitcoin_consensus_encoding::{
     ArrayDecoder, ArrayEncoder, Decoder, DecoderStatus, UnexpectedEofError,
@@ -34,7 +36,6 @@ const INPUTS_AND_OUTPUTS_MODIFIABLE: u8 = 0x03;
 
 /// A bitfield for various transaction modification flags (BIP-370).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TxModifiableFlags(pub u8);
 
 impl TxModifiableFlags {
@@ -110,6 +111,12 @@ impl TxModifiableFlags {
 
 impl fmt::Display for TxModifiableFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // If any reserved bits are set, fall back to hex to avoid losing information.
+        const KNOWN_MASK: u8 = 0x07; // INPUTS_MODIFIABLE | OUTPUTS_MODIFIABLE | SIGHASH_SINGLE
+        if self.0 & !KNOWN_MASK != 0 {
+            return write!(f, "{:#x}", self.0);
+        }
+
         let mut first = true;
         let mut write_flag = |name: &str| {
             if !first {
@@ -131,6 +138,76 @@ impl fmt::Display for TxModifiableFlags {
             f.write_str("NONE")?;
         }
         Ok(())
+    }
+}
+
+/// Error returned when parsing a [`TxModifiableFlags`] from a string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseTxModifiableFlagsError(String);
+
+impl fmt::Display for ParseTxModifiableFlagsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to parse TxModifiableFlags: {}", self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ParseTxModifiableFlagsError {}
+
+impl FromStr for TxModifiableFlags {
+    type Err = ParseTxModifiableFlagsError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Accept hex format: "0x03"
+        if let Some(hex) = s.strip_prefix("0x") {
+            return u8::from_str_radix(hex, 16)
+                .map(TxModifiableFlags)
+                .map_err(|_| ParseTxModifiableFlagsError(s.into()));
+        }
+        if s.eq_ignore_ascii_case("NONE") {
+            return Ok(Self(0));
+        }
+        let mut flags = 0u8;
+        for part in s.split('|') {
+            let part = part.trim();
+            match part {
+                "INPUTS_MODIFIABLE" => flags |= INPUTS_MODIFIABLE,
+                "OUTPUTS_MODIFIABLE" => flags |= OUTPUTS_MODIFIABLE,
+                "SIGHASH_SINGLE" => flags |= SIGHASH_SINGLE,
+                _ => return Err(ParseTxModifiableFlagsError(s.into())),
+            }
+        }
+        Ok(Self(flags))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for TxModifiableFlags {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.collect_str(self)
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for TxModifiableFlags {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = alloc::string::String::deserialize(deserializer)?;
+            s.parse::<Self>().map_err(serde::de::Error::custom)
+        } else {
+            let inner = u8::deserialize(deserializer)?;
+            Ok(Self(inner))
+        }
     }
 }
 
@@ -318,6 +395,68 @@ mod tests {
         let s = f.to_string();
         assert!(s.contains("INPUTS_MODIFIABLE"));
         assert!(s.contains("OUTPUTS_MODIFIABLE"));
+    }
+
+    #[test]
+    fn display_unknown_bits_falls_back_to_hex() {
+        // Bits 3-7 are not known flags; Display should use hex to preserve them.
+        let f = TxModifiableFlags(0x88);
+        assert_eq!(f.to_string(), "0x88");
+    }
+
+    #[test]
+    fn from_str_none() {
+        let f: TxModifiableFlags = "NONE".parse().unwrap();
+        assert_eq!(f, TxModifiableFlags(0x00));
+    }
+
+    #[test]
+    fn from_str_single_flag() {
+        let f: TxModifiableFlags = "INPUTS_MODIFIABLE".parse().unwrap();
+        assert_eq!(f, TxModifiableFlags(INPUTS_MODIFIABLE));
+    }
+
+    #[test]
+    fn from_str_multiple_flags() {
+        let f: TxModifiableFlags = "INPUTS_MODIFIABLE|OUTPUTS_MODIFIABLE".parse().unwrap();
+        assert_eq!(f, TxModifiableFlags(INPUTS_MODIFIABLE | OUTPUTS_MODIFIABLE));
+    }
+
+    #[test]
+    fn from_str_hex() {
+        let f: TxModifiableFlags = "0xff".parse().unwrap();
+        assert_eq!(f, TxModifiableFlags(0xff));
+    }
+
+    #[test]
+    fn from_str_invalid() {
+        assert!("NOT_A_FLAG".parse::<TxModifiableFlags>().is_err());
+    }
+
+    #[test]
+    fn from_str_roundtrip() {
+        let cases = [
+            TxModifiableFlags(0x00),
+            TxModifiableFlags::with_inputs_modifiable(),
+            TxModifiableFlags::with_outputs_modifiable(),
+            TxModifiableFlags::with_all_modifiable(),
+            TxModifiableFlags(INPUTS_MODIFIABLE | SIGHASH_SINGLE),
+            TxModifiableFlags(OUTPUTS_MODIFIABLE | SIGHASH_SINGLE),
+            // Unknown bits round-trip through hex fallback.
+            TxModifiableFlags(0x88),
+        ];
+        for original in &cases {
+            let s = original.to_string();
+            let parsed: TxModifiableFlags = s.parse().unwrap();
+            assert_eq!(parsed, *original, "roundtrip failed for {s:?}");
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_rejects_invalid() {
+        assert!(serde_json::from_str::<TxModifiableFlags>(r#""NOT_A_FLAG""#).is_err());
+        assert!(serde_json::from_str::<TxModifiableFlags>("42").is_err());
     }
 
     #[test]
