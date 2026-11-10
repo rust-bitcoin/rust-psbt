@@ -522,6 +522,7 @@ impl From<SignatureSighashTypeError> for FinalizeError {
 
 /// Error type for Pbst Input
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum InputError {
     /// Key errors
     KeyErr(bitcoin::key::FromSliceError),
