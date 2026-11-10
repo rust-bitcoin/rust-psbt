@@ -56,6 +56,8 @@ pub mod global;
 pub mod input;
 /// The `output-map`.
 pub mod output;
+/// PSBT Proof of Reserves commitment (`PSBT_IN_POR_COMMITMENT`).
+pub mod por_commitment;
 /// PSBT required height lock time (`PSBT_IN_REQUIRED_HEIGHT_LOCKTIME`).
 pub mod required_height_lock_time;
 #[cfg(feature = "serde")]

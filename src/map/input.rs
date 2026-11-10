@@ -24,6 +24,7 @@ use bitcoin_consensus_encoding::{
 };
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
+use super::por_commitment::PorCommitment;
 use super::required_height_lock_time::RequiredHeightLockTime;
 use super::vout::{Vout, VoutEncoder};
 use super::{
@@ -33,11 +34,12 @@ use super::{
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBT_IN_HASH160, PSBT_IN_HASH256, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_OUTPUT_INDEX,
-    PSBT_IN_PARTIAL_SIG, PSBT_IN_PREVIOUS_TXID, PSBT_IN_PROPRIETARY, PSBT_IN_REDEEM_SCRIPT,
-    PSBT_IN_REQUIRED_HEIGHT_LOCKTIME, PSBT_IN_REQUIRED_TIME_LOCKTIME, PSBT_IN_RIPEMD160,
-    PSBT_IN_SEQUENCE, PSBT_IN_SHA256, PSBT_IN_SIGHASH_TYPE, PSBT_IN_TAP_BIP32_DERIVATION,
-    PSBT_IN_TAP_INTERNAL_KEY, PSBT_IN_TAP_KEY_SIG, PSBT_IN_TAP_LEAF_SCRIPT,
-    PSBT_IN_TAP_MERKLE_ROOT, PSBT_IN_TAP_SCRIPT_SIG, PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO,
+    PSBT_IN_PARTIAL_SIG, PSBT_IN_POR_COMMITMENT, PSBT_IN_PREVIOUS_TXID, PSBT_IN_PROPRIETARY,
+    PSBT_IN_REDEEM_SCRIPT, PSBT_IN_REQUIRED_HEIGHT_LOCKTIME, PSBT_IN_REQUIRED_TIME_LOCKTIME,
+    PSBT_IN_RIPEMD160, PSBT_IN_SEQUENCE, PSBT_IN_SHA256, PSBT_IN_SIGHASH_TYPE,
+    PSBT_IN_TAP_BIP32_DERIVATION, PSBT_IN_TAP_INTERNAL_KEY, PSBT_IN_TAP_KEY_SIG,
+    PSBT_IN_TAP_LEAF_SCRIPT, PSBT_IN_TAP_MERKLE_ROOT, PSBT_IN_TAP_SCRIPT_SIG,
+    PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO,
 };
 #[cfg(feature = "silent-payments")]
 use crate::consts::{PSBT_IN_SP_DLEQ, PSBT_IN_SP_ECDH_SHARE};
@@ -45,7 +47,7 @@ use crate::encoding::codecs::ecdsa_signature::EcdsaSignatureDecoder;
 use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::encoding::codecs::leaf_script::{LeafScriptDecoder, TapLeafScript};
 use crate::encoding::codecs::taproot_signature::TaprootSignatureDecoder;
-use crate::encoding::{ExactLenEncoder, PsbtEncode};
+use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
 use crate::error::FundingUtxoError;
 #[cfg(feature = "miniscript")]
 use crate::error::SignatureSource;
@@ -106,7 +108,8 @@ pub struct Input {
     /// The finalized, fully-constructed scriptWitness with signatures and any
     /// other scripts necessary for this input to pass validation.
     pub final_script_witness: Option<Witness>,
-    /// TODO: Proof of reserves commitment
+    /// The Proof-of-Reserves commitment message (BIP-127, PSBT_IN_POR_COMMITMENT = 0x09).
+    pub por_commitment: Option<PorCommitment>,
     /// RIPEMD160 hash to preimage map.
     #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_byte_values"))]
     pub ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
@@ -168,6 +171,7 @@ impl Input {
             bip32_derivations: BTreeMap::new(),
             final_script_sig: None,
             final_script_witness: None,
+            por_commitment: None,
             ripemd160_preimages: BTreeMap::new(),
             sha256_preimages: BTreeMap::new(),
             hash160_preimages: BTreeMap::new(),
@@ -274,6 +278,7 @@ impl Input {
             redeem_script: None,
             witness_script: None,
             bip32_derivations: BTreeMap::new(),
+            por_commitment: None,
             ripemd160_preimages: BTreeMap::new(),
             sha256_preimages: BTreeMap::new(),
             hash160_preimages: BTreeMap::new(),
@@ -564,6 +569,7 @@ impl Input {
         v2_combine_map!(bip32_derivations, self, other);
         v2_combine_option!(final_script_sig, self, other);
         v2_combine_option!(final_script_witness, self, other);
+        v2_combine_option!(por_commitment, self, other);
         v2_combine_map!(ripemd160_preimages, self, other);
         v2_combine_map!(sha256_preimages, self, other);
         v2_combine_map!(hash160_preimages, self, other);
@@ -605,6 +611,7 @@ pub struct InputDecoder {
     bip32_derivations: BTreeMap<PublicKey, KeySource>,
     final_script_sig: Option<ScriptBuf>,
     final_script_witness: Option<Witness>,
+    por_commitment: Option<PorCommitment>,
     ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
     sha256_preimages: BTreeMap<sha256::Hash, Vec<u8>>,
     hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>>,
@@ -688,6 +695,11 @@ enum DecoderStage {
     DecodingFinalScriptWitness {
         key: Key,
         decoder: ValueDecoder<Witness>,
+    },
+    /// Decoding the Proof of Reserves commitment (BIP-127).
+    DecodingPorCommitment {
+        key: Key,
+        decoder: <PorCommitment as PsbtDecode>::Decoder,
     },
     /// Decoding a taproot key spend signature.
     DecodingTapKeySig {
@@ -853,6 +865,12 @@ impl DecoderStage {
                 }
                 Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() })
             }
+            PSBT_IN_POR_COMMITMENT => {
+                if !key.key.is_empty() {
+                    return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
+                }
+                Ok(Self::DecodingPorCommitment { key, decoder: Default::default() })
+            }
             PSBT_IN_TAP_KEY_SIG => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
@@ -953,6 +971,7 @@ impl Decoder for InputDecoder {
                             bip32_derivations: core::mem::take(&mut self.bip32_derivations),
                             final_script_sig: self.final_script_sig.take(),
                             final_script_witness: self.final_script_witness.take(),
+                            por_commitment: self.por_commitment.take(),
                             ripemd160_preimages: core::mem::take(&mut self.ripemd160_preimages),
                             sha256_preimages: core::mem::take(&mut self.sha256_preimages),
                             hash160_preimages: core::mem::take(&mut self.hash160_preimages),
@@ -1004,6 +1023,8 @@ impl Decoder for InputDecoder {
                     decoder.push_bytes(bytes).map_err(InputDecodeError::WitnessUtxo)?,
                 DecoderStage::DecodingFinalScriptWitness { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::FinalScriptWitness)?,
+                DecoderStage::DecodingPorCommitment { ref mut decoder, .. } =>
+                    decoder.push_bytes(bytes).map_err(InputDecodeError::PorCommitment)?,
                 DecoderStage::DecodingRedeemScript { ref mut decoder, .. } =>
                     decoder.push_bytes(bytes).map_err(InputDecodeError::RedeemScript)?,
                 DecoderStage::DecodingWitnessScript { ref mut decoder, .. } =>
@@ -1150,6 +1171,14 @@ impl Decoder for InputDecoder {
                         return Err(InputDecodeError::DuplicateKey(key));
                     }
                     self.final_script_witness = Some(witness);
+                    self.stage = DecoderStage::DecodingSeparator;
+                }
+                DecoderStage::DecodingPorCommitment { key, decoder } => {
+                    let commitment = decoder.end().map_err(InputDecodeError::PorCommitment)?;
+                    if self.por_commitment.is_some() {
+                        return Err(InputDecodeError::DuplicateKey(key));
+                    }
+                    self.por_commitment = Some(commitment);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 DecoderStage::DecodingTapKeySig { key, decoder } => {
@@ -1425,6 +1454,7 @@ impl Decoder for InputDecoder {
             | DecoderStage::DecodingHash256 { decoder, .. }
             | DecoderStage::DecodingProprietary { decoder, .. }
             | DecoderStage::DecodingUnknown { decoder, .. } => decoder.read_limit(),
+            DecoderStage::DecodingPorCommitment { decoder, .. } => decoder.read_limit(),
             DecoderStage::DecodingLeafScript { decoder, .. } => decoder.read_limit(),
             #[cfg(feature = "silent-payments")]
             DecoderStage::DecodingSpEcdhShare { decoder, .. } => decoder.read_limit(),
@@ -1454,6 +1484,7 @@ enum EncoderState<'e> {
     Bip32Derivations(IterEncoder<Bip32DerivationIter<'e>>),
     FinalScriptSig(ScriptPair<'e>),
     FinalScriptWitness(FinalScriptWitnessPair<'e>),
+    PorCommitment(PorCommitmentPair<'e>),
     Ripemd160Preimages(IterEncoder<Ripemd160Iter<'e>>),
     Sha256Preimages(IterEncoder<Sha256Iter<'e>>),
     Hash160Preimages(IterEncoder<Hash160Iter<'e>>),
@@ -1507,7 +1538,8 @@ impl<'e> InputMapEncoder<'e> {
             EncoderState::WitnessScript(_) => Some(self.bip32_derivations_state()),
             EncoderState::Bip32Derivations(_) => self.final_script_sig_state(),
             EncoderState::FinalScriptSig(_) => self.final_script_witness_state(),
-            EncoderState::FinalScriptWitness(_) => Some(self.ripemd160_state()),
+            EncoderState::FinalScriptWitness(_) => self.por_commitment_state(),
+            EncoderState::PorCommitment(_) => Some(self.ripemd160_state()),
             EncoderState::Ripemd160Preimages(_) => Some(self.sha256_state()),
             EncoderState::Sha256Preimages(_) => Some(self.hash160_state()),
             EncoderState::Hash160Preimages(_) => Some(self.hash256_state()),
@@ -1660,6 +1692,16 @@ impl<'e> InputMapEncoder<'e> {
                     exact,
                 )))
             }
+            None => self.por_commitment_state(),
+        }
+    }
+
+    fn por_commitment_state(&self) -> Option<EncoderState<'e>> {
+        match &self.input.por_commitment {
+            Some(msg) => Some(EncoderState::PorCommitment(KeyValueEncoder::from_sized_kv(
+                CompactSizeEncoder::new_u64(PSBT_IN_POR_COMMITMENT),
+                msg.psbt_encoder(),
+            ))),
             None => Some(self.ripemd160_state()),
         }
     }
@@ -1774,6 +1816,7 @@ impl Encoder for InputMapEncoder<'_> {
             EncoderState::Bip32Derivations(e) => e.current_chunk(),
             EncoderState::FinalScriptSig(e) => e.current_chunk(),
             EncoderState::FinalScriptWitness(e) => e.current_chunk(),
+            EncoderState::PorCommitment(e) => e.current_chunk(),
             EncoderState::Ripemd160Preimages(e) => e.current_chunk(),
             EncoderState::Sha256Preimages(e) => e.current_chunk(),
             EncoderState::Hash160Preimages(e) => e.current_chunk(),
@@ -1810,6 +1853,7 @@ impl Encoder for InputMapEncoder<'_> {
             EncoderState::Bip32Derivations(e) => e.advance().has_finished(),
             EncoderState::FinalScriptSig(e) => e.advance().has_finished(),
             EncoderState::FinalScriptWitness(e) => e.advance().has_finished(),
+            EncoderState::PorCommitment(e) => e.advance().has_finished(),
             EncoderState::Ripemd160Preimages(e) => e.advance().has_finished(),
             EncoderState::Sha256Preimages(e) => e.advance().has_finished(),
             EncoderState::Hash160Preimages(e) => e.advance().has_finished(),
@@ -1897,6 +1941,12 @@ impl InputBuilder {
         }
         self.0.non_witness_utxo = Some(tx);
         Ok(self)
+    }
+
+    /// Sets the [`Input::por_commitment`] field (BIP-127).
+    pub fn por_commitment(mut self, msg: PorCommitment) -> Self {
+        self.0.por_commitment = Some(msg);
+        self
     }
 
     /// Builds the [`Input`].
@@ -2083,6 +2133,9 @@ pub(crate) type WitnessUtxoPair<'e> =
 /// Encoder for the final-script-witness key-value pair (PSBT_IN_FINAL_SCRIPT_WITNESS).
 pub(crate) type FinalScriptWitnessPair<'e> =
     KeyValueEncoder<CompactSizeEncoder, ExactLenEncoder<'e, Witness>>;
+/// Encoder for the proof-of-reserves commitment key-value pair (PSBT_IN_POR_COMMITMENT).
+pub(crate) type PorCommitmentPair<'e> =
+    KeyValueEncoder<CompactSizeEncoder, <PorCommitment as PsbtEncode>::Encoder<'e>>;
 #[cfg(feature = "silent-payments")]
 /// Iterator yielding ECDH-share entries for silent payments (PSBT_IN_SP_ECDH_SHARE).
 pub(crate) type EcdhPairIter<'e> = KeyValueIter<
@@ -2100,6 +2153,7 @@ pub(crate) type TapMerkleRootPair<'e> =
 #[cfg(test)]
 #[cfg(feature = "std")]
 mod test {
+    use alloc::string::String;
     use alloc::vec;
 
     use bitcoin::Amount;
@@ -2476,6 +2530,7 @@ mod test {
         input.redeem_script = Some(ScriptBuf::from_bytes(vec![0x51]));
         input.witness_script = Some(ScriptBuf::from_bytes(vec![0x52]));
         input.sighash_type = Some(PsbtSighashType::ALL);
+        input.por_commitment = Some(PorCommitment(String::from("reserve proof message")));
 
         input.tap_key_sig = Some(taproot::Signature {
             signature: secp256k1::schnorr::Signature::from_slice(&[1u8; 64]).unwrap(),
@@ -2593,7 +2648,6 @@ mod test {
 
         assert_eq!(input.funding_utxo().unwrap_err(), FundingUtxoError::MismatchingUtxos);
     }
-
     #[test]
     fn legacy_fund_accepts_matching_tx() {
         let funding_tx = Transaction {
@@ -2657,6 +2711,7 @@ mod test {
             (PSBT_IN_WITNESS_SCRIPT, true),
             (PSBT_IN_FINAL_SCRIPTSIG, true),
             (PSBT_IN_FINAL_SCRIPTWITNESS, true),
+            (PSBT_IN_POR_COMMITMENT, true),
             (PSBT_IN_TAP_KEY_SIG, true),
             (PSBT_IN_TAP_INTERNAL_KEY, true),
             (PSBT_IN_TAP_MERKLE_ROOT, true),
