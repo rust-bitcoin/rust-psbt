@@ -61,83 +61,46 @@ impl Extractor {
 }
 
 impl Extractor {
-    /// The default `max_fee_rate` value used for extracting transactions with [`Self::extract_tx`].
+    /// Extracts the finalized [`Transaction`] from the PSBT.
     ///
-    /// As of 2023, even the biggest overpayers during the highest fee markets only paid around
-    /// 1000 sats/vByte. 25k sats/vByte is obviously a mistake at this point.
-    pub const DEFAULT_MAX_FEE_RATE: FeeRate = FeeRate::from_sat_per_vb_u32(25_000);
+    /// Use [`extract_tx_with_fee_limit`](Self::extract_tx_with_fee_limit) to additionally
+    /// verify that the transaction's fee rate is within a limit.
+    pub fn extract_tx(&self) -> Transaction { self.internal_extract_tx() }
 
-    /// Extracts the [`Transaction`] from a finalized [`Psbt`] by filling in the
-    /// available signature information, checking the fee rate against
-    /// [`Self::DEFAULT_MAX_FEE_RATE`].
+    /// Extracts the finalized [`Transaction`] from the PSBT and verifies that
+    /// its fee rate does not exceed `max_fee_rate`.
     ///
-    /// For a custom limit use [`Self::extract_tx_with_fee_rate_limit`]. To skip the fee rate
-    /// check entirely, use [`Self::extract_tx_unchecked_fee_rate`].
-    pub fn extract_tx(&self) -> Result<Transaction, ExtractTxFeeRateError> {
-        self.internal_extract_tx_with_fee_rate_limit(Self::DEFAULT_MAX_FEE_RATE)
-    }
-
-    /// Extracts the [`Transaction`] from a [`Psbt`] by filling in the available signature
-    /// information, checking the fee rate against `max_fee_rate`.
-    pub fn extract_tx_with_fee_rate_limit(
+    /// The fee rate check guards against accidentally extracting a transaction with an
+    /// absurdly high fee.
+    pub fn extract_tx_with_fee_limit(
         &self,
         max_fee_rate: FeeRate,
-    ) -> Result<Transaction, ExtractTxFeeRateError> {
-        self.internal_extract_tx_with_fee_rate_limit(max_fee_rate)
-    }
-
-    /// Perform [`Self::extract_tx`] without the fee rate check.
-    ///
-    /// This can result in a transaction with absurdly high fees. Use with caution.
-    #[allow(clippy::result_large_err)]
-    pub fn extract_tx_unchecked_fee_rate(&self) -> Result<Transaction, ExtractTxError> {
-        self.internal_extract_tx()
-    }
-
-    #[inline]
-    fn internal_extract_tx_with_fee_rate_limit(
-        &self,
-        max_fee_rate: FeeRate,
-    ) -> Result<Transaction, ExtractTxFeeRateError> {
-        let fee = self.0.fee().map_err(ExtractTxFeeRateError::Fee)?;
-        let tx = self.internal_extract_tx().map_err(ExtractTxFeeRateError::ExtractTx)?;
-
-        // Now that the extracted Transaction is made, decide how to return it.
+    ) -> Result<Transaction, ExtractError> {
+        let tx = self.internal_extract_tx();
+        let fee = self.0.fee().map_err(ExtractError::Fee)?;
         let fee_rate =
             FeeRate::from_sat_per_kwu(fee.to_sat().saturating_mul(1000) / tx.weight().to_wu());
-        // Prefer to return an AbsurdFeeRate error when both trigger.
         if fee_rate > max_fee_rate {
-            return Err(ExtractTxFeeRateError::FeeTooHigh { fee: fee_rate, max: max_fee_rate });
+            return Err(ExtractError::FeeTooHigh { fee: fee_rate, max: max_fee_rate });
         }
-
         Ok(tx)
     }
 
-    /// Extracts a finalized transaction from the [`Psbt`].
+    /// Builds the finalized transaction from the PSBT.
     ///
-    /// Uses `miniscript` to do interpreter checks.
+    /// This is infallible because [`Self::new`] guarantees the PSBT is finalized, the lock time
+    /// can be determined, and any silent payment output scripts are computed.
     #[inline]
-    #[allow(clippy::result_large_err)]
-    fn internal_extract_tx(&self) -> Result<Transaction, ExtractTxError> {
-        if !self.0.is_finalized() {
-            return Err(ExtractTxError::Unfinalized);
-        }
+    fn internal_extract_tx(&self) -> Transaction {
+        let lock_time =
+            self.0.determine_lock_time().expect("Extractor guarantees lock time can be determined");
 
-        let lock_time = self.0.determine_lock_time().map_err(ExtractTxError::DetermineLockTime)?;
-
-        #[cfg(feature = "silent-payments")]
-        if let Some(index) = uncomputed_silent_payment_output(&self.0) {
-            return Err(ExtractTxError::SilentPaymentOutputScriptNotComputed { index });
-        }
-
-        let tx = Transaction {
+        Transaction {
             version: self.0.global.tx_version,
             lock_time,
             input: self.0.inputs.iter().map(|input| input.signed_tx_in()).collect(),
             output: self.0.outputs.iter().map(|ouput| ouput.tx_out()).collect(),
-        };
-
-        Ok(tx)
+        }
     }
 }
 
@@ -156,18 +119,28 @@ fn uncomputed_silent_payment_output(psbt: &Psbt) -> Option<usize> {
         .position(|output| output.sp_v0_info.is_some() && output.script_pubkey.is_empty())
 }
 
-/// Error constructing an `Extractor`.
-#[derive(Debug)]
+/// Error constructing an [`Extractor`] or extracting a transaction from a PSBT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExtractError {
-    /// Attempted to extract tx from an unfinalized PSBT.
+    /// Attempted to construct an extractor from an unfinalized PSBT.
     PsbtNotFinalized,
-    /// Finalizer must be able to determine the lock time.
+    /// Extractor must be able to determine the lock time.
     DetermineLockTime(DetermineLockTimeError),
     /// A silent payment output still has no computed output script.
     #[cfg(feature = "silent-payments")]
     SilentPaymentOutputScriptNotComputed {
         /// Index of the offending output.
         index: usize,
+    },
+    /// Error calculating the fee.
+    Fee(FeeError),
+    /// The calculated fee rate exceeds the maximum.
+    FeeTooHigh {
+        /// Calculated fee rate.
+        fee: FeeRate,
+        /// Maximum allowable fee rate.
+        max: FeeRate,
     },
 }
 
@@ -180,6 +153,8 @@ impl fmt::Display for ExtractError {
             #[cfg(feature = "silent-payments")]
             Self::SilentPaymentOutputScriptNotComputed { index } =>
                 write!(f, "silent payment output {} has no computed output script", index),
+            Self::Fee(ref e) => write_err!(f, "fee calculation"; e),
+            Self::FeeTooHigh { fee, max } => write!(f, "fee {} is greater than max {}", fee, max),
         }
     }
 }
@@ -189,88 +164,11 @@ impl std::error::Error for ExtractError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DetermineLockTime(ref e) => Some(e),
+            Self::Fee(ref e) => Some(e),
             Self::PsbtNotFinalized => None,
             #[cfg(feature = "silent-payments")]
             Self::SilentPaymentOutputScriptNotComputed { .. } => None,
-        }
-    }
-}
-
-/// Error caused by fee calculation when extracting a [`Transaction`] from a PSBT.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ExtractTxFeeRateError {
-    /// Error calculating the fee rate.
-    Fee(FeeError),
-    /// The calculated fee rate exceeds max.
-    FeeTooHigh {
-        /// Calculated fee.
-        fee: FeeRate,
-        /// Maximum allowable fee.
-        max: FeeRate,
-    },
-    /// Error extracting the transaction.
-    ExtractTx(ExtractTxError),
-}
-
-impl fmt::Display for ExtractTxFeeRateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Fee(ref e) => write_err!(f, "fee calculation"; e),
-            Self::FeeTooHigh { fee, max } => write!(f, "fee {} is greater than max {}", fee, max),
-            Self::ExtractTx(ref e) => write_err!(f, "extract"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ExtractTxFeeRateError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Fee(ref e) => Some(e),
-            Self::ExtractTx(ref e) => Some(e),
             Self::FeeTooHigh { .. } => None,
-        }
-    }
-}
-
-/// Error extracting a [`Transaction`] from a PSBT.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ExtractTxError {
-    /// Attempted to extract transaction from an unfinalized PSBT.
-    Unfinalized,
-    /// Failed to determine lock time.
-    DetermineLockTime(DetermineLockTimeError),
-    /// A silent payment output still has no computed output script.
-    #[cfg(feature = "silent-payments")]
-    SilentPaymentOutputScriptNotComputed {
-        /// Index of the offending output.
-        index: usize,
-    },
-}
-
-impl fmt::Display for ExtractTxError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unfinalized =>
-                write!(f, "attempted to extract transaction from an unfinalized PSBT"),
-            Self::DetermineLockTime(ref e) => write_err!(f, "failed to determine lock time"; e),
-            #[cfg(feature = "silent-payments")]
-            Self::SilentPaymentOutputScriptNotComputed { index } =>
-                write!(f, "silent payment output {} has no computed output script", index),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ExtractTxError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::DetermineLockTime(ref e) => Some(e),
-            Self::Unfinalized => None,
-            #[cfg(feature = "silent-payments")]
-            Self::SilentPaymentOutputScriptNotComputed { .. } => None,
         }
     }
 }
@@ -328,17 +226,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_tx_rejects_uncomputed_silent_payment_output_script() {
-        // An `Extractor` deserialized through serde is built without `Extractor::new`.
-        let extractor = Extractor(psbt_with(sp_output(ScriptBuf::new())));
-
-        assert_eq!(
-            extractor.extract_tx_unchecked_fee_rate(),
-            Err(ExtractTxError::SilentPaymentOutputScriptNotComputed { index: 0 })
-        );
-    }
-
-    #[test]
     fn extractor_accepts_computed_silent_payment_output_script() {
         let script = ScriptBuf::from_hex(
             "51201111111111111111111111111111111111111111111111111111111111111111",
@@ -348,8 +235,7 @@ mod tests {
 
         let tx = Extractor::new(psbt)
             .expect("extractor must accept a computed silent payment output")
-            .extract_tx_unchecked_fee_rate()
-            .expect("extraction must succeed");
+            .extract_tx();
 
         assert_eq!(tx.output[0].script_pubkey, script);
     }
@@ -362,7 +248,7 @@ mod fee_rate_tests {
     use bitcoin::hashes::Hash;
     use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, Witness};
 
-    use super::{ExtractTxFeeRateError, Extractor, Psbt};
+    use super::{ExtractError, Extractor, Psbt};
     use crate::{Count, Global, Input, Output};
 
     fn finalized_input() -> Input {
@@ -393,16 +279,16 @@ mod fee_rate_tests {
 
     // Fee is 50_000 - 40_000 = 10_000 sats. The fee rate is computed independently here using the
     // correct formula; mutants that change the `/` operator or the `>` comparison in
-    // `internal_extract_tx_with_fee_rate_limit` produce a different value or control flow.
+    // `extract_tx` produce a different value or control flow.
     #[test]
     fn fee_rate_above_limit_errors() {
         let extractor = Extractor::new(psbt_with(plain_output())).expect("finalized psbt");
-        let tx = extractor.extract_tx_unchecked_fee_rate().expect("extraction succeeds");
+        let tx = extractor.extract_tx();
         let rate = 10_000_u64.saturating_mul(1000) / tx.weight().to_wu();
         let max = FeeRate::from_sat_per_kwu(rate - 1);
 
-        match extractor.extract_tx_with_fee_rate_limit(max) {
-            Err(ExtractTxFeeRateError::FeeTooHigh { fee, max: m }) => {
+        match extractor.extract_tx_with_fee_limit(max) {
+            Err(ExtractError::FeeTooHigh { fee, max: m }) => {
                 assert_eq!(fee, FeeRate::from_sat_per_kwu(rate));
                 assert_eq!(m, max);
             }
@@ -413,9 +299,9 @@ mod fee_rate_tests {
     #[test]
     fn fee_rate_equal_to_limit_is_ok() {
         let extractor = Extractor::new(psbt_with(plain_output())).expect("finalized psbt");
-        let tx = extractor.extract_tx_unchecked_fee_rate().expect("extraction succeeds");
+        let tx = extractor.extract_tx();
         let rate = 10_000_u64.saturating_mul(1000) / tx.weight().to_wu();
 
-        assert!(extractor.extract_tx_with_fee_rate_limit(FeeRate::from_sat_per_kwu(rate)).is_ok());
+        assert!(extractor.extract_tx_with_fee_limit(FeeRate::from_sat_per_kwu(rate)).is_ok());
     }
 }

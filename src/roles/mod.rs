@@ -12,7 +12,7 @@ mod updater;
 
 pub use constructor::{Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable};
 pub use creator::Creator;
-pub use extractor::{ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor};
+pub use extractor::{ExtractError, Extractor};
 #[cfg(feature = "miniscript")]
 pub use finalizer::{
     FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,

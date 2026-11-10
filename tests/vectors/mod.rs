@@ -417,7 +417,7 @@ impl TestCase {
                 let psbt = base64_psbt_v0(&psbt.base64).expect("extract input PSBT must be valid");
 
                 let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
-                let tx = extractor.extract_tx_unchecked_fee_rate().expect("extract must succeed");
+                let tx = extractor.extract_tx();
                 assert_eq!(serialize_hex(&tx), expected_tx_hex.as_str());
             }
             // DetermineLockTime: compute the lock time from the PSBT.
