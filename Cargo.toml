@@ -29,6 +29,8 @@ examples = [
 allowed_duplicates = [
   "hex-conservative",  # Required until we drop the 0.32 series of bitcoin.
   "syn",               # serde_derive and the old secp256k1 deps clash, scep256k1 will be upgraded at some point.
+  "secp256k1",         # bitcoin 0.32 pulls in v0.29; musig feature pulls in v0.33.
+  "secp256k1-sys",     # Two secp versions, two sys crates.
 ]
 
 [package.metadata.docs.rs]
@@ -37,11 +39,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["std"]
-std = ["bitcoin/std", "bitcoin-consensus-encoding/std", "miniscript?/std"]
+std = ["bitcoin/std", "bitcoin-consensus-encoding/std", "miniscript?/std", "secp256k1-33?/std"]
 rand = ["std", "bitcoin/rand-std"]
 serde = ["dep:serde", "bitcoin/serde", "bitcoin-consensus-encoding/serde"]
 base64 = ["bitcoin/base64"]
-silent-payments = [] # Silent Payments support
+silent-payments = []
+musig = ["dep:secp256k1-33"]
 
 [dependencies]
 bitcoin = { version = "0.32.102", default-features = false, features = ["encoding"] }
@@ -50,6 +53,7 @@ bitcoin-consensus-encoding = { version = "1.3.0", default-features = false, feat
 arbitrary = { version = "1.0.1", optional = true }
 miniscript = { version = "13.1.0", default-features = false, optional = true }
 serde = { version = "1.0.195", default-features = false, features = ["derive", "alloc"], optional = true }
+secp256k1-33 = { package = "secp256k1", version = "0.33", default-features = false, optional = true }
 
 [dev-dependencies]
 serde_json = "1.0.68"
