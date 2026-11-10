@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fix the Finalizer checking `after()` against the input's own required lock time instead of the transaction's
+  lock time, which BIP-370 determines from all inputs, and satisfying `after()` on an input whose sequence is final.
+
 - Fix v0 decoding rejecting an unsigned transaction whose version is not 0 or 2, which BIP-174 allows.
 
 - Fix `Psbt::deserialize` rejecting PSBTv2 outputs whose `PSBT_OUT_SCRIPT` value is empty (BIP-370 requires the key's

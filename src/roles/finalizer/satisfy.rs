@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use crate::bitcoin::hashes::{hash160, sha256d, Hash};
 use crate::bitcoin::key::XOnlyPublicKey;
 use crate::bitcoin::taproot::{self, ControlBlock, LeafVersion, TapLeafHash};
-use crate::bitcoin::{absolute, ecdsa, relative, ScriptBuf};
+use crate::bitcoin::{absolute, ecdsa, relative, ScriptBuf, Sequence};
 use crate::map::input::Input;
 use crate::miniscript::{MiniscriptKey, Preimage32, Satisfier, SigType, ToPublicKey};
 
@@ -18,6 +18,8 @@ use crate::miniscript::{MiniscriptKey, Preimage32, Satisfier, SigType, ToPublicK
 /// [`Satisfier`]: crate::miniscript::Satisfier
 pub(crate) struct InputSatisfier<'a> {
     pub(crate) input: &'a Input,
+    /// The lock time of the transaction, as BIP-370 determines it from all inputs.
+    pub(crate) lock_time: absolute::LockTime,
 }
 
 impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for InputSatisfier<'_> {
@@ -76,19 +78,9 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfier<Pk> for InputSatisfier<'_> {
             .map(|(pk, sig)| (*pk, *sig))
     }
 
-    // TODO: Verify this is correct.
     fn check_after(&self, n: absolute::LockTime) -> bool {
-        match n {
-            absolute::LockTime::Blocks(height) =>
-                if let Some(lock_time) = self.input.min_height {
-                    return height <= lock_time.to_height();
-                },
-            absolute::LockTime::Seconds(time) =>
-                if let Some(lock_time) = self.input.min_time {
-                    return time <= lock_time;
-                },
-        }
-        false
+        self.input.sequence.unwrap_or(Sequence::MAX).enables_absolute_lock_time()
+            && n.is_implied_by(self.lock_time)
     }
 
     // TODO: Verify this is correct.

@@ -90,8 +90,7 @@ impl Psbt {
     ) -> Result<(), InterpreterCheckInputError> {
         let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
 
-        // TODO: Check that this is correct?
-        let cltv = input.lock_time();
+        let cltv = unsigned_tx.lock_time;
         // TODO: is this usage of MAX correct?
         let csv = input.sequence.unwrap_or(Sequence::MAX);
 
@@ -228,8 +227,14 @@ impl std::error::Error for InterpreterCheckInputError {
 #[cfg(test)]
 mod tests {
 
+    use alloc::format;
+    use alloc::string::String;
+    use core::str::FromStr;
+
     use bitcoin::bip32::{IntoDerivationPath, Xpriv};
-    use bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, TxOut};
+    use bitcoin::hashes::Hash as _;
+    use bitcoin::{absolute, Amount, OutPoint, PublicKey, ScriptBuf, TxOut, Txid};
+    use miniscript::{Miniscript, Segwitv0};
 
     use super::*;
     use crate::roles::{Creator, Signer};
@@ -434,5 +439,106 @@ mod tests {
             .unwrap()
             .finalize(&secp)
             .expect("finalize must preserve the lock time the signature commits to");
+    }
+
+    /// Builds an unsigned two-input PSBT whose transaction lock time is time based.
+    ///
+    /// Input 0 spends the miniscript `script` returns for the keys at `m/0` and `m/1`, and sets
+    /// both required lock times. Input 1 sets only a required time, so BIP-370 makes the
+    /// transaction lock time a time.
+    fn time_locked_psbt(script: impl Fn(PublicKey, PublicKey) -> String) -> Psbt {
+        let secp = Secp256k1::new();
+        let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
+        let key = |path: &str| {
+            let path = path.into_derivation_path().unwrap();
+            let sk = xpriv.derive_priv(&secp, &path).unwrap();
+            (PublicKey::new(sk.to_keypair(&secp).public_key()), (xpriv.fingerprint(&secp), path))
+        };
+        let (pk, origin) = key("m/0");
+        let (pk_1, origin_1) = key("m/1");
+        let height = RequiredHeightLockTime::from_consensus(800_000).unwrap();
+        let time = absolute::Time::from_consensus(1_700_000_000).unwrap();
+
+        let witness_script =
+            Miniscript::<PublicKey, Segwitv0>::from_str(&script(pk, pk_1)).unwrap().encode();
+        let mut input_0 = Input::new(&OutPoint::new(Txid::all_zeros(), 0));
+        input_0.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(123_456),
+            script_pubkey: ScriptBuf::new_p2wsh(&witness_script.wscript_hash()),
+        });
+        input_0.witness_script = Some(witness_script);
+        input_0.bip32_derivations.insert(pk, origin.clone());
+        input_0.bip32_derivations.insert(pk_1, origin_1);
+        input_0.min_height = Some(height);
+        input_0.min_time = Some(time);
+        input_0.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+
+        let mut input_1 = Input::new(&OutPoint::new(Txid::all_zeros(), 1));
+        input_1.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(123_456),
+            script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+        });
+        input_1.bip32_derivations.insert(pk, origin);
+        input_1.min_time = Some(time);
+        input_1.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input_0)
+            .input(input_1)
+            .output(Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            }))
+            .expect("fixture output must be valid")
+            .psbt()
+            .unwrap();
+        assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
+        psbt
+    }
+
+    #[test]
+    fn finalize_checks_time_lock_against_transaction_lock_time() {
+        let secp = Secp256k1::verification_only();
+        let psbt = time_locked_psbt(|k, _| format!("and_v(v:pk({k}),after(1700000000))"));
+        Finalizer::new(sign(psbt))
+            .unwrap()
+            .finalize(&secp)
+            .expect("the transaction lock time meets input 0's time lock");
+    }
+
+    #[test]
+    fn finalize_rejects_height_lock_in_time_locked_transaction() {
+        let secp = Secp256k1::verification_only();
+        let psbt = time_locked_psbt(|k, _| format!("and_v(v:pk({k}),after(800000))"));
+        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&secp);
+        assert!(result.is_err(), "a time-based transaction lock time cannot meet a height lock");
+    }
+
+    #[test]
+    fn finalize_picks_branch_met_by_transaction_lock_time() {
+        let secp = Secp256k1::verification_only();
+        // The height branch has the shorter witness, so a satisfier that wrongly takes it as met
+        // prefers it.
+        let psbt = time_locked_psbt(|k, l| {
+            format!("or_i(and_v(v:pk({k}),after(1700000000)),and_v(v:pk({l}),after(800000)))")
+        });
+        let finalized = Finalizer::new(sign(psbt))
+            .unwrap()
+            .finalize(&secp)
+            .expect("the transaction lock time meets input 0's time branch");
+        // The witness is `[sig, selector, script]`; `or_i` takes its first, time, branch on 1.
+        let witness = finalized.inputs[0].final_script_witness.as_ref().unwrap();
+        assert_eq!(witness.nth(1), Some(&[1u8][..]));
+    }
+
+    #[test]
+    fn finalize_rejects_time_lock_on_input_with_final_sequence() {
+        let secp = Secp256k1::verification_only();
+        let mut psbt = time_locked_psbt(|k, _| format!("and_v(v:pk({k}),after(1700000000))"));
+        // A missing sequence is `Sequence::MAX`, under which CLTV fails.
+        psbt.inputs[0].sequence = None;
+        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&secp);
+        assert!(result.is_err(), "CLTV fails on an input whose sequence is final");
     }
 }
