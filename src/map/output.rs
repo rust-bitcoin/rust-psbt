@@ -31,6 +31,7 @@ use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
 use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::encoding::codecs::{TapTreeDecoder, TapTreeEncoder};
 use crate::encoding::PsbtEncode;
+use crate::error::write_err;
 use crate::map::error::{KeyDecodeError, OutputDecodeError};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::{SpV0Info, SpV0Label};
@@ -144,6 +145,8 @@ impl Output {
                 that: other.script_pubkey,
             });
         }
+
+        other.validate().map_err(CombineError::OutputValidation)?;
 
         v2_combine_option!(redeem_script, self, other);
         v2_combine_option!(witness_script, self, other);
@@ -864,11 +867,14 @@ pub enum CombineError {
         /// Into a PSBT with `that` script_pubkey.
         that: ScriptBuf,
     },
+    /// An output failed validation.
+    OutputValidation(ValidationError),
 }
 
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::OutputValidation(ref e) => write_err!(f, "output validation failed"; e),
             Self::AmountMismatch { ref this, ref that } => {
                 write!(f, "combine two PSBTs with different amounts: {} {}", this, that)
             }
@@ -883,6 +889,7 @@ impl fmt::Display for CombineError {
 impl std::error::Error for CombineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::OutputValidation(ref e) => Some(e),
             Self::AmountMismatch { .. } | Self::ScriptPubkeyMismatch { .. } => None,
         }
     }
