@@ -552,10 +552,11 @@ impl<'a, 'id> SigningSession<'a, 'id> {
                 continue;
             };
 
-            let sig = ecdsa::Signature {
-                signature: secp.sign_ecdsa_low_r(&msg, &sk.inner),
-                sighash_type,
+            let signature = match input.ecdsa_nonce {
+                EcdsaNonce::LowR => secp.sign_ecdsa_low_r(&msg, &sk.inner),
+                EcdsaNonce::GrindBytes(n) => secp.sign_ecdsa_grind_r(&msg, &sk.inner, n.into()),
             };
+            let sig = ecdsa::Signature { signature, sighash_type };
 
             let pk = sk.public_key(secp);
             signatures.push((pk, sig));
@@ -747,6 +748,15 @@ where
 /// identifier: only the session that created a signable input can sign with it.
 type SessionId<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
+/// How the ECDSA nonce is ground when signing a [`SignableInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum EcdsaNonce {
+    /// Grind until R is low, saving 1 byte.
+    LowR,
+    /// Grind until the DER signature is at most `71 - n` bytes.
+    GrindBytes(u8),
+}
+
 /// Evidence that an input is fit to sign.
 ///
 /// Produced only by a [`SigningSession`]: strictly, as a standalone input
@@ -773,6 +783,8 @@ pub struct SignableInput<'id> {
     script_code: ScriptBuf,
     /// The sighash type a new signature commits to.
     sighash_ty: PsbtSighashType,
+    /// How ECDSA signatures for this input grind their nonce. Low R by default.
+    ecdsa_nonce: EcdsaNonce,
     /// The id of the [`SigningSession`] that created this signable input.
     session_id: SessionId<'id>,
 }
@@ -935,7 +947,15 @@ impl<'id> SignableInput<'id> {
             }
         }
 
-        Ok(Self { index, output_type, prevout, script_code, sighash_ty, session_id: PhantomData })
+        Ok(Self {
+            index,
+            output_type,
+            prevout,
+            script_code,
+            sighash_ty,
+            ecdsa_nonce: EcdsaNonce::LowR,
+            session_id: PhantomData,
+        })
     }
 
     /// The input index this evidence refers to.
@@ -949,6 +969,32 @@ impl<'id> SignableInput<'id> {
     /// The declared type, or the per-output-type default (Default for taproot, ALL otherwise) when
     /// none is declared.
     pub fn sighash_type(&self) -> PsbtSighashType { self.sighash_ty }
+
+    /// Grinds ECDSA signatures for this input until they are at most 69 bytes.
+    ///
+    /// Takes about 256 signing attempts per signature instead of 2, see
+    /// `examples/grinding_bench.rs` for measured timings.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Warning:** Almost no other wallet produces ECDSA signatures this short, so a few of them
+    /// are enough to tell its transactions apart, link them and spot the change.
+    ///
+    /// </div>
+    pub fn grind_2_bytes(self) -> Self { Self { ecdsa_nonce: EcdsaNonce::GrindBytes(2), ..self } }
+
+    /// Grinds ECDSA signatures for this input until they are at most 68 bytes.
+    ///
+    /// Takes about 44,000 signing attempts per signature instead of 2, see
+    /// `examples/grinding_bench.rs` for measured timings.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Warning:** Almost no other wallet produces ECDSA signatures this short, so a few of them
+    /// are enough to tell its transactions apart, link them and spot the change.
+    ///
+    /// </div>
+    pub fn grind_3_bytes(self) -> Self { Self { ecdsa_nonce: EcdsaNonce::GrindBytes(3), ..self } }
 }
 
 impl<'a, 'id> AllSignableInputs<'a, 'id> {
@@ -989,6 +1035,16 @@ impl<'a, 'id> AllSignableInputs<'a, 'id> {
 
     /// Whether the set has no signable inputs.
     pub fn is_empty(&self) -> bool { self.inputs.is_empty() }
+
+    /// Grinds ECDSA signatures for every input of the set, see [`SignableInput::grind_2_bytes`].
+    pub fn grind_2_bytes(self) -> Self {
+        Self { inputs: self.inputs.into_iter().map(SignableInput::grind_2_bytes).collect(), ..self }
+    }
+
+    /// Grinds ECDSA signatures for every input of the set, see [`SignableInput::grind_3_bytes`].
+    pub fn grind_3_bytes(self) -> Self {
+        Self { inputs: self.inputs.into_iter().map(SignableInput::grind_3_bytes).collect(), ..self }
+    }
 }
 
 /// Data required to call [`GetKey`] to get the private key to sign an input.
