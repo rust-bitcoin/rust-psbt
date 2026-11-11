@@ -80,10 +80,7 @@ pub use crate::encoding::{decode_from_reader, encode_to_writer};
 pub use crate::psbt::ParsePsbtError;
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
-pub use crate::roles::{
-    FinalizeError, FinalizeInputError, Finalizer, InputError, InterpreterCheckError,
-    InterpreterCheckInputError,
-};
+pub use crate::roles::{FinalizeError, Finalizer, InputError};
 #[cfg(feature = "silent-payments")]
 #[doc(inline)]
 pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
@@ -120,10 +117,10 @@ pub use crate::{
     },
     roles::{
         sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,
-        Constructor, Creator, ExtractError, ExtractTxError, ExtractTxFeeRateError, Extractor,
-        GetKey, GetKeyError, GlobalPatch, InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest,
-        Mod, Modifiable, OutputPatch, OutputsOnlyModifiable, SignableInput, Signer, SigningErrors,
-        SigningKeys, SigningSession, Updater, UpdaterPatch,
+         Constructor, Creator, ExtractError, Extractor, GetKey, GetKeyError, GlobalPatch,
+         InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputPatch,
+         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
+         Updater, UpdaterPatch,
     },
     sighash_type::{ParseSighashTypeError, PsbtSighashType},
     tx_modifiable_flags::TxModifiableFlags,

@@ -89,7 +89,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -170,7 +170,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -274,7 +274,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -358,7 +358,7 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -436,7 +436,7 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -539,7 +539,7 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx_unchecked_fee_rate()?;
+    let tx = Extractor::new(finalized)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);

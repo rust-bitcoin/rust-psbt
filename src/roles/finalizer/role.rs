@@ -11,15 +11,17 @@ use core::fmt;
 
 use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
+use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{sighash, Address, Network, Script, ScriptBuf, Txid, Witness, XOnlyPublicKey};
+use bitcoin::{
+    Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
+};
 use miniscript::{
-    interpreter, BareCtx, Descriptor, Legacy, Miniscript, Satisfier, Segwitv0, SigType, Tap,
-    ToPublicKey,
+    interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
+    SigType, Tap, ToPublicKey,
 };
 
 use super::satisfy::InputSatisfier;
-use super::InterpreterCheckError;
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt};
@@ -34,7 +36,7 @@ impl Finalizer {
     ///
     /// A finalizer can only be created if all inputs have a funding UTXO, the lock time can be
     /// determined, and every signature's sighash type matches the input's required type.
-    pub fn new(psbt: Psbt) -> Result<Self, Error> {
+    pub fn new(psbt: Psbt) -> Result<Self, FinalizeError> {
         // TODO: Consider doing this with combinators.
         for input in psbt.inputs.iter() {
             let _ = input.funding_utxo()?;
@@ -42,7 +44,7 @@ impl Finalizer {
         let _ = psbt.determine_lock_time()?;
         for (input_index, input) in psbt.inputs.iter().enumerate() {
             if let Some((source, got)) = input.sighash_mismatch() {
-                return Err(Error::SignatureSighashType(SignatureSighashTypeError {
+                return Err(FinalizeError::SignatureSighashType(SignatureSighashTypeError {
                     input_index,
                     source,
                     got,
@@ -76,19 +78,64 @@ impl Finalizer {
             match self.finalize_input(input) {
                 Ok(input) => inputs.push(input),
                 // TODO: Do we want to continue loop and return a vector of errors?
-                Err(error) => return Err(FinalizeError::FinalizeInput { input_index, error }),
+                Err(error) => return Err(FinalizeError::Input { input_index, error }),
             }
         }
 
         let finalized =
             Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() };
 
-        finalized.interpreter_check(secp)?;
+        Self::interpreter_check(&finalized, secp)?;
         Ok(finalized)
     }
 
+    /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
+    /// to the context.
+    ///
+    /// The psbt must have included final script sig and final witness. In other words, this checks
+    /// whether the finalized psbt interprets correctly.
+    pub(crate) fn interpreter_check<C: Verification>(
+        psbt: &Psbt,
+        secp: &Secp256k1<C>,
+    ) -> Result<(), FinalizeError> {
+        let unsigned_tx = psbt.unsigned_tx()?;
+
+        let utxos: Vec<&TxOut> = psbt
+            .iter_funding_utxos()
+            .map(|res| res.expect("finalized PSBT has funding utxos"))
+            .collect();
+        let utxos = &Prevouts::All(&utxos);
+        let empty_witness = Witness::default();
+        let empty_script = ScriptBuf::new();
+        for (index, input) in psbt.inputs.iter().enumerate() {
+            let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+
+            // Use the resolved lock time from the unsigned transaction rather
+            // than per-input min_height/min_time fields, which may be None
+            // after a v0 roundtrip (the v0 format collapses them into the
+            // single nLockTime).
+            let cltv = unsigned_tx.lock_time;
+            // Assumed MAX if omitted.
+            let csv = input.sequence.unwrap_or(Sequence::MAX);
+
+            let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
+            let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
+
+            let interpreter =
+                Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
+                    FinalizeError::InterpreterConstructor { input_index: index, error }
+                })?;
+
+            let iter = interpreter.iter(secp, &unsigned_tx, index, utxos);
+            if let Some(error) = iter.filter_map(Result::err).next() {
+                return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
+            };
+        }
+        Ok(())
+    }
+
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
-    fn finalize_input(&self, input: &Input) -> Result<Input, FinalizeInputError> {
+    fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
         let allow_mall = true; // TODO: Add mall and no-mall versions.
         let fields = self.final_script_sig_and_witness(input, allow_mall)?;
         Ok(input.finalize(fields))
@@ -137,9 +184,9 @@ impl Finalizer {
 
                 // Generate the satisfaction witness and scriptsig.
                 if !allow_mall {
-                    desc.get_satisfaction(sat)?
+                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
                 } else {
-                    desc.get_satisfaction_mall(sat)?
+                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
                 }
             }
         };
@@ -183,7 +230,7 @@ impl Finalizer {
             let pk_bytes = &script_pubkey.to_bytes();
             match bitcoin::PublicKey::from_slice(&pk_bytes[1..script_pubkey_len - 1]) {
                 Ok(pk) => Ok(Descriptor::new_pk(pk)),
-                Err(e) => Err(InputError::from(e)),
+                Err(e) => Err(InputError::KeyErr(e)),
             }
         } else if script_pubkey.is_p2pkh() {
             // 2. `Pkh`: creates a `PkH` descriptor if partial_sigs has the corresponding pk
@@ -198,7 +245,7 @@ impl Finalizer {
                 *script_pubkey == addr.script_pubkey()
             });
             match partial_sig_contains_pk {
-                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::from),
+                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::MiniscriptError),
                 None => Err(InputError::MissingPubkey),
             }
         } else if script_pubkey.is_p2wpkh() {
@@ -215,7 +262,8 @@ impl Finalizer {
                 }
             });
             match partial_sig_contains_pk {
-                Some((pk, _sig)) => Ok(Descriptor::new_wpkh(*pk)?),
+                Some((pk, _sig)) =>
+                    Ok(Descriptor::new_wpkh(*pk).map_err(InputError::MiniscriptError)?),
                 None => Err(InputError::MissingPubkey),
             }
         } else if script_pubkey.is_p2wsh() {
@@ -231,8 +279,10 @@ impl Finalizer {
                     });
                 }
                 let ms =
-                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)?;
-                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))?)
+                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)
+                        .map_err(InputError::MiniscriptError)?;
+                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))
+                    .map_err(InputError::MiniscriptError)?)
             } else {
                 Err(InputError::MissingWitnessScript)
             }
@@ -257,8 +307,10 @@ impl Finalizer {
                             }
                             let ms = Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(
                                 witness_script,
-                            )?;
-                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))?)
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))
+                                .map_err(InputError::MiniscriptError)?)
                         } else {
                             Err(InputError::MissingWitnessScript)
                         }
@@ -278,7 +330,8 @@ impl Finalizer {
                                 }
                             });
                         match partial_sig_contains_pk {
-                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)?),
+                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)
+                                .map_err(InputError::MiniscriptError)?),
                             None => Err(InputError::MissingPubkey),
                         }
                     } else {
@@ -289,8 +342,9 @@ impl Finalizer {
                         if let Some(ref redeem_script) = input.redeem_script {
                             let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_consensus(
                                 redeem_script,
-                            )?;
-                            Ok(Descriptor::new_sh(ms)?)
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh(ms).map_err(InputError::MiniscriptError)?)
                         } else {
                             Err(InputError::MissingWitnessScript)
                         }
@@ -305,8 +359,10 @@ impl Finalizer {
             if input.redeem_script.is_some() {
                 return Err(InputError::NonEmptyRedeemScript);
             }
-            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)?;
-            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))?)
+            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)
+                .map_err(InputError::MiniscriptError)?;
+            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))
+                .map_err(InputError::MiniscriptError)?)
         }
     }
 }
@@ -388,73 +444,52 @@ fn construct_tap_witness(
     }
 }
 
-/// Error constructing a [`Finalizer`].
+/// Error constructing a [`Finalizer`] or finalizing a PSBT.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Error {
+pub enum FinalizeError {
     /// An input is missing its funding UTXO.
     FundingUtxo(FundingUtxoError),
     /// Finalizer must be able to determine the lock time.
     DetermineLockTime(DetermineLockTimeError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::FundingUtxo(ref e) => write_err!(f, "Finalizer missing funding UTXO"; e),
-            Self::DetermineLockTime(ref e) =>
-                write_err!(f, "Finalizer must be able to determine the lock time"; e),
-            Self::SignatureSighashType(ref e) => write_err!(f, "Finalizer sighash type error"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::FundingUtxo(ref e) => Some(e),
-            Self::DetermineLockTime(ref e) => Some(e),
-            Self::SignatureSighashType(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<FundingUtxoError> for Error {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
-}
-
-impl From<DetermineLockTimeError> for Error {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
-impl From<SignatureSighashTypeError> for Error {
-    fn from(e: SignatureSighashTypeError) -> Self { Self::SignatureSighashType(e) }
-}
-
-/// Error finalizing an input.
-#[derive(Debug)]
-pub enum FinalizeError {
-    /// Error finalizing an input.
-    FinalizeInput {
+    /// Failed to finalize an input.
+    Input {
         /// The associated input index for `error`.
         input_index: usize,
         /// Error finalizing input.
-        error: FinalizeInputError,
+        error: InputError,
     },
-    /// Error running the interpreter checks.
-    InterpreterCheck(InterpreterCheckError),
+    /// Failed to construct a [`miniscript::Interpreter`] during the interpreter check.
+    InterpreterConstructor {
+        /// Index of the input causing this error.
+        input_index: usize,
+        /// The interpreter error returned from `rust-miniscript`.
+        error: interpreter::Error,
+    },
+    /// Interpreter satisfaction failed for an input during the interpreter check.
+    InterpreterSatisfaction {
+        /// Index of the input causing this error.
+        input_index: usize,
+        /// The interpreter error returned from `rust-miniscript`.
+        error: interpreter::Error,
+    },
 }
 
 impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FinalizeInput { input_index, ref error } =>
+            Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
+            Self::DetermineLockTime(ref e) =>
+                write_err!(f, "finalizer must be able to determine the lock time"; e),
+            Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
+            Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
-            Self::InterpreterCheck(ref e) =>
-                write_err!(f, "error running the interpreter checks"; e),
+            Self::InterpreterConstructor { input_index, ref error } =>
+                write_err!(f, "interpreter constructor failed for input {}", input_index; error),
+            Self::InterpreterSatisfaction { input_index, ref error } =>
+                write_err!(f, "interpreter satisfaction failed for input {}", input_index; error),
         }
     }
 }
@@ -463,49 +498,32 @@ impl fmt::Display for FinalizeError {
 impl std::error::Error for FinalizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::FinalizeInput { input_index: _, ref error } => Some(error),
-            Self::InterpreterCheck(ref error) => Some(error),
+            Self::FundingUtxo(ref e) => Some(e),
+            Self::DetermineLockTime(ref e) => Some(e),
+            Self::SignatureSighashType(ref e) => Some(e),
+            Self::Input { input_index: _, ref error } => Some(error),
+            Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
+            Self::InterpreterSatisfaction { input_index: _, ref error } => Some(error),
         }
     }
 }
 
-impl From<InterpreterCheckError> for FinalizeError {
-    fn from(e: InterpreterCheckError) -> Self { Self::InterpreterCheck(e) }
+impl From<FundingUtxoError> for FinalizeError {
+    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
 }
 
-/// Error finalizing an input.
-#[derive(Debug)]
-pub enum FinalizeInputError {
-    /// Failed to get final script_sig and final witness.
-    Final(InputError),
+impl From<DetermineLockTimeError> for FinalizeError {
+    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
 }
 
-impl fmt::Display for FinalizeInputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Final(ref e) => write_err!(f, "final"; e),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for FinalizeInputError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Final(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<InputError> for FinalizeInputError {
-    fn from(e: InputError) -> Self { Self::Final(e) }
+impl From<SignatureSighashTypeError> for FinalizeError {
+    fn from(e: SignatureSighashTypeError) -> Self { Self::SignatureSighashType(e) }
 }
 
 /// Error type for Pbst Input
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum InputError {
-    /// Get the secp Errors directly
-    SecpErr(bitcoin::secp256k1::Error),
     /// Key errors
     KeyErr(bitcoin::key::FromSliceError),
     /// Could not satisfy taproot descriptor
@@ -513,8 +531,6 @@ pub enum InputError {
     /// satisfied. We cannot return a detailed error because we try all miniscripts
     /// in script spend path, we cannot know which miniscript failed.
     CouldNotSatisfyTr,
-    /// Error doing an interpreter-check on a finalized psbt
-    Interpreter(interpreter::Error),
     /// Redeem script does not match the p2sh hash
     InvalidRedeemScript {
         /// Redeem script
@@ -529,40 +545,18 @@ pub enum InputError {
         /// Expected p2wsh script
         p2wsh_expected: ScriptBuf,
     },
-    /// Invalid sig
-    InvalidSignature {
-        /// The bitcoin public key
-        pubkey: bitcoin::PublicKey,
-        /// The (incorrect) signature
-        sig: Vec<u8>,
-    },
     /// Pass through the underlying errors in miniscript
     MiniscriptError(miniscript::Error),
     /// Missing redeem script for p2sh
     MissingRedeemScript,
-    /// Missing witness
-    MissingWitness,
     /// used for public key corresponding to pkh/wpkh
     MissingPubkey,
     /// Missing witness script for segwit descriptors
     MissingWitnessScript,
-    ///Missing both the witness and non-witness utxo
-    MissingUtxo,
     /// Non empty Witness script for p2sh
     NonEmptyWitnessScript,
     /// Non empty Redeem script
     NonEmptyRedeemScript,
-    /// Non Standard sighash type
-    NonStandardSighashType(sighash::NonStandardSighashTypeError),
-    /// Sighash did not match
-    WrongSighashFlag {
-        /// required sighash type
-        required: sighash::EcdsaSighashType,
-        /// the sighash type we got
-        got: sighash::EcdsaSighashType,
-        /// the corresponding publickey
-        pubkey: bitcoin::PublicKey,
-    },
     /// Unable to determine the output type from the script pubkey.
     UnknownOutputType,
 }
@@ -574,20 +568,13 @@ impl std::error::Error for InputError {
             Self::CouldNotSatisfyTr
             | Self::InvalidRedeemScript { .. }
             | Self::InvalidWitnessScript { .. }
-            | Self::InvalidSignature { .. }
             | Self::MissingRedeemScript
-            | Self::MissingWitness
             | Self::MissingPubkey
             | Self::MissingWitnessScript
-            | Self::MissingUtxo
             | Self::NonEmptyWitnessScript
             | Self::NonEmptyRedeemScript
-            | Self::NonStandardSighashType(_)
-            | Self::WrongSighashFlag { .. }
             | Self::UnknownOutputType => None,
-            Self::SecpErr(e) => Some(e),
             Self::KeyErr(e) => Some(e),
-            Self::Interpreter(e) => Some(e),
             Self::MiniscriptError(e) => Some(e),
         }
     }
@@ -596,12 +583,7 @@ impl std::error::Error for InputError {
 impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::InvalidSignature { ref pubkey, ref sig } => {
-                write!(f, "PSBT: bad signature {} for key {:?}", pubkey, sig)
-            }
             Self::KeyErr(ref e) => write!(f, "Key Err: {}", e),
-            Self::Interpreter(ref e) => write!(f, "Interpreter: {}", e),
-            Self::SecpErr(ref e) => write!(f, "Secp Err: {}", e),
             Self::InvalidRedeemScript { ref redeem, ref p2sh_expected } => write!(
                 f,
                 "Redeem script {} does not match the p2sh script {}",
@@ -613,11 +595,7 @@ impl fmt::Display for InputError {
                 witness_script, p2wsh_expected
             ),
             Self::MiniscriptError(ref e) => write!(f, "Miniscript Error: {}", e),
-            Self::MissingWitness => write!(f, "PSBT is missing witness"),
             Self::MissingRedeemScript => write!(f, "PSBT is Redeem script"),
-            Self::MissingUtxo => {
-                write!(f, "PSBT is missing both witness and non-witness UTXO")
-            }
             Self::MissingWitnessScript => write!(f, "PSBT is missing witness script"),
             Self::MissingPubkey => write!(f, "Missing pubkey for a pkh/wpkh"),
             Self::NonEmptyRedeemScript => {
@@ -626,32 +604,8 @@ impl fmt::Display for InputError {
             Self::NonEmptyWitnessScript => {
                 write!(f, "PSBT has non-empty witness script at for legacy input")
             }
-            Self::WrongSighashFlag { required, got, pubkey } => write!(
-                f,
-                "PSBT: signature with key {:?} had \
-                 sighashflag {:?} rather than required {:?}",
-                pubkey, got, required
-            ),
-
             Self::CouldNotSatisfyTr => write!(f, "Could not satisfy Tr descriptor"),
-            Self::NonStandardSighashType(ref e) => write!(f, "Non-standard sighash type {}", e),
             Self::UnknownOutputType => write!(f, "unable to determine the output type"),
         }
     }
-}
-
-impl From<crate::miniscript::Error> for InputError {
-    fn from(e: crate::miniscript::Error) -> Self { Self::MiniscriptError(e) }
-}
-
-impl From<interpreter::Error> for InputError {
-    fn from(e: interpreter::Error) -> Self { Self::Interpreter(e) }
-}
-
-impl From<bitcoin::secp256k1::Error> for InputError {
-    fn from(e: bitcoin::secp256k1::Error) -> Self { Self::SecpErr(e) }
-}
-
-impl From<bitcoin::key::FromSliceError> for InputError {
-    fn from(e: bitcoin::key::FromSliceError) -> Self { Self::KeyErr(e) }
 }
