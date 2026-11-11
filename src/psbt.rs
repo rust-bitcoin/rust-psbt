@@ -326,6 +326,12 @@ impl Psbt {
         Ok(lock)
     }
 
+    /// Resolves the lock time and returns a [`ResolvedPsbt`].
+    pub fn try_resolve(self) -> Result<ResolvedPsbt, DetermineLockTimeError> {
+        let lock_time = self.determine_lock_time()?;
+        Ok(ResolvedPsbt { psbt: self, lock_time })
+    }
+
     /// Returns true if all inputs for this PSBT have been finalized.
     pub fn is_finalized(&self) -> bool { self.inputs.iter().all(Input::is_finalized) }
 
@@ -689,6 +695,30 @@ impl std::error::Error for CombineError {
             | Self::SequenceMismatch { .. } => None,
         }
     }
+}
+
+/// A PSBT whose lock time has been resolved.
+///
+/// Created via [`Psbt::try_resolve`], a `ResolvedPsbt` caches the lock time so that downstream
+/// roles can assert determinability at construction time rather than deferring the check.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedPsbt {
+    psbt: Psbt,
+    lock_time: absolute::LockTime,
+}
+
+impl core::ops::Deref for ResolvedPsbt {
+    type Target = Psbt;
+
+    fn deref(&self) -> &Psbt { &self.psbt }
+}
+
+impl ResolvedPsbt {
+    /// Returns the resolved lock time.
+    pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
+
+    /// Consumes the proof and returns the underlying [`Psbt`].
+    pub fn into_psbt(self) -> Psbt { self.psbt }
 }
 
 #[cfg(test)]

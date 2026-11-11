@@ -112,7 +112,8 @@ pub use crate::{
         Vout,
     },
     psbt::{
-        combine, CombineError, OutputType, Psbt, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm,
+        combine, CombineError, OutputType, Psbt, PsbtV2Decoder, PsbtV2Encoder, ResolvedPsbt,
+        SigningAlgorithm,
     },
     roles::{
         sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,
