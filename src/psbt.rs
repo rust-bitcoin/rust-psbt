@@ -720,6 +720,27 @@ impl ResolvedPsbt {
     /// Consumes the proof and returns the underlying [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.psbt }
 
+    /// Gives mutable access to the inner [`Psbt`] through `f`.
+    ///
+    /// The mutation **MUST NOT** change the locktime. This happens if the mutation:
+    ///
+    /// - Adds, removes, or changes an input's `min_time` or `min_height` field.
+    /// - Changes the global `fallback_lock_time`.
+    ///
+    /// In debug builds a check ensures the cached locktime is still consistent with the inner
+    /// PSBT after the mutation.
+    pub(crate) fn with_psbt<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut Psbt),
+    {
+        f(&mut self.psbt);
+        debug_assert_eq!(
+            self.lock_time,
+            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
+            "mutation changed the locktime"
+        );
+    }
+
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid {
         let mut tx = self.unsigned_tx();
