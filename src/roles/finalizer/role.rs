@@ -204,16 +204,12 @@ impl Finalizer {
     fn get_descriptor(&self, input: &Input) -> Result<Descriptor<bitcoin::PublicKey>, InputError> {
         let mut map: BTreeMap<hash160::Hash, bitcoin::PublicKey> = BTreeMap::new();
 
-        // TODO(Tobin): Understand why we use keys from all inputs?
-        let psbt_inputs = &self.0.inputs;
-        for psbt_input in psbt_inputs {
-            // Use BIP32 Derviation to get set of all possible keys.
-            let public_keys = psbt_input.bip32_derivations.keys();
-            for key in public_keys {
-                let bitcoin_key = *key;
-                let hash = bitcoin_key.pubkey_hash().to_raw_hash();
-                map.insert(hash, bitcoin_key);
-            }
+        // Use BIP32 Derivation to get set of all possible keys.
+        let public_keys = input.bip32_derivations.keys();
+        for key in public_keys {
+            let bitcoin_key = *key;
+            let hash = bitcoin_key.pubkey_hash().to_raw_hash();
+            map.insert(hash, bitcoin_key);
         }
 
         // Figure out Scriptpubkey
