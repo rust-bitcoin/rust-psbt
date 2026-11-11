@@ -234,11 +234,7 @@ fn construct_tap_witness(
     // Input which consist of all the keys added on a descriptor and thus we get keys from it.
     let public_keys = sat.input.tap_key_origins.keys();
     for key in public_keys {
-        // TODO: How is this key converting to a miniscript::interpreter::BitcoinKey?
-        // let hash = key.to_pubkeyhash(SigType::Schnorr);
-        let bitcoin_key = *key;
-        let hash = bitcoin_key.to_pubkeyhash(SigType::Schnorr);
-
+        let hash = key.to_pubkeyhash(SigType::Schnorr);
         map.insert(hash, *key);
     }
 
