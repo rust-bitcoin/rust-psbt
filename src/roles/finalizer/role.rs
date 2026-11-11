@@ -13,13 +13,8 @@ use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{
-    Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
-};
-use miniscript::{
-    interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
-    SigType, Tap, ToPublicKey,
-};
+use bitcoin::{Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey};
+use miniscript::{interpreter, Interpreter, Miniscript, Satisfier, SigType, Tap, ToPublicKey};
 
 use super::satisfy::InputSatisfier;
 use crate::error::{write_err, FundingUtxoError};
@@ -174,7 +169,7 @@ impl Finalizer {
                 (wit, ScriptBuf::new())
             } else {
                 // Get a descriptor for this input.
-                let desc = self.get_descriptor(input)?;
+                let desc = input.get_descriptor()?;
 
                 // Generate the satisfaction witness and scriptsig.
                 if !allow_mall {
@@ -193,167 +188,6 @@ impl Finalizer {
             OutputType::ShWpkh | OutputType::ShWsh => FinalScripts::Wrapped { script_sig, witness },
             OutputType::Bare | OutputType::Sh => FinalScripts::Legacy { script_sig },
         })
-    }
-
-    /// Creates a descriptor from an unfinalized PSBT input.
-    ///
-    /// Panics on out of bound input index for psbt Also sanity checks that the witness script and
-    /// redeem script are consistent with the script pubkey. Does *not* check signatures We parse
-    /// the insane version while satisfying because we want to move the script is probably already
-    /// created and we want to satisfy it in any way possible.
-    fn get_descriptor(&self, input: &Input) -> Result<Descriptor<bitcoin::PublicKey>, InputError> {
-        let mut map: BTreeMap<hash160::Hash, bitcoin::PublicKey> = BTreeMap::new();
-
-        // Use BIP32 Derivation to get set of all possible keys.
-        let public_keys = input.bip32_derivations.keys();
-        for key in public_keys {
-            let bitcoin_key = *key;
-            let hash = bitcoin_key.pubkey_hash().to_raw_hash();
-            map.insert(hash, bitcoin_key);
-        }
-
-        // Figure out Scriptpubkey
-        let script_pubkey = &input.funding_utxo().expect("guaranteed by Finalizer").script_pubkey;
-        // 1. `PK`: creates a `Pk` descriptor(does not check if partial sig is given)
-        if script_pubkey.is_p2pk() {
-            let script_pubkey_len = script_pubkey.len();
-            let pk_bytes = &script_pubkey.to_bytes();
-            match bitcoin::PublicKey::from_slice(&pk_bytes[1..script_pubkey_len - 1]) {
-                Ok(pk) => Ok(Descriptor::new_pk(pk)),
-                Err(e) => Err(InputError::KeyErr(e)),
-            }
-        } else if script_pubkey.is_p2pkh() {
-            // 2. `Pkh`: creates a `PkH` descriptor if partial_sigs has the corresponding pk
-            let partial_sig_contains_pk = input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                // Indirect way to check the equivalence of pubkey-hashes.
-                // Create a pubkey hash and check if they are the same.
-                // THIS IS A BUG AND *WILL* PRODUCE WRONG SATISFACTIONS FOR UNCOMPRESSED KEYS
-                // Partial sigs loses the compressed flag that is necessary
-                // TODO: See https://github.com/rust-bitcoin/rust-bitcoin/pull/836
-                // The type checker will fail again after we update to 0.28 and this can be removed
-                let addr = Address::p2pkh(pk, Network::Bitcoin);
-                *script_pubkey == addr.script_pubkey()
-            });
-            match partial_sig_contains_pk {
-                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::MiniscriptError),
-                None => Err(InputError::MissingPubkey),
-            }
-        } else if script_pubkey.is_p2wpkh() {
-            // 3. `Wpkh`: creates a `wpkh` descriptor if the partial sig has corresponding pk.
-            let partial_sig_contains_pk = input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                match bitcoin::key::CompressedPublicKey::try_from(pk) {
-                    Ok(compressed) => {
-                        // Indirect way to check the equivalence of pubkey-hashes.
-                        // Create a pubkey hash and check if they are the same.
-                        let addr = bitcoin::Address::p2wpkh(&compressed, bitcoin::Network::Bitcoin);
-                        *script_pubkey == addr.script_pubkey()
-                    }
-                    Err(_) => false,
-                }
-            });
-            match partial_sig_contains_pk {
-                Some((pk, _sig)) =>
-                    Ok(Descriptor::new_wpkh(*pk).map_err(InputError::MiniscriptError)?),
-                None => Err(InputError::MissingPubkey),
-            }
-        } else if script_pubkey.is_p2wsh() {
-            // 4. `Wsh`: creates a `Wsh` descriptor
-            if input.redeem_script.is_some() {
-                return Err(InputError::NonEmptyRedeemScript);
-            }
-            if let Some(ref witness_script) = input.witness_script {
-                if witness_script.to_p2wsh() != *script_pubkey {
-                    return Err(InputError::InvalidWitnessScript {
-                        witness_script: witness_script.clone(),
-                        p2wsh_expected: script_pubkey.clone(),
-                    });
-                }
-                let ms =
-                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)
-                        .map_err(InputError::MiniscriptError)?;
-                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))
-                    .map_err(InputError::MiniscriptError)?)
-            } else {
-                Err(InputError::MissingWitnessScript)
-            }
-        } else if script_pubkey.is_p2sh() {
-            match input.redeem_script {
-                None => Err(InputError::MissingRedeemScript),
-                Some(ref redeem_script) => {
-                    if redeem_script.to_p2sh() != *script_pubkey {
-                        return Err(InputError::InvalidRedeemScript {
-                            redeem: redeem_script.clone(),
-                            p2sh_expected: script_pubkey.clone(),
-                        });
-                    }
-                    if redeem_script.is_p2wsh() {
-                        // 5. `ShWsh` case
-                        if let Some(ref witness_script) = input.witness_script {
-                            if witness_script.to_p2wsh() != *redeem_script {
-                                return Err(InputError::InvalidWitnessScript {
-                                    witness_script: witness_script.clone(),
-                                    p2wsh_expected: redeem_script.clone(),
-                                });
-                            }
-                            let ms = Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(
-                                witness_script,
-                            )
-                            .map_err(InputError::MiniscriptError)?;
-                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))
-                                .map_err(InputError::MiniscriptError)?)
-                        } else {
-                            Err(InputError::MissingWitnessScript)
-                        }
-                    } else if redeem_script.is_p2wpkh() {
-                        // 6. `ShWpkh` case
-                        let partial_sig_contains_pk =
-                            input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                                match bitcoin::key::CompressedPublicKey::try_from(pk) {
-                                    Ok(compressed) => {
-                                        let addr = bitcoin::Address::p2wpkh(
-                                            &compressed,
-                                            bitcoin::Network::Bitcoin,
-                                        );
-                                        *redeem_script == addr.script_pubkey()
-                                    }
-                                    Err(_) => false,
-                                }
-                            });
-                        match partial_sig_contains_pk {
-                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)
-                                .map_err(InputError::MiniscriptError)?),
-                            None => Err(InputError::MissingPubkey),
-                        }
-                    } else {
-                        //7. regular p2sh
-                        if input.witness_script.is_some() {
-                            return Err(InputError::NonEmptyWitnessScript);
-                        }
-                        if let Some(ref redeem_script) = input.redeem_script {
-                            let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_consensus(
-                                redeem_script,
-                            )
-                            .map_err(InputError::MiniscriptError)?;
-                            Ok(Descriptor::new_sh(ms).map_err(InputError::MiniscriptError)?)
-                        } else {
-                            Err(InputError::MissingWitnessScript)
-                        }
-                    }
-                }
-            }
-        } else {
-            // 8. Bare case
-            if input.witness_script.is_some() {
-                return Err(InputError::NonEmptyWitnessScript);
-            }
-            if input.redeem_script.is_some() {
-                return Err(InputError::NonEmptyRedeemScript);
-            }
-            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)
-                .map_err(InputError::MiniscriptError)?;
-            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))
-                .map_err(InputError::MiniscriptError)?)
-        }
     }
 }
 
