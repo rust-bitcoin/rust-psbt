@@ -719,6 +719,24 @@ impl ResolvedPsbt {
 
     /// Consumes the proof and returns the underlying [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.psbt }
+
+    /// Returns this PSBT's unique identification.
+    pub fn id(&self) -> Txid {
+        let mut tx = self.unsigned_tx();
+        tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
+        tx.output = self.outputs.iter().map(Output::id_tx_out).collect();
+        tx.compute_txid()
+    }
+
+    /// Creates an unsigned transaction from the inner [`Psbt`].
+    pub fn unsigned_tx(&self) -> Transaction {
+        Transaction {
+            version: self.global.tx_version,
+            lock_time: self.lock_time,
+            input: self.inputs.iter().map(Input::unsigned_tx_in).collect(),
+            output: self.outputs.iter().map(Output::tx_out).collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -994,19 +1012,19 @@ mod tests {
         // the default applied by `Input::unsigned_tx_in` cannot affect the result.
         let baseline = valid_psbt();
         assert!(baseline.inputs[0].sequence.is_none());
-        let expected = baseline.id().expect("lock time must be determinable");
+        let expected = baseline.try_resolve().unwrap().id();
 
         for sequence in [Sequence::ZERO, Sequence::ENABLE_LOCKTIME_NO_RBF, Sequence::MAX] {
             let mut psbt = valid_psbt();
             psbt.inputs[0].sequence = Some(sequence);
-            assert_eq!(psbt.id().expect("lock time must be determinable"), expected);
+            assert_eq!(psbt.try_resolve().unwrap().id(), expected);
         }
     }
 
     fn id_for_output(output: Output) -> Txid {
         let mut psbt = single_input_psbt();
         psbt.outputs[0] = output;
-        psbt.id().expect("lock time must be determinable")
+        psbt.try_resolve().unwrap().id()
     }
 
     #[test]
