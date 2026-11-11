@@ -10,7 +10,9 @@ mod finalizer;
 mod signer;
 mod updater;
 
-pub use constructor::{Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable};
+pub use constructor::{
+    ConstructError, Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,
+};
 pub use creator::Creator;
 pub use extractor::{ExtractError, Extractor};
 #[cfg(feature = "miniscript")]
@@ -20,4 +22,4 @@ pub use signer::{
     GetKeyError, InputSigs, KeyRequest, SignableInput, Signer, SigningErrors, SigningKeys,
     SigningSession,
 };
-pub use updater::{GlobalPatch, InputPatch, OutputPatch, Updater, UpdaterPatch};
+pub use updater::{InputPatch, OutputPatch, Updater, UpdaterPatch};

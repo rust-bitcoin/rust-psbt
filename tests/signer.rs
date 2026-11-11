@@ -187,7 +187,7 @@ fn tr_input(public_key: PublicKey) -> Input {
 fn unsigned_psbt(inputs: Vec<Input>) -> Psbt {
     let mut constructor = Creator::new().constructor_modifiable();
     for input in inputs {
-        constructor = constructor.input(input);
+        constructor = constructor.input(input).expect("lock time must be determinable");
     }
     constructor
         .output(Output::new(TxOut {
@@ -196,7 +196,6 @@ fn unsigned_psbt(inputs: Vec<Input>) -> Psbt {
         }))
         .expect("test fixture output is valid")
         .psbt()
-        .expect("test fixture lock time is determinable")
 }
 
 // A user wants to sign a single input for which he holds only the witness UTXO. He has attested the

@@ -67,10 +67,10 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input)
+        .input(input)?
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;
@@ -149,10 +149,10 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input)
+        .input(input)?
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;
@@ -252,11 +252,11 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input0)
-        .input(input1)
+        .input(input0)?
+        .input(input1)?
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;
@@ -337,10 +337,10 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input)
+        .input(input)?
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;
@@ -416,9 +416,9 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input)
+        .input(input)?
         .output(OutputBuilder::new(spend_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;
@@ -518,10 +518,10 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
 
     let psbt = Creator::new()
         .constructor_modifiable()
-        .input(input)
+        .input(input)?
         .output(OutputBuilder::new(spend_output).build())?
         .output(OutputBuilder::new(change_output).build())?
-        .psbt()?;
+        .psbt();
 
     // Sign and finalize the PSBT.
     let mut signer = Signer::new(psbt)?;

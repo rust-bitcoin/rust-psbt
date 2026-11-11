@@ -17,19 +17,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let psbt = Psbt::deserialize(&ser)?;
     let in_0 = dummy_out_point();
     let ser = Constructor::<InputsOnlyModifiable>::new(psbt)?
-        .input(InputBuilder::new(&in_0).build())
+        .input(InputBuilder::new(&in_0).build())?
         .psbt()
-        .expect("valid lock time combination")
         .serialize();
 
     // The second constructor entity receives the PSBT with one input and adds a second input.
     let psbt = Psbt::deserialize(&ser)?;
     let in_1 = dummy_out_point();
     let ser = Constructor::<InputsOnlyModifiable>::new(psbt)?
-        .input(InputBuilder::new(&in_1).build())
+        .input(InputBuilder::new(&in_1).build())?
         .no_more_inputs()
         .psbt()
-        .expect("valid lock time combination")
         .serialize();
 
     // The third constructor entity receives the PSBT with inputs and adds an output.
@@ -39,7 +37,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .output(OutputBuilder::new(output).build())?
         .no_more_outputs()
         .psbt()
-        .expect("valid lock time combination")
         .serialize();
 
     // The PSBT is now ready for handling with the updater role.

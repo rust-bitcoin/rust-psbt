@@ -141,10 +141,10 @@ fn v2_only_fields_in_v0_encoding() {
     // Encoding to v0 implies construction is complete.
     let psbt = Constructor::<Modifiable>::default()
         .input(Input::new(&OutPoint::null()))
+        .expect("lock time must be determinable")
         .output(Output::new(make_tx_out(1)))
         .expect("output must be valid")
-        .psbt()
-        .unwrap();
+        .psbt();
     assert!(psbt.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(psbt.global.tx_modifiable_flags.is_outputs_modifiable());
 
@@ -169,10 +169,10 @@ fn v2_only_fields_in_v0_encoding() {
 
         let mut sp_psbt = Constructor::<Modifiable>::default()
             .input(Input::new(&OutPoint::null()))
+            .expect("lock time must be determinable")
             .output(Output::new(make_tx_out(1)))
             .expect("output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
 
         sp_psbt.global.sp_ecdh_shares.insert(pk, pk);
         sp_psbt.global.sp_dleq_proofs.insert(pk, DleqProof([0xAB; 64]));
@@ -216,10 +216,10 @@ fn v2_only_input_fields_surface_in_v0_unsigned_tx() {
     let psbt = Creator::new()
         .constructor_modifiable()
         .input(input)
+        .expect("lock time must be determinable")
         .output(Output::new(make_tx_out(1)))
         .expect("output must be valid")
-        .psbt()
-        .unwrap();
+        .psbt();
 
     let parsed = round_trip_v0(&psbt);
 
@@ -248,10 +248,10 @@ fn sign_then_convert_preserves_signatures() {
     let psbt = Creator::new()
         .constructor_modifiable()
         .input(input)
+        .expect("lock time must be determinable")
         .output(Output::new(make_tx_out(1)))
         .expect("output must be valid")
-        .psbt()
-        .unwrap();
+        .psbt();
 
     let secp = Secp256k1::<psbt_v2::bitcoin::secp256k1::All>::new();
     let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();

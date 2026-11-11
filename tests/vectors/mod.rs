@@ -226,14 +226,14 @@ impl TestCase {
                         sequence: Some(Sequence::MAX),
                         ..Input::new(&OutPoint { txid: prev_out.txid, vout: prev_out.vout })
                     };
-                    psbt = psbt.input(input);
+                    psbt = psbt.input(input).expect("lock time must be determinable");
                 }
                 for txout in outputs {
                     psbt = psbt
                         .output(Output::new(txout.clone()))
                         .expect("create task output must be valid");
                 }
-                let psbt = psbt.psbt().expect("lock time must be determinable");
+                let psbt = psbt.psbt();
 
                 assert_eq!(
                     PsbtV0::from_psbt(psbt)

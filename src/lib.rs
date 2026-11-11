@@ -92,8 +92,7 @@ pub use crate::{
     },
     error::{
         DeserializeError, DetermineLockTimeError, FeeError, FundingUtxoError,
-        IndexOutOfBoundsError, InputsNotModifiableError, NotUnsignedError,
-        OutputsNotModifiableError, PsbtNotModifiableError, SignError, SignatureSighashTypeError,
+        IndexOutOfBoundsError, NotUnsignedError, SignError, SignatureSighashTypeError,
         SignatureSource,
     },
     map::{
@@ -117,7 +116,7 @@ pub use crate::{
     },
     roles::{
         sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,
-        Constructor, Creator, ExtractError, Extractor, GetKey, GetKeyError, GlobalPatch,
+        ConstructError, Constructor, Creator, ExtractError, Extractor, GetKey, GetKeyError,
         InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputPatch,
         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
         Updater, UpdaterPatch,

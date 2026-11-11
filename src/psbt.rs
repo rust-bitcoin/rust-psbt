@@ -702,6 +702,8 @@ mod tests {
 
     use super::*;
     use crate::map::por_commitment::PorCommitment;
+    #[cfg(feature = "silent-payments")]
+    use crate::roles::ConstructError;
     use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable, Signer};
     use crate::{Count, PsbtSighashType};
 
@@ -1035,10 +1037,10 @@ mod tests {
         let mut output = output_with_script();
         output.sp_v0_label = Some(0);
 
-        assert_eq!(
+        assert!(matches!(
             Constructor::<Modifiable>::default().output(output).err(),
-            Some(output::ValidationError::SpLabelWithoutInfo)
-        );
+            Some(ConstructError::Output(output::ValidationError::SpLabelWithoutInfo))
+        ));
     }
 
     /// BIP-375 represents an underived silent payment output by omitting `PSBT_OUT_SCRIPT`,

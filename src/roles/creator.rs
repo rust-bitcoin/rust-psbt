@@ -94,7 +94,8 @@ impl Creator {
         let mut psbt = self.0;
         psbt.global.tx_modifiable_flags.set_inputs_modifiable();
         psbt.global.tx_modifiable_flags.set_outputs_modifiable();
-        Constructor(psbt, PhantomData)
+        let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
+        Constructor(psbt, lock_time, PhantomData)
     }
 
     /// Builds a [`Constructor`] that can only add inputs.
@@ -120,7 +121,8 @@ impl Creator {
         let mut psbt = self.0;
         psbt.global.tx_modifiable_flags.set_inputs_modifiable();
         psbt.global.tx_modifiable_flags.clear_outputs_modifiable();
-        Constructor(psbt, PhantomData)
+        let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
+        Constructor(psbt, lock_time, PhantomData)
     }
 
     /// Builds a [`Constructor`] that can only add outputs.
@@ -146,7 +148,8 @@ impl Creator {
         let mut psbt = self.0;
         psbt.global.tx_modifiable_flags.clear_inputs_modifiable();
         psbt.global.tx_modifiable_flags.set_outputs_modifiable();
-        Constructor(psbt, PhantomData)
+        let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
+        Constructor(psbt, lock_time, PhantomData)
     }
 
     /// Returns the created [`Psbt`].

@@ -40,14 +40,13 @@ use crate::{Global, ProprietaryKey, PsbtSighashType};
 ///
 /// let psbt = Creator::new()
 ///     .constructor_modifiable()
-///     .input(Input::new(&OutPoint::default()))
+///     .input(Input::new(&OutPoint::default())).expect("lock time must be determinable")
 ///     .output(Output::new(TxOut {
 ///         value: Amount::from_sat(10000),
 ///         script_pubkey: ScriptBuf::new(),
 ///     }))
 ///     .expect("output must be valid")
-///     .psbt()
-///     .expect("lock time must be determinable");
+///     .psbt();
 ///
 /// let updater = Updater::new(psbt).expect("lock time must be determinable");
 ///
