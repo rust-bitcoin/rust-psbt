@@ -37,12 +37,9 @@ impl Finalizer {
     /// A finalizer can only be created if all inputs have a funding UTXO, the lock time can be
     /// determined, and every signature's sighash type matches the input's required type.
     pub fn new(psbt: Psbt) -> Result<Self, FinalizeError> {
-        // TODO: Consider doing this with combinators.
-        for input in psbt.inputs.iter() {
-            let _ = input.funding_utxo()?;
-        }
         let _ = psbt.determine_lock_time()?;
         for (input_index, input) in psbt.inputs.iter().enumerate() {
+            let _ = input.funding_utxo()?;
             if let Some((source, got)) = input.sighash_mismatch() {
                 return Err(FinalizeError::SignatureSighashType(SignatureSighashTypeError {
                     input_index,
