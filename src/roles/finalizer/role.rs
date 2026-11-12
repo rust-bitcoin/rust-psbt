@@ -178,42 +178,54 @@ impl Finalizer {
                 let witness = Witness::from_slice(&wit);
                 FinalScripts::Segwit { witness }
             }
-            OutputType::Wpkh | OutputType::Wsh => {
-                // Get a descriptor for this input.
-                let desc = input.get_descriptor()?;
-
+            OutputType::Wpkh | OutputType::Wsh if allow_mall => {
                 // Generate the satisfaction witness and scriptsig.
-                let (wit, _) = if !allow_mall {
-                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
-                } else {
-                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
-                };
+                let (wit, _) = input
+                    .get_descriptor()?
+                    .get_satisfaction_mall(sat)
+                    .map_err(InputError::MiniscriptError)?;
                 let witness = Witness::from_slice(&wit);
                 FinalScripts::Segwit { witness }
             }
-            OutputType::ShWpkh | OutputType::ShWsh => {
-                // Get a descriptor for this input.
-                let desc = input.get_descriptor()?;
-
+            OutputType::Wpkh | OutputType::Wsh => {
+                let (wit, _) = input
+                    .get_descriptor()?
+                    .get_satisfaction(sat)
+                    .map_err(InputError::MiniscriptError)?;
+                let witness = Witness::from_slice(&wit);
+                FinalScripts::Segwit { witness }
+            }
+            OutputType::ShWpkh | OutputType::ShWsh if allow_mall => {
                 // Generate the satisfaction witness and scriptsig.
-                let (wit, script_sig) = if !allow_mall {
-                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
-                } else {
-                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
-                };
+                let (wit, script_sig) = input
+                    .get_descriptor()?
+                    .get_satisfaction_mall(sat)
+                    .map_err(InputError::MiniscriptError)?;
                 let witness = Witness::from_slice(&wit);
                 FinalScripts::Wrapped { script_sig, witness }
             }
-            OutputType::Bare | OutputType::Sh => {
-                // Get a descriptor for this input.
-                let desc = input.get_descriptor()?;
-
+            OutputType::ShWpkh | OutputType::ShWsh => {
+                let (wit, script_sig) = input
+                    .get_descriptor()?
+                    .get_satisfaction(sat)
+                    .map_err(InputError::MiniscriptError)?;
+                let witness = Witness::from_slice(&wit);
+                FinalScripts::Wrapped { script_sig, witness }
+            }
+            OutputType::Bare | OutputType::Sh if allow_mall => {
                 // Generate the satisfaction witness and scriptsig.
-                let (_, script_sig) = if !allow_mall {
-                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
-                } else {
-                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
-                };
+                let (_, script_sig) = input
+                    .get_descriptor()?
+                    .get_satisfaction_mall(sat)
+                    .map_err(InputError::MiniscriptError)?;
+                FinalScripts::Legacy { script_sig }
+            }
+            OutputType::Bare | OutputType::Sh => {
+                // Generate the satisfaction witness and scriptsig.
+                let (_, script_sig) = input
+                    .get_descriptor()?
+                    .get_satisfaction(sat)
+                    .map_err(InputError::MiniscriptError)?;
                 FinalScripts::Legacy { script_sig }
             }
         })
