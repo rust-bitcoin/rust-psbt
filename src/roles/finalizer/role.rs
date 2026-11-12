@@ -21,7 +21,7 @@ use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt, ResolvedPsbt};
 use crate::roles::{ExtractError, Extractor};
-use crate::SignatureSighashTypeError;
+use crate::{IndexOutOfBoundsError, SignatureSighashTypeError};
 
 /// Implements the BIP-370 Finalized role.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -143,8 +143,11 @@ impl Finalizer {
     #[allow(dead_code)]
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
     /// Finalize input with malleable witness.
-    pub fn finalize_input_mall(&self, input: &Input) -> Result<Input, InputError> {
-        let fields = self.final_script_sig_and_witness_mall(input)?;
+    pub fn finalize_input_mall(&self, index: usize) -> Result<Input, FinalizeError> {
+        let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
+        let fields = self
+            .final_script_sig_and_witness_mall(input)
+            .map_err(|e| FinalizeError::Input { input_index: index, error: e })?;
         Ok(input.finalize(fields))
     }
 
@@ -358,6 +361,8 @@ pub enum FinalizeError {
     FundingUtxo(FundingUtxoError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
+    /// Attempt to access an out of bounds PSBT element.
+    OutOfBounds(IndexOutOfBoundsError),
     /// Failed to finalize an input.
     Input {
         /// The associated input index for `error`.
@@ -385,6 +390,7 @@ impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
+            Self::OutOfBounds(ref e) => write_err!(f, "finalizer out of bounds access"; e),
             Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
             Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
@@ -401,6 +407,7 @@ impl std::error::Error for FinalizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FundingUtxo(ref e) => Some(e),
+            Self::OutOfBounds(ref e) => Some(e),
             Self::SignatureSighashType(ref e) => Some(e),
             Self::Input { input_index: _, ref error } => Some(error),
             Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
