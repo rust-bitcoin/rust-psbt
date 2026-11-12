@@ -228,29 +228,25 @@ fn construct_tap_witness(
     // When miniscript tries to finalize the PSBT, it doesn't have the full descriptor (which
     // contained a pkh() fragment) and instead resorts to parsing the raw script sig, which is
     // translated into a "expr_raw_pkh" internally.
-    let mut map: BTreeMap<hash160::Hash, XOnlyPublicKey> = BTreeMap::new();
-
     // We need to satisfy or dissatisfy any given key. `tap_key_origin` is the only field of PSBT
     // Input which consist of all the keys added on a descriptor and thus we get keys from it.
-    let public_keys = sat.input.tap_key_origins.keys();
-    for key in public_keys {
-        let hash = key.to_pubkeyhash(SigType::Schnorr);
-        map.insert(hash, *key);
-    }
+    let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
+        .input
+        .tap_key_origins
+        .keys()
+        .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
+        .collect();
 
     // try the key spend path first
-    if let Some(ref key) = sat.input.tap_internal_key {
-        if let Some(sig) =
-            <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(&sat, key)
-        {
-            return Ok(vec![sig.to_vec()]);
-        }
-    }
-    // Next script spends
-    let (mut min_wit, mut min_wit_len) = (None, None);
-    if let Some(block_map) =
+    if let Some(sig) = sat.input.tap_internal_key.and_then(|ref key| {
+        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(&sat, key)
+    }) {
+        Ok(vec![sig.to_vec()])
+    } else if let Some(block_map) =
         <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(&sat)
     {
+        // Next script spends
+        let (mut min_wit, mut min_wit_len) = (None, None);
         for (control_block, (script, ver)) in block_map {
             if *ver != LeafVersion::TapScript {
                 // We don't know how to satisfy non default version scripts yet
