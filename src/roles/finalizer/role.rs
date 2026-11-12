@@ -13,7 +13,7 @@ use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey};
+use bitcoin::{ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey};
 use miniscript::{interpreter, Interpreter, Miniscript, Satisfier, SigType, Tap, ToPublicKey};
 
 use super::satisfy::InputSatisfier;
@@ -171,7 +171,6 @@ impl Finalizer {
     //
     // TODO: Check that we are doing the right thing at the right time between finalization and extraction.
     fn final_script_sig_and_witness(&self, input: &Input) -> Result<FinalScripts, InputError> {
-        let spk = &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
             self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
@@ -182,7 +181,64 @@ impl Finalizer {
             // because the information about all the scripts might not be present. Also, currently the spec does
             // not support hidden branches, so inferring a descriptor is not possible.
             OutputType::Tr => {
-                let wit = construct_tap_witness(spk, sat, false);
+                let wit = {
+                    // When miniscript tries to finalize the PSBT, it doesn't have the full descriptor (which
+                    // contained a pkh() fragment) and instead resorts to parsing the raw script sig, which is
+                    // translated into a "expr_raw_pkh" internally.
+                    // We need to satisfy or dissatisfy any given key. `tap_key_origin` is the only field of PSBT
+                    // Input which consist of all the keys added on a descriptor and thus we get keys from it.
+                    let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
+                        .input
+                        .tap_key_origins
+                        .keys()
+                        .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
+                        .collect();
+
+                    // try the key spend path first
+                    if let Some(sig) = sat.input.tap_internal_key.and_then(|ref key| {
+                        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(
+                            &sat, key,
+                        )
+                    }) {
+                        Ok(vec![sig.to_vec()])
+                    } else if let Some(block_map) =
+                        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(
+                            &sat,
+                        )
+                    {
+                        // Next script spends
+                        let (mut min_wit, mut min_wit_len) = (None, None);
+                        for (control_block, (script, ver)) in block_map {
+                            if *ver != LeafVersion::TapScript {
+                                // We don't know how to satisfy non default version scripts yet
+                                continue;
+                            }
+                            let ms =
+                                match Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script) {
+                                    Ok(ms) => ms.substitute_raw_pkh(&map),
+                                    Err(..) => continue, // try another script
+                                };
+                            let mut wit = match ms.satisfy(&sat) {
+                                Ok(ms) => ms,
+                                Err(..) => continue,
+                            };
+                            wit.push(ms.encode().into_bytes());
+                            wit.push(control_block.serialize());
+                            let wit_len = Some(super::witness_size(&wit));
+                            if min_wit_len.is_some() && wit_len > min_wit_len {
+                                continue;
+                            } else {
+                                // store the minimum
+                                min_wit = Some(wit);
+                                min_wit_len = wit_len;
+                            }
+                        }
+                        min_wit.ok_or(InputError::CouldNotSatisfyTr)
+                    } else {
+                        // No control blocks found
+                        Err(InputError::CouldNotSatisfyTr)
+                    }
+                };
                 let witness = Witness::from_slice(&wit?);
                 FinalScripts::Segwit { witness }
             }
@@ -214,7 +270,6 @@ impl Finalizer {
     }
 
     fn final_script_sig_and_witness_mall(&self, input: &Input) -> Result<FinalScripts, InputError> {
-        let spk = &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
             self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
@@ -225,7 +280,64 @@ impl Finalizer {
             // because the information about all the scripts might not be present. Also, currently the spec does
             // not support hidden branches, so inferring a descriptor is not possible.
             OutputType::Tr => {
-                let wit = construct_tap_witness(spk, sat, true);
+                let wit = {
+                    // When miniscript tries to finalize the PSBT, it doesn't have the full descriptor (which
+                    // contained a pkh() fragment) and instead resorts to parsing the raw script sig, which is
+                    // translated into a "expr_raw_pkh" internally.
+                    // We need to satisfy or dissatisfy any given key. `tap_key_origin` is the only field of PSBT
+                    // Input which consist of all the keys added on a descriptor and thus we get keys from it.
+                    let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
+                        .input
+                        .tap_key_origins
+                        .keys()
+                        .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
+                        .collect();
+
+                    // try the key spend path first
+                    if let Some(sig) = sat.input.tap_internal_key.and_then(|ref key| {
+                        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(
+                            &sat, key,
+                        )
+                    }) {
+                        Ok(vec![sig.to_vec()])
+                    } else if let Some(block_map) =
+                        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(
+                            &sat,
+                        )
+                    {
+                        // Next script spends
+                        let (mut min_wit, mut min_wit_len) = (None, None);
+                        for (control_block, (script, ver)) in block_map {
+                            if *ver != LeafVersion::TapScript {
+                                // We don't know how to satisfy non default version scripts yet
+                                continue;
+                            }
+                            let ms =
+                                match Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script) {
+                                    Ok(ms) => ms.substitute_raw_pkh(&map),
+                                    Err(..) => continue, // try another script
+                                };
+                            let mut wit = match ms.satisfy_malleable(&sat) {
+                                Ok(ms) => ms,
+                                Err(..) => continue,
+                            };
+                            wit.push(ms.encode().into_bytes());
+                            wit.push(control_block.serialize());
+                            let wit_len = Some(super::witness_size(&wit));
+                            if min_wit_len.is_some() && wit_len > min_wit_len {
+                                continue;
+                            } else {
+                                // store the minimum
+                                min_wit = Some(wit);
+                                min_wit_len = wit_len;
+                            }
+                        }
+                        min_wit.ok_or(InputError::CouldNotSatisfyTr)
+                    } else {
+                        // No control blocks found
+                        Err(InputError::CouldNotSatisfyTr)
+                    }
+                };
                 let witness = Witness::from_slice(&wit?);
                 FinalScripts::Segwit { witness }
             }
@@ -283,76 +395,6 @@ impl core::ops::Deref for FinalizedPsbt {
 
     fn deref(&self) -> &Psbt { &self.0 }
 }
-
-// Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
-// because the information about all the scripts might not be present. Also, currently the spec does
-// not support hidden branches, so inferring a descriptor is not possible.
-fn construct_tap_witness(
-    spk: &Script,
-    sat: InputSatisfier,
-    allow_mall: bool,
-) -> Result<Vec<Vec<u8>>, InputError> {
-    assert!(spk.is_p2tr());
-    // When miniscript tries to finalize the PSBT, it doesn't have the full descriptor (which
-    // contained a pkh() fragment) and instead resorts to parsing the raw script sig, which is
-    // translated into a "expr_raw_pkh" internally.
-    // We need to satisfy or dissatisfy any given key. `tap_key_origin` is the only field of PSBT
-    // Input which consist of all the keys added on a descriptor and thus we get keys from it.
-    let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
-        .input
-        .tap_key_origins
-        .keys()
-        .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
-        .collect();
-
-    // try the key spend path first
-    if let Some(sig) = sat.input.tap_internal_key.and_then(|ref key| {
-        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(&sat, key)
-    }) {
-        Ok(vec![sig.to_vec()])
-    } else if let Some(block_map) =
-        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(&sat)
-    {
-        // Next script spends
-        let (mut min_wit, mut min_wit_len) = (None, None);
-        for (control_block, (script, ver)) in block_map {
-            if *ver != LeafVersion::TapScript {
-                // We don't know how to satisfy non default version scripts yet
-                continue;
-            }
-            let ms = match Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script) {
-                Ok(ms) => ms.substitute_raw_pkh(&map),
-                Err(..) => continue, // try another script
-            };
-            let mut wit = if allow_mall {
-                match ms.satisfy_malleable(&sat) {
-                    Ok(ms) => ms,
-                    Err(..) => continue,
-                }
-            } else {
-                match ms.satisfy(&sat) {
-                    Ok(ms) => ms,
-                    Err(..) => continue,
-                }
-            };
-            wit.push(ms.encode().into_bytes());
-            wit.push(control_block.serialize());
-            let wit_len = Some(super::witness_size(&wit));
-            if min_wit_len.is_some() && wit_len > min_wit_len {
-                continue;
-            } else {
-                // store the minimum
-                min_wit = Some(wit);
-                min_wit_len = wit_len;
-            }
-        }
-        min_wit.ok_or(InputError::CouldNotSatisfyTr)
-    } else {
-        // No control blocks found
-        Err(InputError::CouldNotSatisfyTr)
-    }
-}
-
 /// Error constructing a [`Finalizer`] or finalizing a PSBT.
 #[derive(Debug)]
 #[non_exhaustive]
