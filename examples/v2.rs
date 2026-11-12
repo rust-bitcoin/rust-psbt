@@ -87,12 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The updater role.
 
     // We can act as updater.
-    let updater = Updater::new(psbt)?;
+    let updater = Updater::new(psbt.try_resolve()?);
     let updater = updater.update(|mut draft| {
         draft.inputs[1].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
         draft
     })?;
-    let psbt = updater.psbt()?;
+    let psbt = updater.psbt();
 
     // Or we can get Alice and Bob to act as updaters.
     let updated_by_a = alice.update(psbt.clone())?;

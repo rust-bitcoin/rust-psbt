@@ -714,6 +714,22 @@ impl core::ops::Deref for ResolvedPsbt {
 }
 
 impl ResolvedPsbt {
+    /// Creates a `ResolvedPsbt` from a PSBT and its pre-computed locktime.
+    ///
+    /// The caller must ensure `lock_time` matches what
+    /// [`Psbt::determine_lock_time`] would return for `psbt`, that is, the
+    /// locktime is already resolved and the PSBT's locktime-affecting fields
+    /// (`min_time`, `min_height`, `fallback_lock_time`) have not changed since
+    /// resolution.
+    pub(crate) fn from_parts(psbt: Psbt, lock_time: absolute::LockTime) -> Self {
+        debug_assert_eq!(
+            lock_time,
+            psbt.determine_lock_time().expect("locktime must be determinable"),
+            "from_parts locktime does not match the PSBT"
+        );
+        Self { psbt, lock_time }
+    }
+
     /// Returns the resolved lock time.
     pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
 
