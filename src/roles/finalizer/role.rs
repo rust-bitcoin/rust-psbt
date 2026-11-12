@@ -58,8 +58,9 @@ impl Finalizer {
     pub fn finalize<C: Verification>(
         self,
         secp: &Secp256k1<C>,
-    ) -> Result<FinalizedPsbt, FinalizeError> {
+    ) -> Result<FinalizedPsbt, Vec<FinalizeError>> {
         let mut inputs = vec![];
+        let mut errors: Vec<FinalizeError> = vec![];
         for (input_index, input) in self.0.inputs.iter().enumerate() {
             // Already-finalized inputs are passed through unchanged.
             if input.is_finalized() {
@@ -68,8 +69,7 @@ impl Finalizer {
             }
             match self.finalize_input(input) {
                 Ok(input) => inputs.push(input),
-                // TODO: Do we want to continue loop and return a vector of errors?
-                Err(error) => return Err(FinalizeError::Input { input_index, error }),
+                Err(error) => errors.push(FinalizeError::Input { input_index, error }),
             }
         }
 
@@ -77,8 +77,16 @@ impl Finalizer {
         let mut psbt = self.0.into_psbt();
         psbt.inputs = inputs;
         let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
-        Self::interpreter_check(&finalized, secp)?;
-        Ok(FinalizedPsbt(finalized))
+
+        if errors.is_empty() {
+            if let Err(e) = Self::interpreter_check(&finalized, secp) {
+                errors.push(e);
+            } else {
+                return Ok(FinalizedPsbt(finalized));
+            }
+        }
+
+        Err(errors)
     }
 
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
