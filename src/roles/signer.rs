@@ -345,6 +345,9 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// prevout and is signed here.
     ///
     /// This method is infallible, all input-validation ran when the signable input was created.
+    ///
+    /// ECDSA signatures are ground until low-R, which on average takes twice as long as a plain
+    /// signature. Taproot signatures are not ground.
     pub fn get_input_sigs<C, K>(
         &mut self,
         input: &SignableInput<'id>,
@@ -369,6 +372,9 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// needed: each standalone sighash commits only to its own input's prevout.
     ///
     /// This method is infallible, all input-validation ran when the signable inputs were created.
+    ///
+    /// ECDSA signatures are ground until low-R, which on average takes twice as long as a plain
+    /// signature. Taproot signatures are not ground.
     pub fn get_some<C, K>(
         &mut self,
         inputs: &[SignableInput<'id>],
@@ -389,6 +395,9 @@ impl<'a, 'id> SigningSession<'a, 'id> {
     /// sighash commits to was collected once at creation.
     ///
     /// This method is infallible, all input-validation ran when the signable inputs were created.
+    ///
+    /// ECDSA signatures are ground until low-R, which on average takes twice as long as a plain
+    /// signature. Taproot signatures are not ground.
     pub fn get_all<C, K>(
         &mut self,
         inputs: &AllSignableInputs<'a, 'id>,
@@ -543,8 +552,10 @@ impl<'a, 'id> SigningSession<'a, 'id> {
                 continue;
             };
 
-            let sig =
-                ecdsa::Signature { signature: secp.sign_ecdsa(&msg, &sk.inner), sighash_type };
+            let sig = ecdsa::Signature {
+                signature: secp.sign_ecdsa_low_r(&msg, &sk.inner),
+                sighash_type,
+            };
 
             let pk = sk.public_key(secp);
             signatures.push((pk, sig));

@@ -665,3 +665,26 @@ fn get_some_signs_user_selected_inputs() {
     assert!(psbt.inputs[1].partial_sigs.is_empty());
     assert_eq!(psbt.inputs[2].partial_sigs.len(), 1);
 }
+
+// A user signs 20 ECDSA inputs and every signature is low-R. Without grinding, about half would be
+// high-R.
+#[test]
+fn ecdsa_signatures_are_low_r() {
+    const INPUTS: usize = 20;
+
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let inputs = (0..INPUTS).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly));
+    let mut signer = Signer::new(unsigned_psbt(inputs.collect())).unwrap();
+    let sigs = signer.session(sign_all_unchecked(&keys, &secp)).unwrap();
+    let psbt = signer.apply(sigs).unwrap();
+
+    for (index, input) in psbt.inputs.iter().enumerate() {
+        let sig = input.partial_sigs[&public_key].signature;
+        // High bit of R is unset.
+        assert_eq!(sig.serialize_compact()[0] & 0x80, 0, "input {index} has a high-R signature");
+        // A low-R signature is at most 70 bytes in DER.
+        assert!(sig.serialize_der().len() <= 70, "input {index} has a 71-byte DER signature");
+    }
+}

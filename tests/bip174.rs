@@ -185,8 +185,12 @@ mod workflow {
         bip174("Workflow A (step 4): with the PSBT produced in step 3 of Workflow A, a Signer which supports SIGHASH_ALL for P2PKH and P2WPKH spends and uses RFC6979 for nonce generation, adds the first partial signature of the second input of the PSBT");
     }
 
+    #[ignore = "dropped from Bitcoin Core when it adopted low-R, see bitcoin/bitcoin#13666"]
     #[test]
     fn signer_adds_second_partial_signature() {
+        // The vector expects a signature with a plain RFC6979 nonce, but the Signer grinds for
+        // low-R like Bitcoin Core, so it produces a different, valid signature. The strict signer
+        // case in fuzz.json signs the same input and expects the low-R signature.
         bip174("Workflow A (step 5): with the PSBT produced in step 4 of Workflow A, a Signer adds the second partial signature of the second input of the PSBT");
     }
 
