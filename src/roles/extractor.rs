@@ -18,12 +18,11 @@ use core::fmt;
 use bitcoin::{FeeRate, Transaction, Txid};
 
 use crate::error::{write_err, FeeError};
-use crate::psbt::Psbt;
-use crate::DetermineLockTimeError;
+use crate::psbt::ResolvedPsbt;
 
 /// Implements the BIP-370 Extractor role.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Extractor(Psbt);
+pub struct Extractor(ResolvedPsbt);
 
 impl Extractor {
     /// Creates an `Extractor`.
@@ -41,11 +40,10 @@ impl Extractor {
     /// finalizer keeps the ECDH shares and DLEQ proofs but clears the fields that name input
     /// public keys, so those keys have to be recovered as a BIP-352 receiver does, from the
     /// spent outputs and the final scriptSig and witness.
-    pub fn new(psbt: Psbt) -> Result<Self, ExtractError> {
+    pub fn new(psbt: ResolvedPsbt) -> Result<Self, ExtractError> {
         if psbt.inputs.iter().any(|input| !input.is_finalized()) {
             return Err(ExtractError::PsbtNotFinalized);
         }
-        let _ = psbt.determine_lock_time().map_err(ExtractError::DetermineLockTime)?;
         #[cfg(feature = "silent-payments")]
         if let Some(index) = uncomputed_silent_payment_output(&psbt) {
             return Err(ExtractError::SilentPaymentOutputScriptNotComputed { index });
@@ -55,9 +53,7 @@ impl Extractor {
     }
 
     /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Txid {
-        self.0.id().expect("Extractor guarantees lock time can be determined")
-    }
+    pub fn id(&self) -> Txid { self.0.id() }
 }
 
 impl Extractor {
@@ -89,11 +85,10 @@ impl Extractor {
     /// Builds the finalized transaction from the PSBT.
     ///
     /// This is infallible because [`Self::new`] guarantees the PSBT is finalized, the lock time
-    /// can be determined, and any silent payment output scripts are computed.
+    /// has been resolved, and any silent payment output scripts are computed.
     #[inline]
     fn internal_extract_tx(&self) -> Transaction {
-        let lock_time =
-            self.0.determine_lock_time().expect("Extractor guarantees lock time can be determined");
+        let lock_time = self.0.lock_time();
 
         Transaction {
             version: self.0.global.tx_version,
@@ -113,7 +108,7 @@ impl Extractor {
 // produce a transaction with an empty output script. See `Extractor::new` for what callers
 // must verify themselves.
 #[cfg(feature = "silent-payments")]
-fn uncomputed_silent_payment_output(psbt: &Psbt) -> Option<usize> {
+fn uncomputed_silent_payment_output(psbt: &crate::psbt::Psbt) -> Option<usize> {
     psbt.outputs
         .iter()
         .position(|output| output.sp_v0_info.is_some() && output.script_pubkey.is_empty())
@@ -125,8 +120,6 @@ fn uncomputed_silent_payment_output(psbt: &Psbt) -> Option<usize> {
 pub enum ExtractError {
     /// Attempted to construct an extractor from an unfinalized PSBT.
     PsbtNotFinalized,
-    /// Extractor must be able to determine the lock time.
-    DetermineLockTime(DetermineLockTimeError),
     /// A silent payment output still has no computed output script.
     #[cfg(feature = "silent-payments")]
     SilentPaymentOutputScriptNotComputed {
@@ -148,8 +141,6 @@ impl fmt::Display for ExtractError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PsbtNotFinalized => write!(f, "attempted to extract tx from an unfinalized PSBT"),
-            Self::DetermineLockTime(ref e) =>
-                write_err!(f, "extractor must be able to determine the lock time"; e),
             #[cfg(feature = "silent-payments")]
             Self::SilentPaymentOutputScriptNotComputed { index } =>
                 write!(f, "silent payment output {} has no computed output script", index),
@@ -163,7 +154,6 @@ impl fmt::Display for ExtractError {
 impl std::error::Error for ExtractError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::DetermineLockTime(ref e) => Some(e),
             Self::Fee(ref e) => Some(e),
             Self::PsbtNotFinalized => None,
             #[cfg(feature = "silent-payments")]
@@ -182,6 +172,7 @@ mod tests {
     use bitcoin::{Amount, CompressedPublicKey, OutPoint, ScriptBuf, TxOut, Txid, Witness};
 
     use super::*;
+    use crate::psbt::Psbt;
     use crate::{Count, Global, Input, Output};
 
     fn finalized_input() -> Input {
@@ -217,7 +208,7 @@ mod tests {
     fn extractor_rejects_uncomputed_silent_payment_output_script() {
         let psbt = psbt_with(sp_output(ScriptBuf::new()));
 
-        match Extractor::new(psbt) {
+        match Extractor::new(psbt.try_resolve().unwrap()) {
             Err(ExtractError::SilentPaymentOutputScriptNotComputed { index }) =>
                 assert_eq!(index, 0),
             other =>
@@ -233,7 +224,7 @@ mod tests {
         .expect("failed to parse script from hex");
         let psbt = psbt_with(sp_output(script.clone()));
 
-        let tx = Extractor::new(psbt)
+        let tx = Extractor::new(psbt.try_resolve().unwrap())
             .expect("extractor must accept a computed silent payment output")
             .extract_tx();
 
@@ -248,7 +239,8 @@ mod fee_rate_tests {
     use bitcoin::hashes::Hash;
     use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, TxOut, Txid, Witness};
 
-    use super::{ExtractError, Extractor, Psbt};
+    use super::{ExtractError, Extractor};
+    use crate::psbt::Psbt;
     use crate::{Count, Global, Input, Output};
 
     fn finalized_input() -> Input {
@@ -282,7 +274,8 @@ mod fee_rate_tests {
     // `extract_tx` produce a different value or control flow.
     #[test]
     fn fee_rate_above_limit_errors() {
-        let extractor = Extractor::new(psbt_with(plain_output())).expect("finalized psbt");
+        let extractor = Extractor::new(psbt_with(plain_output()).try_resolve().unwrap())
+            .expect("finalized psbt");
         let tx = extractor.extract_tx();
         let rate = 10_000_u64.saturating_mul(1000) / tx.weight().to_wu();
         let max = FeeRate::from_sat_per_kwu(rate - 1);
@@ -298,7 +291,8 @@ mod fee_rate_tests {
 
     #[test]
     fn fee_rate_equal_to_limit_is_ok() {
-        let extractor = Extractor::new(psbt_with(plain_output())).expect("finalized psbt");
+        let extractor = Extractor::new(psbt_with(plain_output()).try_resolve().unwrap())
+            .expect("finalized psbt");
         let tx = extractor.extract_tx();
         let rate = 10_000_u64.saturating_mul(1000) / tx.weight().to_wu();
 

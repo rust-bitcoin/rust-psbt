@@ -251,31 +251,6 @@ pub struct Psbt {
 }
 
 impl Psbt {
-    /// Returns this PSBT's unique identification.
-    pub(crate) fn id(&self) -> Result<Txid, DetermineLockTimeError> {
-        let mut tx = self.unsigned_tx()?;
-        // Updaters may change the sequence so to calculate ID we set it to zero.
-        tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
-        tx.output = self.outputs.iter().map(Output::id_tx_out).collect();
-
-        Ok(tx.compute_txid())
-    }
-
-    /// Creates an unsigned transaction from the inner [`Psbt`].
-    ///
-    /// Quidado! this transaction should not be used to determine the ID of
-    /// the [`Pbst`], use `Self::id()` instead.
-    pub(crate) fn unsigned_tx(&self) -> Result<Transaction, DetermineLockTimeError> {
-        let lock_time = self.determine_lock_time()?;
-
-        Ok(Transaction {
-            version: self.global.tx_version,
-            lock_time,
-            input: self.inputs.iter().map(Input::unsigned_tx_in).collect(),
-            output: self.outputs.iter().map(Output::tx_out).collect(),
-        })
-    }
-
     /// Determines the lock time as specified in [BIP-370] if it is possible to do so.
     ///
     /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#determining-lock-time>

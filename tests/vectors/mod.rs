@@ -421,7 +421,8 @@ impl TestCase {
             Task::Extract { psbt, tx: expected_tx_hex } => {
                 let psbt = base64_psbt_v0(&psbt.base64).expect("extract input PSBT must be valid");
 
-                let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
+                let extractor = Extractor::new(psbt.try_resolve().unwrap())
+                    .expect("extract task PSBT must be finalized");
                 let tx = extractor.extract_tx();
                 assert_eq!(serialize_hex(&tx), expected_tx_hex.as_str());
             }

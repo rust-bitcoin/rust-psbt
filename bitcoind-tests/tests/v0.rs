@@ -80,7 +80,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     });
     let signed = signer.apply(sigs).unwrap();
 
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -89,7 +89,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -161,7 +161,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -170,7 +170,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -265,7 +265,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -274,7 +274,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -349,7 +349,7 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -358,7 +358,7 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -427,7 +427,7 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -436,7 +436,7 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
@@ -530,7 +530,7 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
         session.get_all(&inputs, &xpriv, &secp)
     });
     let signed = signer.apply(sigs).unwrap();
-    let finalized = Finalizer::new(signed)?.finalize(&secp)?;
+    let finalized = Finalizer::new(signed.try_resolve()?)?.finalize(&secp)?;
 
     // Ask Bitcoin Core to decode the PSBT, proving it can parse the v0 envelope.
     let v0 = PsbtV0::from_psbt(finalized)?;
@@ -539,7 +539,7 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
     client.decode_psbt(&b64)?;
 
     // Broadcast the extracted transaction.
-    let tx = Extractor::new(finalized)?.extract_tx();
+    let tx = Extractor::new(finalized.try_resolve()?)?.extract_tx();
     client.send_raw_transaction(&tx)?;
     client.mine_a_block()?;
     client.track_receive(spend_amount);
