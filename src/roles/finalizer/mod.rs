@@ -112,7 +112,7 @@ mod tests {
             })],
         };
 
-        match Finalizer::new(psbt) {
+        match Finalizer::new(psbt.try_resolve().unwrap()) {
             Err(FinalizeError::SignatureSighashType(e)) => {
                 assert_eq!(e.input_index, 0);
                 assert_eq!(e.source, crate::SignatureSource::TapKey);
@@ -131,14 +131,17 @@ mod tests {
         signed.inputs[0].sighash_type = None;
 
         assert!(
-            matches!(Finalizer::new(signed), Err(FinalizeError::SignatureSighashType(_))),
+            matches!(
+                Finalizer::new(signed.try_resolve().unwrap()),
+                Err(FinalizeError::SignatureSighashType(_))
+            ),
             "finalizer must reject undeclared SIGHASH_NONE with a sighash type error"
         );
     }
 
     /// Returns the sighash type error `Finalizer::new` reports for `psbt`.
     fn sighash_type_error(psbt: Psbt) -> crate::SignatureSighashTypeError {
-        match Finalizer::new(psbt) {
+        match Finalizer::new(psbt.try_resolve().unwrap()) {
             Err(FinalizeError::SignatureSighashType(e)) => e,
             other => panic!("expected a sighash type error, got {:?}", other),
         }
@@ -228,11 +231,12 @@ mod tests {
         let secp = Secp256k1::verification_only();
         let signed = signed_psbt();
         let pk_bytes = signed.inputs[0].bip32_derivations.keys().next().unwrap().to_bytes();
-        let finalizer = Finalizer::new(signed).unwrap();
+        let finalizer = Finalizer::new(signed.try_resolve().unwrap()).unwrap();
         let mut finalized = finalizer.finalize(&secp).expect("valid psbt must finalize");
 
         // A correctly finalized PSBT passes the interpreter check.
-        Finalizer::interpreter_check(&finalized, &secp).expect("valid finalized psbt must pass");
+        Finalizer::interpreter_check(&finalized.clone().try_resolve().unwrap(), &secp)
+            .expect("valid finalized psbt must pass");
 
         // Tamper with the final script witness so the interpreter rejects the input.
         let witness = finalized.inputs[0].final_script_witness.as_mut().unwrap();
@@ -241,7 +245,7 @@ mod tests {
         witness.push(pk_bytes);
 
         assert!(
-            Finalizer::interpreter_check(&finalized, &secp).is_err(),
+            Finalizer::interpreter_check(&finalized.try_resolve().unwrap(), &secp).is_err(),
             "tampered witness must be rejected"
         );
     }
@@ -251,11 +255,14 @@ mod tests {
         // A finalized input must pass through the finalizer unchanged.
         let secp = Secp256k1::verification_only();
         let signed = signed_psbt();
-        let finalizer = Finalizer::new(signed).unwrap();
+        let finalizer = Finalizer::new(signed.try_resolve().unwrap()).unwrap();
         let finalized = finalizer.finalize(&secp).expect("valid psbt must finalize");
 
         // Finalizing again must leave the already-finalized input untouched.
-        let out = Finalizer::new(finalized.clone()).unwrap().finalize(&secp).unwrap();
+        let out = Finalizer::new(finalized.clone().try_resolve().unwrap())
+            .unwrap()
+            .finalize(&secp)
+            .unwrap();
 
         assert_eq!(out.inputs[0], finalized.inputs[0]);
     }
@@ -267,7 +274,7 @@ mod tests {
         unsigned.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let secp = Secp256k1::verification_only();
-        Finalizer::new(sign(unsigned))
+        Finalizer::new(sign(unsigned).try_resolve().unwrap())
             .unwrap()
             .finalize(&secp)
             .expect("finalize must preserve the sequence the signature commits to");
@@ -282,7 +289,7 @@ mod tests {
         unsigned.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let secp = Secp256k1::verification_only();
-        Finalizer::new(sign(unsigned))
+        Finalizer::new(sign(unsigned).try_resolve().unwrap())
             .unwrap()
             .finalize(&secp)
             .expect("finalize must preserve the lock time the signature commits to");
@@ -336,7 +343,7 @@ mod tests {
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
-        Finalizer::new(sign(psbt))
+        Finalizer::new(sign(psbt).try_resolve().unwrap())
             .unwrap()
             .finalize(&v_secp)
             .expect("the transaction lock time meets input 0's time lock");
@@ -390,7 +397,7 @@ mod tests {
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
-        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
+        let result = Finalizer::new(sign(psbt).try_resolve().unwrap()).unwrap().finalize(&v_secp);
         assert!(result.is_err(), "a time-based transaction lock time cannot meet a height lock");
     }
 
@@ -448,7 +455,7 @@ mod tests {
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
-        let finalized = Finalizer::new(sign(psbt))
+        let finalized = Finalizer::new(sign(psbt).try_resolve().unwrap())
             .unwrap()
             .finalize(&v_secp)
             .expect("the transaction lock time meets input 0's time branch");
@@ -505,7 +512,7 @@ mod tests {
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
-        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
+        let result = Finalizer::new(sign(psbt).try_resolve().unwrap()).unwrap().finalize(&v_secp);
         assert!(result.is_err(), "CLTV fails on an input whose sequence is final");
     }
 
@@ -544,7 +551,7 @@ mod tests {
             .psbt();
 
         let v_secp = Secp256k1::verification_only();
-        let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
+        let result = Finalizer::new(sign(psbt).try_resolve().unwrap()).unwrap().finalize(&v_secp);
         assert!(result.is_err(), "CSV fails on an input whose sequence is final");
     }
 
@@ -583,7 +590,7 @@ mod tests {
             .psbt();
 
         let v_secp = Secp256k1::verification_only();
-        Finalizer::new(sign(psbt))
+        Finalizer::new(sign(psbt).try_resolve().unwrap())
             .unwrap()
             .finalize(&v_secp)
             .expect("the sequence meets the older(10) relative time lock");

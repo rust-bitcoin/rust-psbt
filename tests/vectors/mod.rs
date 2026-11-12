@@ -411,7 +411,8 @@ impl TestCase {
                     base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
 
                 let secp = Secp256k1::verification_only();
-                let finalizer = Finalizer::new(psbt).expect("finalizer requirements must be met");
+                let finalizer = Finalizer::new(psbt.try_resolve().unwrap())
+                    .expect("finalizer requirements must be met");
                 let psbt = finalizer.finalize(&secp).expect("input psbt must be finalizable");
 
                 assert_eq!(psbt, expected_psbt);
