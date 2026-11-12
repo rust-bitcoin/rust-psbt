@@ -78,12 +78,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let multi = TxOut { value, script_pubkey: address.script_pubkey() };
 
     let psbt = constructor
-        .input(input_a)
-        .input(input_b)
+        .input(input_a)?
+        .input(input_b)?
         .output(OutputBuilder::new(multi).build())? // Use of the `OutputBuilder` is identical
         .output(Output::new(change))? // to just creating the `Output`.
-        .psbt()
-        .expect("valid lock time combination");
+        .psbt();
 
     // The updater role.
 

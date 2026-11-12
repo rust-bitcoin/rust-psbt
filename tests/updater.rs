@@ -59,11 +59,12 @@ fn two_party_psbt(input_a: Input, input_b: Input) -> Psbt {
     Creator::new()
         .constructor_modifiable()
         .input(input_a)
+        .expect("lock time must be determinable")
         .input(input_b)
+        .expect("lock time must be determinable")
         .output(Output::new(destination))
         .expect("output must be valid")
         .psbt()
-        .expect("lock time must be determinable")
 }
 
 /// A basic round-trip: enter the Updater role, update via a draft, extract the Psbt.

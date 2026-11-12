@@ -213,13 +213,13 @@ mod tests {
         Creator::new()
             .constructor_modifiable()
             .input(input)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
             .psbt()
-            .unwrap()
     }
 
     #[test]
@@ -323,14 +323,15 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input_0)
+            .expect("lock time must be determinable")
             .input(input_1)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
@@ -376,14 +377,15 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input_0)
+            .expect("lock time must be determinable")
             .input(input_1)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
@@ -433,14 +435,15 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input_0)
+            .expect("lock time must be determinable")
             .input(input_1)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
@@ -489,14 +492,15 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input_0)
+            .expect("lock time must be determinable")
             .input(input_1)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
         assert_eq!(psbt.determine_lock_time().unwrap(), absolute::LockTime::from(time));
 
         let v_secp = Secp256k1::verification_only();
@@ -530,13 +534,13 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
 
         let v_secp = Secp256k1::verification_only();
         let result = Finalizer::new(sign(psbt)).unwrap().finalize(&v_secp);
@@ -569,13 +573,13 @@ mod tests {
         let psbt = Creator::new()
             .constructor_modifiable()
             .input(input)
+            .expect("lock time must be determinable")
             .output(Output::new(TxOut {
                 value: Amount::from_sat(1_000),
                 script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
             }))
             .expect("fixture output must be valid")
-            .psbt()
-            .unwrap();
+            .psbt();
 
         let v_secp = Secp256k1::verification_only();
         Finalizer::new(sign(psbt))
