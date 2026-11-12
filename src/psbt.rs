@@ -757,6 +757,19 @@ impl ResolvedPsbt {
         );
     }
 
+    pub(crate) fn try_with_psbt<E, F>(&mut self, f: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut Psbt) -> Result<(), E>,
+    {
+        f(&mut self.psbt)?;
+        debug_assert_eq!(
+            self.lock_time,
+            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
+            "mutation changed the locktime"
+        );
+        Ok(())
+    }
+
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid {
         let mut tx = self.unsigned_tx();
@@ -1243,7 +1256,7 @@ mod tests {
         psbt.global.tx_modifiable_flags.set_inputs_modifiable();
         psbt.global.tx_modifiable_flags.set_outputs_modifiable();
 
-        let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+        let mut signer = Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
         signer.ecdsa_clear_tx_modifiable(EcdsaSighashType::All);
 
         let psbt = signer.psbt();

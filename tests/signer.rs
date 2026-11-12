@@ -93,7 +93,7 @@ fn strict_validation_allocations(input_count: u32) -> usize {
 
     // The request has matching counts and ordinary serialized input maps.
     // Exclude fixture construction and decoding from the allocation measurement.
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     ALLOCATED.with(|counter| counter.set(Some(0)));
     let (len, allocated) = signer.session(|session| {
         let checked = session.signable_inputs();
@@ -206,7 +206,7 @@ fn assume_signs_witness_only_input() {
     let (keys, public_key) = user(1);
 
     let psbt = unsigned_psbt(vec![wpkh_input(public_key, 0, Funding::WitnessOnly)]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     // Strictly, a witness-only non-P2TR input cannot be verified.
     assert_eq!(
@@ -237,7 +237,7 @@ fn strict_sign_all_blocked_by_other_users_input() {
         wpkh_input(a_public_key, 0, Funding::WitnessOnly),
         wpkh_input(b_public_key, 1, Funding::Full),
     ]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     // Strict full signing is all-or-nothing: A's unverifiable input blocks everything.
     let errors = signer.session(sign_all(&b_keys, &secp)).unwrap_err();
@@ -270,7 +270,7 @@ fn mixed_assume_and_strict_signers() {
 
     // User A trusts his own input and signs with the assume API.
     let psbt = {
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(|mut session| {
             let input = session.assume_checked_input(0).unwrap();
             session.get_input_sigs(&input, &a_keys, &secp)
@@ -279,7 +279,7 @@ fn mixed_assume_and_strict_signers() {
     };
 
     // User B receives the PSBT and strictly signs his own input.
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_input(1, &b_keys, &secp)).unwrap();
     let psbt = signer.apply([sigs]).unwrap();
 
@@ -305,7 +305,7 @@ fn strict_sign_succeeds_after_utxo_upgrade() {
         wpkh_input(a_public_key, 0, Funding::WitnessOnly),
         wpkh_input(b_public_key, 1, Funding::Full),
     ]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     // Strict signing fails on user A's witness-only input.
     let errors = signer.session(sign_all(&b_keys, &secp)).unwrap_err();
@@ -325,7 +325,7 @@ fn strict_sign_succeeds_after_utxo_upgrade() {
     ));
 
     // User B's strict signing now succeeds.
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&b_keys, &secp)).unwrap();
     let psbt = signer.apply(sigs).unwrap();
     assert!(psbt.inputs[0].partial_sigs.is_empty());
@@ -343,7 +343,7 @@ fn taproot_input_requires_all_signable_inputs() {
 
     let psbt =
         unsigned_psbt(vec![tr_input(a_public_key), wpkh_input(a_public_key, 1, Funding::Full)]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     // Singular: the P2WPKH input signs, but the non-ANYONECANPAY taproot input is rejected: its
     // sighash commits to every input's prevout, which only the complete set carries.
@@ -397,7 +397,7 @@ fn two_users_sign_2_of_2_wsh() {
 
     // User A signs: only his key is in his key map, B's key is silently skipped.
     let psbt = {
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_input(0, &a_keys, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         signer.apply([sigs]).unwrap()
@@ -405,7 +405,7 @@ fn two_users_sign_2_of_2_wsh() {
 
     // User B receives the PSBT and strictly signs: the existing matching
     // signature does not trip the strict checks.
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_input(0, &b_keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 1);
     let psbt = signer.apply([sigs]).unwrap();
@@ -459,7 +459,7 @@ fn two_users_sign_taproot_script_path() {
 
     // User A signs: only his key is in his key map, B's key is silently skipped.
     let psbt = {
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&a_keys, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].len(), 1);
@@ -469,7 +469,7 @@ fn two_users_sign_taproot_script_path() {
 
     // User B receives the PSBT and signs the same leaf: A's existing signature is filtered out
     // instead of duplicated.
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&b_keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 1);
     assert_eq!(sigs[0].len(), 1);
@@ -498,7 +498,7 @@ fn sighash_mismatch_strict_rejects_assume_signs() {
         },
     );
 
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     assert_eq!(signer.session(sign_input(0, &keys, &secp)), Err(SignError::SighashMismatch));
 
     // The assume path only trusts the caller's funding-data attestation and signs: the fresh
@@ -522,7 +522,7 @@ fn assume_still_rejects_inconsistent_utxos() {
         script_pubkey: ScriptBuf::new_p2wpkh(&public_key.wpubkey_hash().unwrap()),
     });
 
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     assert_eq!(
         signer.session(sign_input(0, &keys, &secp)),
         Err(SignError::FundingUtxo(FundingUtxoError::MismatchingUtxos))
@@ -544,7 +544,7 @@ fn anyonecanpay_taproot_allowed_standalone() {
     input.sighash_type = Some(PsbtSighashType::from(TapSighashType::SinglePlusAnyoneCanPay));
     let psbt = unsigned_psbt(vec![input]); // one output satisfies the SINGLE bound
 
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(|mut session| {
         let signable = session.signable_input(0).unwrap();
         assert_eq!(signable.index(), 0);
@@ -566,7 +566,7 @@ fn apply_clears_tx_modifiable_flags() {
     let unsigned = unsigned_psbt(vec![wpkh_input(public_key, 0, Funding::Full)]);
     assert!(unsigned.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(unsigned.global.tx_modifiable_flags.is_outputs_modifiable());
-    let mut signer = Signer::new(unsigned).unwrap();
+    let mut signer = Signer::new(unsigned.try_resolve().unwrap());
     let sigs = signer.session(sign_input(0, &keys, &secp)).unwrap();
     let signed = signer.apply([sigs]).unwrap();
     assert!(!signed.global.tx_modifiable_flags.is_inputs_modifiable());
@@ -575,7 +575,7 @@ fn apply_clears_tx_modifiable_flags() {
     let unsigned = unsigned_psbt(vec![tr_input(public_key)]);
     assert!(unsigned.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(unsigned.global.tx_modifiable_flags.is_outputs_modifiable());
-    let mut signer = Signer::new(unsigned).unwrap();
+    let mut signer = Signer::new(unsigned.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
     let signed = signer.apply(sigs).unwrap();
     assert!(signed.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
@@ -597,7 +597,7 @@ fn sign_all_fails_to_sign_all_witness_only() {
         wpkh_input(a_public_key, 0, Funding::WitnessOnly),
         wpkh_input(b_public_key, 1, Funding::WitnessOnly),
     ]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     let errors = signer.session(sign_all(&keys, &secp)).unwrap_err();
     assert_eq!(
@@ -623,7 +623,7 @@ fn sign_all_unchecked_signs_all_witness_only() {
         wpkh_input(a_public_key, 0, Funding::WitnessOnly),
         wpkh_input(b_public_key, 1, Funding::WitnessOnly),
     ]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     let sigs = signer.session(sign_all_unchecked(&keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 2);
@@ -647,7 +647,7 @@ fn get_some_signs_user_selected_inputs() {
         wpkh_input(b_public_key, 1, Funding::Full),
         wpkh_input(a_public_key, 2, Funding::Full),
     ]);
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
 
     let sigs = signer.session(|mut session| {
         let first = session.signable_input(0).unwrap();
@@ -675,7 +675,7 @@ fn ecdsa_signatures_are_low_r() {
     let (keys, public_key) = user(1);
 
     let inputs = (0..INPUTS).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly));
-    let mut signer = Signer::new(unsigned_psbt(inputs.collect())).unwrap();
+    let mut signer = Signer::new(unsigned_psbt(inputs.collect()).try_resolve().unwrap());
     let sigs = signer.session(sign_all_unchecked(&keys, &secp)).unwrap();
     let psbt = signer.apply(sigs).unwrap();
 
@@ -695,7 +695,7 @@ fn ecdsa_grinding_2_bytes_signatures_are_at_most_69_bytes() {
     let (keys, public_key) = user(1);
 
     let inputs = (0..3).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly)).collect();
-    let mut signer = Signer::new(unsigned_psbt(inputs)).unwrap();
+    let mut signer = Signer::new(unsigned_psbt(inputs).try_resolve().unwrap());
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().unwrap().grind_2_bytes();
         session.get_all(&inputs, &keys, &secp)

@@ -20,8 +20,8 @@ use bitcoin::{
 #[cfg(feature = "miniscript")]
 use miniscript::descriptor::Wildcard;
 
-use crate::error::{write_err, DetermineLockTimeError};
-use crate::psbt::Psbt;
+use crate::error::write_err;
+use crate::psbt::{Psbt, ResolvedPsbt};
 use crate::{OutputType, PsbtSighashType, SignError};
 
 /// Implements the BIP-370 Signer role.
@@ -41,27 +41,23 @@ use crate::{OutputType, PsbtSighashType, SignError};
 /// once the session closure and its signable inputs are dropped.
 #[derive(Debug)]
 pub struct Signer {
-    psbt: Psbt,
+    psbt: ResolvedPsbt,
     cache: SighashCache<Transaction>,
 }
 
 impl Signer {
     /// Creates a `Signer` for a single signing session, building the internal [`SighashCache`] from
-    /// the unsigned transaction. Fails if the [`Psbt`]'s lock time cannot be determined.
-    pub fn new(psbt: Psbt) -> Result<Self, DetermineLockTimeError> {
-        let cache = SighashCache::new(psbt.unsigned_tx()?);
-        Ok(Self { psbt, cache })
+    /// the unsigned transaction.
+    pub fn new(psbt: ResolvedPsbt) -> Self {
+        let cache = SighashCache::new(psbt.unsigned_tx());
+        Self { psbt, cache }
     }
 
     /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Txid {
-        self.psbt.id().expect("Signer guarantees lock time can be determined")
-    }
+    pub fn id(&self) -> Txid { self.psbt.id() }
 
     /// Creates an unsigned transaction from the inner [`Psbt`].
-    pub fn unsigned_tx(&self) -> Transaction {
-        self.psbt.unsigned_tx().expect("Signer guarantees lock time can be determined")
-    }
+    pub fn unsigned_tx(&self) -> Transaction { self.psbt.unsigned_tx() }
 
     /// Returns a reference to the inner [`Psbt`].
     pub fn as_psbt(&self) -> &Psbt { &self.psbt }
@@ -112,7 +108,7 @@ impl Signer {
     /// let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
     /// let keys = BTreeMap::from([(key.public_key(&secp), key)]);
     ///
-    /// let mut signer = Signer::new(psbt).unwrap();
+    /// let mut signer = Signer::new(psbt.try_resolve().unwrap());
     /// let sigs = signer.session(|mut session| {
     ///     let input = session.signable_input(0).unwrap();
     ///     session.get_input_sigs(&input, &keys, &secp)
@@ -137,51 +133,53 @@ impl Signer {
     /// for a different [`Psbt`]). Entries that produced no signatures are accepted and skipped.
     pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Psbt, SignError> {
         for InputSigs { index, signatures } in sigs {
-            let psbt_input =
-                self.psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
-
+            // Bounds-check even empty entries, then skip.
             if signatures.is_empty() {
+                self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
+                    let _ = psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
+                    Ok(())
+                })?;
                 continue;
             }
 
-            match signatures {
-                TypedSigs::Ecdsa(signatures) => {
-                    // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
-                    let sighash_ty = signatures
-                        .first()
-                        .expect("signatures emptiness checked above")
-                        .1
-                        .sighash_type;
-                    for (pk, sig) in signatures {
-                        psbt_input.partial_sigs.insert(pk, sig);
-                    }
+            let sighash_ty = match &signatures {
+                TypedSigs::Ecdsa(sigs) =>
+                    PsbtSighashType::from(sigs.first().expect("non-empty").1.sighash_type),
+                TypedSigs::Taproot(sigs) =>
+                    PsbtSighashType::from(sigs.first().expect("non-empty").1.sighash_type),
+            };
 
-                    self.psbt.clear_tx_modifiable(PsbtSighashType::from(sighash_ty));
+            // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
+            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
+                let psbt_input =
+                    psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
+                match signatures {
+                    TypedSigs::Ecdsa(sigs) =>
+                        for (pk, sig) in sigs {
+                            psbt_input.partial_sigs.insert(pk, sig);
+                        },
+                    TypedSigs::Taproot(sigs) =>
+                        for (tap_key_material, sig) in sigs {
+                            match tap_key_material {
+                                TapKeyMaterial::KeyPath(_) => {
+                                    let _ = psbt_input.tap_key_sig.insert(sig);
+                                }
+                                TapKeyMaterial::ScriptPath(key_material) => {
+                                    psbt_input.tap_script_sigs.insert(key_material, sig);
+                                }
+                            }
+                        },
                 }
-                TypedSigs::Taproot(signatures) => {
-                    // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
-                    let sighash_ty = signatures
-                        .first()
-                        .expect("signatures emptiness checked above")
-                        .1
-                        .sighash_type;
-                    for (tap_key_material, sig) in signatures {
-                        match tap_key_material {
-                            TapKeyMaterial::KeyPath(_) => {
-                                let _ = psbt_input.tap_key_sig.insert(sig);
-                            }
-                            TapKeyMaterial::ScriptPath(key_material) => {
-                                psbt_input.tap_script_sigs.insert(key_material, sig);
-                            }
-                        }
-                    }
+                Ok(())
+            })?;
 
-                    self.psbt.clear_tx_modifiable(PsbtSighashType::from(sighash_ty));
-                }
-            }
+            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
+                psbt.clear_tx_modifiable(sighash_ty);
+                Ok(())
+            })?;
         }
 
-        Ok(self.psbt)
+        Ok(self.psbt.into_psbt())
     }
 
     /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing an ECDSA input.
@@ -189,11 +187,11 @@ impl Signer {
     /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
     /// > inputs so that it accurately reflects the state of the PSBT.
     pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.psbt.clear_tx_modifiable(PsbtSighashType::from(ty))
+        self.psbt.with_psbt(|psbt| psbt.clear_tx_modifiable(PsbtSighashType::from(ty)))
     }
 
     /// Returns the inner [`Psbt`].
-    pub fn psbt(self) -> Psbt { self.psbt }
+    pub fn psbt(self) -> Psbt { self.psbt.into_psbt() }
 }
 
 /// A frozen, shared view of a [`Signer`]'s [`Psbt`] and [`SighashCache`] for producing signatures.
@@ -1712,7 +1710,7 @@ mod test {
     #[test]
     fn sighash_matches_direct_computation() {
         // The signer's sighash must equal an independent SighashCache computation for the input.
-        let mut signer = Signer::new(wpkh_psbt()).unwrap();
+        let mut signer = Signer::new(wpkh_psbt().try_resolve().unwrap());
         let (msg, ty) = signer.session(|mut session| {
             let input = session.signable_input(0).unwrap();
             session.ecdsa_sighash(&input)
@@ -1758,7 +1756,7 @@ mod test {
                 script_pubkey: ScriptBuf::new(),
             })],
         };
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let (msg, ty) = signer.session(|mut session| {
             let inputs = session.signable_inputs().expect("taproot passes signer checks");
             let input = &inputs.inputs[0];
@@ -1784,7 +1782,7 @@ mod test {
         let mut psbt = single_input_psbt();
         psbt.inputs[0].witness_utxo = Some(TxOut { value: Amount::from_sat(1_000), script_pubkey });
 
-        let mut signer = Signer::new(psbt.clone()).unwrap();
+        let mut signer = Signer::new(psbt.clone().try_resolve().unwrap());
         assert_eq!(
             signer.session(|p| p.signable_input(0).map(|input| input.index())),
             Err(SignError::AllPrevoutsRequired)
@@ -1794,7 +1792,7 @@ mod test {
             Err(SignError::AllPrevoutsRequired)
         );
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let len = signer
             .session(|p| p.signable_inputs().map(|inputs| inputs.len()))
             .expect("complete set accepts taproot");
@@ -1813,7 +1811,7 @@ mod test {
         let leaf_hash = TapLeafHash::from_byte_array([1u8; 32]);
         psbt.inputs[0].tap_key_origins.insert(xonly, (vec![leaf_hash], KeySource::default()));
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].len(), 1);
@@ -1852,7 +1850,7 @@ mod test {
         psbt.inputs[0].sighash_type =
             Some(PsbtSighashType::from(TapSighashType::AllPlusAnyoneCanPay));
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(|mut session| {
             let input = session.signable_input(0).expect("ACP taproot is signable standalone");
             assert_eq!(input.output_type(), OutputType::Tr);
@@ -1872,7 +1870,7 @@ mod test {
         let (psbt, key_map) = tr_psbt();
         let tx_out = psbt.inputs[0].witness_utxo.clone().unwrap();
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         let signature = match &sigs[0].signatures {
@@ -1921,7 +1919,7 @@ mod test {
         let mut psbt = psbt;
         psbt.inputs[0].tap_key_sig =
             Some(taproot::Signature { signature: existing, sighash_type: TapSighashType::Default });
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
         let psbt = signer.apply(sigs).unwrap();
@@ -1936,7 +1934,7 @@ mod test {
             (xonly, leaf_hash),
             taproot::Signature { signature: existing, sighash_type: TapSighashType::Default },
         );
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
     }
@@ -1949,7 +1947,7 @@ mod test {
         psbt.inputs.push(psbt.inputs[0].clone());
         psbt.global.input_count = Count::from(2);
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(|mut session| {
             let first = session.signable_input(0).unwrap();
             let second = session.signable_input(1).unwrap();
@@ -1967,7 +1965,7 @@ mod test {
         let (psbt, key_map) = keyed_psbt();
         let pubkey = *key_map.keys().next().unwrap();
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(|mut session| {
             let input = session.signable_input(0).unwrap();
             session.get_input_sigs(&input, &key_map, &secp)
@@ -1987,7 +1985,7 @@ mod test {
         let secp = Secp256k1::new();
         let (psbt, key_map) = keyed_psbt();
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_input(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.index, 0);
         assert_eq!(sigs.len(), 1);
@@ -2000,7 +1998,7 @@ mod test {
         let secp = Secp256k1::new();
         let (psbt, key_map) = keyed_psbt();
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         let psbt = signer.apply(sigs).unwrap();
@@ -2014,7 +2012,7 @@ mod test {
         witness_only(&mut psbt);
 
         // Strict: a witness-only non-P2TR input cannot be verified.
-        let mut signer = Signer::new(psbt.clone()).unwrap();
+        let mut signer = Signer::new(psbt.clone().try_resolve().unwrap());
         assert_eq!(
             signer.session(sign_input(0, &key_map, &secp)),
             Err(SignError::FundingUtxo(FundingUtxoError::UnverifiableUtxo))
@@ -2033,7 +2031,7 @@ mod test {
         let (mut psbt, key_map) = keyed_psbt();
         witness_only(&mut psbt);
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all_unchecked(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
     }
@@ -2043,7 +2041,7 @@ mod test {
         let secp = Secp256k1::new();
         let (psbt, key_map) = keyed_psbt();
 
-        let mut signer = Signer::new(psbt).unwrap();
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         assert_eq!(
             signer.session(sign_input(1, &key_map, &secp)),
             Err(SignError::IndexOutOfBounds(IndexOutOfBoundsError::Inputs { index: 1, length: 1 }))
@@ -2054,7 +2052,7 @@ mod test {
     fn apply_rejects_out_of_bounds_index_even_when_empty() {
         // An entry with no signatures is skipped only after its index is bounds-checked.
         let (psbt, _) = keyed_psbt();
-        let signer = Signer::new(psbt).unwrap();
+        let signer = Signer::new(psbt.try_resolve().unwrap());
         let empty = InputSigs { index: 1, signatures: TypedSigs::Ecdsa(vec![]) };
         let err = signer.apply([empty]).expect_err("out-of-bounds index is rejected");
         assert_eq!(

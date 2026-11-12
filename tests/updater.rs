@@ -574,8 +574,7 @@ fn signer_preserves_updates() {
             draft
         })
         .unwrap()
-        .signer()
-        .unwrap();
+        .signer();
 
     assert_eq!(signer.as_psbt().inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
 }

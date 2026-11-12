@@ -181,7 +181,8 @@ mod tests {
     fn sign(psbt: Psbt) -> Psbt {
         let secp = Secp256k1::new();
         let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
-        let mut signer = Signer::new(psbt).expect("test env, psbt should be well formed");
+        let mut signer =
+            Signer::new(psbt.try_resolve().expect("test env, psbt should be well formed"));
         let sigs = signer.session(|mut session| {
             let inputs =
                 session.assume_checked_inputs().expect("test env, inputs should be well formed");

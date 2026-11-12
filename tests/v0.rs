@@ -256,7 +256,7 @@ fn sign_then_convert_preserves_signatures() {
     let secp = Secp256k1::<psbt_v2::bitcoin::secp256k1::All>::new();
     let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
 
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(|mut session| {
         let inputs = session
             .assume_checked_inputs()

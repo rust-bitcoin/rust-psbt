@@ -73,7 +73,7 @@ fn p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
@@ -155,7 +155,7 @@ fn p2pkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
@@ -259,7 +259,7 @@ fn multiple_inputs() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
@@ -343,7 +343,7 @@ fn p2sh_p2wpkh() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
@@ -421,7 +421,7 @@ fn no_change() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)
@@ -524,7 +524,7 @@ fn p2wsh_2of2_multisig() -> Result<(), Box<dyn std::error::Error>> {
         .psbt();
 
     // Sign and finalize the PSBT.
-    let mut signer = Signer::new(psbt)?;
+    let mut signer = Signer::new(psbt.try_resolve()?);
     let sigs = signer.session(|mut session| {
         let inputs = session.assume_checked_inputs().expect("inputs are well formed");
         session.get_all(&inputs, &xpriv, &secp)

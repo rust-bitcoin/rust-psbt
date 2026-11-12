@@ -187,7 +187,8 @@ impl TestCase {
                 // The BIP-174 signer validity checks run upfront in `sign` (before any
                 // signature is produced), so signing must fail even though we hold no keys.
                 let inputs_len = psbt.inputs.len();
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let any_err = signer.session(|session| {
                     (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
                 });
@@ -203,7 +204,8 @@ impl TestCase {
                 // full tx prevout.
                 // Under strict signing, inputs with missing full tx prevout must fail while
                 // getting the signable inputs.
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let any_err = signer.session(|session| {
                     (0..input_len).any(|idx| session.signable_input(idx).is_err())
                 });
@@ -336,7 +338,8 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let sigs = signer.session(|mut session| {
                     let signable_inputs =
                         session.signable_inputs().expect("inputs are well formed and verifiable");
@@ -373,7 +376,8 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let sigs = signer.session(|mut session| {
                     let inputs = session.assume_checked_inputs().expect("inputs are well formed");
                     session.get_all(&inputs, &key_map, &secp)

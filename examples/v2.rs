@@ -240,7 +240,7 @@ impl Bob {
         let path = Self::PATH.parse::<DerivationPath>()?;
         let xpriv = self.0.master.derive_priv(&self.0.secp, &path)?;
 
-        let mut signer = Signer::new(psbt)?;
+        let mut signer = Signer::new(psbt.try_resolve()?);
         let sigs = signer.session(|mut session| {
             let input = session
                 .signable_input(1)
@@ -328,7 +328,7 @@ impl Entity {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;
 
-        let mut signer = Signer::new(psbt)?;
+        let mut signer = Signer::new(psbt.try_resolve()?);
         let sigs = signer.session(|mut session| {
             let inputs =
                 session.assume_checked_inputs().expect("Malformed input, cannot be signed");

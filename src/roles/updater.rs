@@ -12,7 +12,6 @@ use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash, TapTree};
 use bitcoin::{PublicKey, ScriptBuf, Sequence, Transaction, TxOut, Txid};
 
 use crate::encoding::codecs::leaf_script::TapLeafScript;
-use crate::error::DetermineLockTimeError;
 use crate::input::Input;
 use crate::output::Output;
 use crate::psbt::{CombineError, Psbt, ResolvedPsbt};
@@ -316,5 +315,5 @@ impl Updater {
     pub fn psbt(self) -> Psbt { self.0.into_psbt() }
 
     /// Transitions directly to the [`Signer`] role after completing all updates.
-    pub fn signer(self) -> Result<Signer, DetermineLockTimeError> { Signer::new(self.psbt()) }
+    pub fn signer(self) -> Signer { Signer::new(self.0) }
 }
