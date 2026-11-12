@@ -22,6 +22,8 @@ use miniscript::descriptor::Wildcard;
 
 use crate::error::write_err;
 use crate::psbt::{Psbt, ResolvedPsbt};
+#[cfg(feature = "miniscript")]
+use crate::roles::{FinalizeError, Finalizer};
 use crate::{OutputType, PsbtSighashType, SignError};
 
 /// Implements the BIP-370 Signer role.
@@ -113,7 +115,8 @@ impl Signer {
     ///     let input = session.signable_input(0).unwrap();
     ///     session.get_input_sigs(&input, &keys, &secp)
     /// });
-    /// let psbt = signer.apply([sigs]).unwrap();
+    /// signer.apply([sigs]).unwrap();
+    /// let psbt = signer.psbt();
     /// assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     /// ```
     ///
@@ -125,13 +128,15 @@ impl Signer {
         f(SigningSession { psbt: &self.psbt, cache: &mut self.cache, id: PhantomData })
     }
 
-    /// Writes signatures produced by a [`SigningSession`] into the [`Psbt`].
+    /// Writes signatures produced by a [`SigningSession`] into the [`Psbt`] in-place.
     ///
     /// Clears `PSBT_GLOBAL_TX_MODIFIABLE` for each input signed.
     ///
     /// Fails on the first entry whose index is out of bounds (only possible for signatures created
     /// for a different [`Psbt`]). Entries that produced no signatures are accepted and skipped.
-    pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Psbt, SignError> {
+    ///
+    /// After applying, use [`psbt`](Self::psbt) to extract the [`Psbt`] for serialization.
+    pub fn apply(&mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<(), SignError> {
         for InputSigs { index, signatures } in sigs {
             // Bounds-check even empty entries, then skip.
             if signatures.is_empty() {
@@ -179,8 +184,15 @@ impl Signer {
             })?;
         }
 
-        Ok(self.psbt.into_psbt())
+        Ok(())
     }
+
+    /// Transitions to the [`Finalizer`] role.
+    ///
+    /// The PSBT must have had signatures applied via [`apply`](Self::apply) before this is called;
+    /// otherwise the [`Finalizer`] may reject the PSBT for missing signatures or sighash mismatches.
+    #[cfg(feature = "miniscript")]
+    pub fn finalizer(self) -> Result<Finalizer, FinalizeError> { Finalizer::new(self.psbt) }
 
     /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing an ECDSA input.
     ///
@@ -652,7 +664,8 @@ impl<'a, 'id> SigningSession<'a, 'id> {
 ///
 /// ```ignore
 /// let sigs = signer.session(sign_input(0, &keys, &secp))?;
-/// let psbt = signer.apply([sigs?])?;
+/// signer.apply([sigs?])?;
+/// let psbt = signer.psbt();
 /// ```
 ///
 /// The input is strictly verified first; see [`SignableInput`] for the checks. For the
@@ -1816,7 +1829,8 @@ mod test {
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].len(), 1);
 
-        let psbt = signer.apply(sigs).unwrap();
+        signer.apply(sigs).unwrap();
+        let psbt = signer.psbt();
         let sig = psbt.inputs[0].tap_script_sigs.get(&(xonly, leaf_hash)).expect("script-path sig");
         assert_eq!(sig.sighash_type, TapSighashType::Default);
     }
@@ -1858,7 +1872,8 @@ mod test {
         });
         assert_eq!(sigs.len(), 1);
 
-        let psbt = signer.apply([sigs]).unwrap();
+        signer.apply([sigs]).unwrap();
+        let psbt = signer.psbt();
         assert!(psbt.inputs[0].tap_key_sig.is_some());
     }
 
@@ -1922,7 +1937,8 @@ mod test {
         let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
-        let psbt = signer.apply(sigs).unwrap();
+        signer.apply(sigs).unwrap();
+        let psbt = signer.psbt();
         assert_eq!(psbt.inputs[0].tap_key_sig.unwrap().signature, existing);
 
         // An existing script-path signature for a leaf is not duplicated.
@@ -1972,7 +1988,8 @@ mod test {
         });
         if let TypedSigs::Ecdsa(signatures) = &sigs.signatures {
             let used: Vec<PublicKey> = signatures.iter().map(|(pk, _)| *pk).collect();
-            let psbt = signer.apply([sigs]).expect("fresh signable input signatures");
+            signer.apply([sigs]).expect("fresh signable input signatures");
+            let psbt = signer.psbt();
             assert_eq!(used, vec![pubkey]);
             assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
         } else {
@@ -1989,7 +2006,8 @@ mod test {
         let sigs = signer.session(sign_input(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.index, 0);
         assert_eq!(sigs.len(), 1);
-        let psbt = signer.apply([sigs]).unwrap();
+        signer.apply([sigs]).unwrap();
+        let psbt = signer.psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2001,7 +2019,8 @@ mod test {
         let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
-        let psbt = signer.apply(sigs).unwrap();
+        signer.apply(sigs).unwrap();
+        let psbt = signer.psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2021,7 +2040,8 @@ mod test {
         // Unchecked: the caller attests the funding data out-of-band.
         let sigs = signer.session(sign_input_unchecked(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
-        let psbt = signer.apply([sigs]).unwrap();
+        signer.apply([sigs]).unwrap();
+        let psbt = signer.psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2052,7 +2072,7 @@ mod test {
     fn apply_rejects_out_of_bounds_index_even_when_empty() {
         // An entry with no signatures is skipped only after its index is bounds-checked.
         let (psbt, _) = keyed_psbt();
-        let signer = Signer::new(psbt.try_resolve().unwrap());
+        let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let empty = InputSigs { index: 1, signatures: TypedSigs::Ecdsa(vec![]) };
         let err = signer.apply([empty]).expect_err("out-of-bounds index is rejected");
         assert_eq!(
