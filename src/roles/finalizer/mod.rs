@@ -28,7 +28,7 @@ use miniscript::miniscript::satisfy::Placeholder;
 use miniscript::MiniscriptKey;
 
 #[rustfmt::skip]                // Keep public exports separate.
-pub use self::role::{InputError, Finalizer, FinalizeError};
+pub use self::role::{InputError, FinalizeError, FinalizedPsbt, Finalizer};
 
 pub(crate) trait ItemSize {
     fn size(&self) -> usize;
@@ -232,8 +232,11 @@ mod tests {
         let secp = Secp256k1::verification_only();
         let signed = signed_psbt();
         let pk_bytes = signed.inputs[0].bip32_derivations.keys().next().unwrap().to_bytes();
-        let finalizer = Finalizer::new(signed.try_resolve().unwrap()).unwrap();
-        let mut finalized = finalizer.finalize(&secp).expect("valid psbt must finalize");
+        let mut finalized = Finalizer::new(signed.try_resolve().unwrap())
+            .unwrap()
+            .finalize(&secp)
+            .expect("valid psbt must finalize")
+            .psbt();
 
         // A correctly finalized PSBT passes the interpreter check.
         Finalizer::interpreter_check(&finalized.clone().try_resolve().unwrap(), &secp)
@@ -256,14 +259,18 @@ mod tests {
         // A finalized input must pass through the finalizer unchanged.
         let secp = Secp256k1::verification_only();
         let signed = signed_psbt();
-        let finalizer = Finalizer::new(signed.try_resolve().unwrap()).unwrap();
-        let finalized = finalizer.finalize(&secp).expect("valid psbt must finalize");
+        let finalized = Finalizer::new(signed.try_resolve().unwrap())
+            .unwrap()
+            .finalize(&secp)
+            .expect("valid psbt must finalize")
+            .psbt();
 
         // Finalizing again must leave the already-finalized input untouched.
         let out = Finalizer::new(finalized.clone().try_resolve().unwrap())
             .unwrap()
             .finalize(&secp)
-            .unwrap();
+            .unwrap()
+            .psbt();
 
         assert_eq!(out.inputs[0], finalized.inputs[0]);
     }

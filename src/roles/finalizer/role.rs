@@ -25,6 +25,7 @@ use super::satisfy::InputSatisfier;
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt, ResolvedPsbt};
+use crate::roles::{ExtractError, Extractor};
 use crate::SignatureSighashTypeError;
 
 /// Implements the BIP-370 Finalized role.
@@ -55,13 +56,14 @@ impl Finalizer {
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid { self.0.id() }
 
-    /// Finalize the PSBT.
+    /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
     ///
-    /// # Returns
-    ///
-    /// Returns the finalized PSBT without modifying the original.
-    #[must_use = "returns the finalized PSBT without modifying the original"]
-    pub fn finalize<C: Verification>(&self, secp: &Secp256k1<C>) -> Result<Psbt, FinalizeError> {
+    /// Use [`FinalizedPsbt::psbt`] to extract the finalized [`Psbt`] for serialization, or
+    /// [`FinalizedPsbt::extractor`] to transition to the [`Extractor`](crate::Extractor) role.
+    pub fn finalize<C: Verification>(
+        self,
+        secp: &Secp256k1<C>,
+    ) -> Result<FinalizedPsbt, FinalizeError> {
         let mut inputs = vec![];
         for (input_index, input) in self.0.inputs.iter().enumerate() {
             // Already-finalized inputs are passed through unchanged.
@@ -76,12 +78,12 @@ impl Finalizer {
             }
         }
 
-        let finalized = ResolvedPsbt::from_parts(
-            Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() },
-            self.0.lock_time(),
-        );
+        let lock_time = self.0.lock_time();
+        let mut psbt = self.0.into_psbt();
+        psbt.inputs = inputs;
+        let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
         Self::interpreter_check(&finalized, secp)?;
-        Ok(finalized.into_psbt())
+        Ok(FinalizedPsbt(finalized))
     }
 
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
@@ -357,6 +359,31 @@ impl Finalizer {
                 .map_err(InputError::MiniscriptError)?)
         }
     }
+}
+
+/// A PSBT that has been finalized by [`Finalizer::finalize`].
+///
+/// This proof of finalization is the only way to reach the [`Psbt`] serialization point or
+/// transition to the [`Extractor`](crate::Extractor) role, so neither can be reached with an
+/// unfinalized PSBT.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FinalizedPsbt(ResolvedPsbt);
+
+impl FinalizedPsbt {
+    /// Returns this PSBT's unique identification.
+    pub fn id(&self) -> Txid { self.0.id() }
+
+    /// Returns the finalized [`Psbt`].
+    pub fn psbt(self) -> Psbt { self.0.into_psbt() }
+
+    /// Transitions to the [`Extractor`](crate::Extractor) role.
+    pub fn extractor(self) -> Result<Extractor, ExtractError> { Extractor::new(self.0) }
+}
+
+impl core::ops::Deref for FinalizedPsbt {
+    type Target = Psbt;
+
+    fn deref(&self) -> &Psbt { &self.0 }
 }
 
 // Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt

@@ -36,7 +36,7 @@ impl Extractor {
     /// verification, which this crate does not implement, so with the `silent-payments` feature
     /// it only rejects a silent payment output whose script has not been computed.
     ///
-    /// Callers must perform the full verification on the [`Psbt`] before calling this. The
+    /// Callers must perform the full verification on the [`Psbt`](crate::psbt::Psbt) before calling this. The
     /// finalizer keeps the ECDH shares and DLEQ proofs but clears the fields that name input
     /// public keys, so those keys have to be recovered as a BIP-352 receiver does, from the
     /// spent outputs and the final scriptSig and witness.
