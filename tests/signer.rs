@@ -688,3 +688,41 @@ fn ecdsa_signatures_are_low_r() {
         assert!(sig.serialize_der().len() <= 70, "input {index} has a 71-byte DER signature");
     }
 }
+
+// A signer grinds 2 extra bytes on 3 ECDSA inputs, every signature should be at most 69 bytes.
+#[test]
+fn ecdsa_grinding_2_bytes_signatures_are_at_most_69_bytes() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let inputs = (0..3).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly)).collect();
+    let mut signer = Signer::new(unsigned_psbt(inputs)).unwrap();
+    let sigs = signer.session(|mut session| {
+        let inputs = session.assume_checked_inputs().unwrap().grind_2_bytes();
+        session.get_all(&inputs, &keys, &secp)
+    });
+    let psbt = signer.apply(sigs).unwrap();
+
+    for input in &psbt.inputs {
+        assert!(input.partial_sigs[&public_key].signature.serialize_der().len() <= 69);
+    }
+}
+
+// A signer grinds 3 extra bytes on 2 ECDSA inputs and every signature is at most 68 bytes.
+#[test]
+fn ecdsa_grinding_3_bytes_signatures_are_at_most_68_bytes() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let inputs = (0..2).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly)).collect();
+    let mut signer = Signer::new(unsigned_psbt(inputs)).unwrap();
+    let sigs = signer.session(|mut session| {
+        let inputs = session.assume_checked_inputs().unwrap().grind_3_bytes();
+        session.get_all(&inputs, &keys, &secp)
+    });
+    let psbt = signer.apply(sigs).unwrap();
+
+    for input in &psbt.inputs {
+        assert!(input.partial_sigs[&public_key].signature.serialize_der().len() <= 68);
+    }
+}

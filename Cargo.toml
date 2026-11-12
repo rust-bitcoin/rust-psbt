@@ -74,6 +74,10 @@ required-features = ["std"]
 name = "psbt2json"
 required-features = ["serde"]
 
+[[example]]
+name = "grinding_bench"
+required-features = ["std"]
+
 [lints.rust]
 missing_docs = "warn"
 
