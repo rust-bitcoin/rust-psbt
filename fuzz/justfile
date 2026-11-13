@@ -10,7 +10,6 @@ _default:
 
 # Cycle all targets.
 @cycle: tools
-    nightly=$(cargo rbmt toolchains --nightly) && \
-    for target in $(cargo +$nightly fuzz list); do \
-        cargo +$nightly fuzz run "$target" -- -max_total_time=10; \
+    for target in $(cargo rbmt with --lockfile minimal --toolchain nightly -- cargo fuzz list); do \
+        cargo rbmt with --lockfile minimal --toolchain nightly -- cargo fuzz run "$target" -- -max_total_time=10; \
     done

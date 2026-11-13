@@ -55,7 +55,7 @@ integration: (rbmt "integration")
 # Check mutants, filter by given git ref baseline or file glob
 [group('ci')]
 mutants baseline="" file="": tools
-  cargo +$(cargo rbmt toolchains --nightly) mutants \
+  cargo rbmt with --lockfile maximum --toolchain nightly -- cargo mutants \
     {{ if baseline == "" { "" } else { "--in-diff <(git diff " + baseline + ")" } }} \
     {{ if file == "" { "" } else { "--file " + file } }} \
     -- -- -Z unstable-options --fail-fast
