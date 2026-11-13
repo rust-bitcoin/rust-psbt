@@ -775,6 +775,11 @@ impl ResolvedPsbt {
     }
 
     /// Creates an unsigned transaction from the inner [`Psbt`].
+    ///
+    /// Quidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
+    /// use [`Self::id`] instead. `id` zeroes the input sequences and uses the identification
+    /// form of the outputs, so `unsigned_tx().compute_txid()` differs from [`Self::id`] in
+    /// general.
     pub fn unsigned_tx(&self) -> Transaction {
         Transaction {
             version: self.global.tx_version,
