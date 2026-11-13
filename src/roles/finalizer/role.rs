@@ -136,7 +136,7 @@ impl Finalizer {
 
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
     fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
-        let fields = self.final_script_sig_and_witness(input)?;
+        let fields = self.final_scripts(input)?;
         Ok(input.finalize(fields))
     }
 
@@ -146,7 +146,7 @@ impl Finalizer {
     pub fn finalize_input_mall(&self, index: usize) -> Result<Input, FinalizeError> {
         let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
         let fields = self
-            .final_script_sig_and_witness_mall(input)
+            .final_scripts_mall(input)
             .map_err(|e| FinalizeError::Input { input_index: index, error: e })?;
         Ok(input.finalize(fields))
     }
@@ -170,7 +170,7 @@ impl Finalizer {
     // > they do, the Transaction Extractor should ...
     //
     // TODO: Check that we are doing the right thing at the right time between finalization and extraction.
-    fn final_script_sig_and_witness(&self, input: &Input) -> Result<FinalScripts, InputError> {
+    fn final_scripts(&self, input: &Input) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
             self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
@@ -242,7 +242,7 @@ impl Finalizer {
         })
     }
 
-    fn final_script_sig_and_witness_mall(&self, input: &Input) -> Result<FinalScripts, InputError> {
+    fn final_scripts_mall(&self, input: &Input) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
             self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
