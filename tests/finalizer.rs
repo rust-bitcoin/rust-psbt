@@ -17,7 +17,9 @@ use psbt_v2::bitcoin::transaction::Version;
 use psbt_v2::bitcoin::{
     Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, Transaction, TxIn, TxOut,
 };
-use psbt_v2::{sign_all, Creator, Finalizer, Input, Output, Psbt, Signer};
+use psbt_v2::{
+    sign_all, Creator, FinalizableInput, FinalizeError, Finalizer, Input, Output, Psbt, Signer,
+};
 
 /// Deterministic per-user key material: the key map handed to a signing session together with
 /// the user's public key.
@@ -54,6 +56,20 @@ fn tr_input(public_key: PublicKey) -> Input {
     input.witness_utxo = Some(tx_out);
     input.tap_internal_key = Some(xonly);
     input.tap_key_origins.insert(xonly, (vec![], KeySource::default()));
+    input
+}
+
+/// A funded P2WPKH input worth 1,000 sats whose key is recorded in `bip32_derivations`.
+fn wpkh_input(public_key: PublicKey, vout: usize) -> Input {
+    let tx_out = TxOut {
+        value: Amount::from_sat(1_000),
+        script_pubkey: ScriptBuf::new_p2wpkh(&public_key.wpubkey_hash().unwrap()),
+    };
+    let funding_tx = funding_tx(vout, tx_out.clone());
+    let mut input = Input::new(&OutPoint { txid: funding_tx.compute_txid(), vout: vout as u32 });
+    input.witness_utxo = Some(tx_out);
+    input.non_witness_utxo = Some(funding_tx);
+    input.bip32_derivations.insert(public_key, KeySource::default());
     input
 }
 
@@ -143,7 +159,73 @@ fn finalize_taproot_script_path() {
     assert_eq!(psbt.inputs[0].tap_script_sigs.len(), 2);
 
     // The fully-signed script-path input finalizes through the taproot script spend.
-    let finalized = Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
+    let finalized =
+        Finalizer::new(psbt.clone().try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
     // Witness: [sig_a, sig_b, leaf_script, control_block].
     assert_eq!(finalized.inputs[0].final_script_witness.as_ref().unwrap().len(), 4);
+
+    // The malleable single-input path finalizes the same script spend.
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    let input = finalizer.finalizable_input(0).unwrap().malleable(true).finalize().unwrap();
+    assert_eq!(input.final_script_witness.as_ref().unwrap().len(), 4);
+}
+
+#[test]
+fn finalize_inputs_does_not_validate_all_inputs() {
+    let secp = Secp256k1::new();
+    let (a_keys, a_public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(a_public_key), wpkh_input(a_public_key, 1)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&a_keys, &secp)).unwrap();
+    let psbt = signer.apply(sigs).unwrap().psbt();
+
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    let finalized = finalizer.finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()]);
+
+    // Selecting only input 0 leaves input 1 unfinalized: the interpreter check fails.
+    assert!(finalized.is_ok());
+
+    assert!(finalized.as_ref().unwrap().inputs[0].final_script_witness.is_some());
+    assert!(finalized.unwrap().inputs[1].final_script_witness.is_none());
+}
+
+// A downstream crate must be able to name `FinalizableInput` in its own signatures.
+fn finalize_handle(handle: FinalizableInput<'_>) -> Result<Input, FinalizeError> {
+    handle.finalize()
+}
+
+#[test]
+fn finalizable_input_is_exported() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(public_key)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
+    let psbt = signer.apply(sigs).unwrap().psbt();
+
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    let input = finalize_handle(finalizer.finalizable_input(0).unwrap()).unwrap();
+    assert!(input.final_script_witness.is_some());
+}
+
+// An already-finalized input has no signing material left, so the strict constructor rejects it
+// instead of handing out a handle that can only fail to re-satisfy.
+#[test]
+fn finalizable_input_rejects_finalized_input() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(public_key)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
+    let psbt = signer.apply(sigs).unwrap().psbt();
+    let psbt = Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap().psbt();
+
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    match finalizer.finalizable_input(0) {
+        Err(FinalizeError::AlreadyFinalized { input_index }) => assert_eq!(input_index, 0),
+        other => panic!("expected AlreadyFinalized, got {:?}", other),
+    }
 }

@@ -53,6 +53,8 @@ impl Finalizer {
 
     /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
     ///
+    /// The whole PSBT is always validated with the interpreter check.
+    ///
     /// Use [`FinalizedPsbt::psbt`] to extract the finalized [`Psbt`] for serialization, or
     /// [`FinalizedPsbt::extractor`] to transition to the [`Extractor`](crate::Extractor) role.
     pub fn finalize<C: Verification>(
@@ -67,9 +69,13 @@ impl Finalizer {
                 inputs.push(input.clone());
                 continue;
             }
-            match self.finalize_input(input) {
+            match self.finalize_input(FinalizableInput {
+                finalizer: &self,
+                input_index,
+                malleable: false,
+            }) {
                 Ok(input) => inputs.push(input),
-                Err(error) => errors.push(FinalizeError::Input { input_index, error }),
+                Err(error) => errors.push(error),
             }
         }
 
@@ -84,6 +90,52 @@ impl Finalizer {
             } else {
                 return Ok(FinalizedPsbt(finalized));
             }
+        }
+
+        Err(errors)
+    }
+
+    /// Finalizes the given inputs, each with its own malleability setting.
+    ///
+    /// Inputs not present in `inputs` are passed through unchanged, as are already-finalized
+    /// inputs. If the same index appears twice the last entry wins.
+    ///
+    /// The PSBT may not be fully finalized after this call.
+    ///
+    /// # Returns
+    ///
+    /// Returns the finalized PSBT without modifying the original.
+    #[must_use = "returns the finalized PSBT without modifying the original"]
+    pub fn finalize_inputs<'a>(
+        &'a self,
+        inputs: Vec<FinalizableInput<'a>>,
+    ) -> Result<Psbt, Vec<FinalizeError>> {
+        let selected: BTreeMap<usize, bool> =
+            inputs.into_iter().map(|input| (input.input_index, input.malleable)).collect();
+
+        let mut inputs = vec![];
+        let mut errors: Vec<FinalizeError> = vec![];
+        for (input_index, input) in self.0.inputs.iter().enumerate() {
+            // Already-finalized and unselected inputs are passed through unchanged.
+            let malleable = match (input.is_finalized(), selected.get(&input_index)) {
+                (false, Some(&malleable)) => malleable,
+                _ => {
+                    inputs.push(input.clone());
+                    continue;
+                }
+            };
+            match self.finalize_input(FinalizableInput { finalizer: self, input_index, malleable })
+            {
+                Ok(input) => inputs.push(input),
+                Err(error) => errors.push(error),
+            }
+        }
+
+        let finalized =
+            Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() };
+
+        if errors.is_empty() {
+            return Ok(finalized);
         }
 
         Err(errors)
@@ -134,21 +186,29 @@ impl Finalizer {
         Ok(())
     }
 
-    // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
-    fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
-        let fields = self.final_scripts(input, false)?;
-        Ok(input.finalize(fields))
+    /// Returns the input at `index` as a [`FinalizableInput`] (non-malleable by default, see
+    /// [`FinalizableInput::malleable`]).
+    ///
+    /// # Errors
+    ///
+    /// [`FinalizeError::AlreadyFinalized`] if the input is already finalized.
+    /// [`FinalizeError::OutOfBounds`] if index is not within input bounds.
+    pub fn finalizable_input(&self, index: usize) -> Result<FinalizableInput<'_>, FinalizeError> {
+        let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
+        if input.is_finalized() {
+            return Err(FinalizeError::AlreadyFinalized { input_index: index });
+        }
+        Ok(FinalizableInput { finalizer: self, input_index: index, malleable: false })
     }
 
-    #[allow(dead_code)]
-    // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
-    /// Finalize input with malleable witness.
-    pub fn finalize_input_mall(&self, index: usize) -> Result<Input, FinalizeError> {
-        let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
+    // In-bounds by construction: `finalizable_input` checked the index.
+    fn finalize_input(&self, input: FinalizableInput<'_>) -> Result<Input, FinalizeError> {
+        let input_ref =
+            self.0.checked_input(input.input_index).expect("index checked by `finalizable_input`");
         let fields = self
-            .final_scripts(input, true)
-            .map_err(|e| FinalizeError::Input { input_index: index, error: e })?;
-        Ok(input.finalize(fields))
+            .final_scripts(input_ref, input.malleable)
+            .map_err(|e| FinalizeError::Input { input_index: input.input_index, error: e })?;
+        Ok(input_ref.finalize(fields))
     }
 
     /// Returns the final script_sig and final witness for this input.
@@ -290,6 +350,34 @@ impl core::ops::Deref for FinalizedPsbt {
 
     fn deref(&self) -> &Psbt { &self.0 }
 }
+
+/// A PSBT input provably ready for finalization
+///
+/// Only constructible via [`Finalizer::finalizable_input`], so its existence witnesses that the
+/// PSBT passed [`Finalizer::new`] (funding UTXOs, lock time, sighash types).
+#[derive(Debug)]
+pub struct FinalizableInput<'f> {
+    finalizer: &'f Finalizer,
+    input_index: usize,
+    malleable: bool,
+}
+
+impl FinalizableInput<'_> {
+    /// Sets whether this input may be finalized with a malleable satisfaction.
+    ///
+    /// Default: `false` (non-malleable).
+    pub fn malleable(mut self, malleable: bool) -> Self {
+        self.malleable = malleable;
+        self
+    }
+
+    /// Consumes the `FinalizableInput`, producing the finalization it is set for.
+    ///
+    /// Does not run the interpreter check: no PSBT is produced to check. Use
+    /// [`Finalizer::finalize_inputs`] for a validated result.
+    pub fn finalize(self) -> Result<Input, FinalizeError> { self.finalizer.finalize_input(self) }
+}
+
 /// Error constructing a [`Finalizer`] or finalizing a PSBT.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -298,6 +386,11 @@ pub enum FinalizeError {
     FundingUtxo(FundingUtxoError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
+    /// The input is already finalized.
+    AlreadyFinalized {
+        /// The index of the finalized input.
+        input_index: usize,
+    },
     /// Attempt to access an out of bounds PSBT element.
     OutOfBounds(IndexOutOfBoundsError),
     /// Failed to finalize an input.
@@ -329,6 +422,8 @@ impl fmt::Display for FinalizeError {
             Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
             Self::OutOfBounds(ref e) => write_err!(f, "finalizer out of bounds access"; e),
             Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
+            Self::AlreadyFinalized { input_index } =>
+                write!(f, "input {} is already finalized", input_index),
             Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
             Self::InterpreterConstructor { input_index, ref error } =>
@@ -346,6 +441,7 @@ impl std::error::Error for FinalizeError {
             Self::FundingUtxo(ref e) => Some(e),
             Self::OutOfBounds(ref e) => Some(e),
             Self::SignatureSighashType(ref e) => Some(e),
+            Self::AlreadyFinalized { .. } => None,
             Self::Input { input_index: _, ref error } => Some(error),
             Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
             Self::InterpreterSatisfaction { input_index: _, ref error } => Some(error),
