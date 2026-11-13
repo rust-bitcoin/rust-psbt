@@ -151,7 +151,10 @@ fn v2_only_fields_in_v0_encoding() {
     let v0 = PsbtV0::from_psbt(psbt).expect("well-formed v2 PSBT must have resolvable lock time");
     let v0_bytes = v0.serialize();
     let degraded = v0.degraded();
-    assert!(degraded.is_empty()); // no SP fields set, and tx_modifiable isn't tracked.
+    assert_eq!(degraded.lock_time_inputs, 0);
+    assert!(degraded.tx_modifiable_flags.is_some_and(|f| f.is_inputs_modifiable()));
+    assert!(degraded.tx_modifiable_flags.is_some_and(|f| f.is_outputs_modifiable()));
+    assert!(!degraded.is_empty()); // tx_modifiable_flags is Some (non-zero)
     assert!(!v0_bytes.is_empty());
 
     // Decoded PSBT has tx_modifiable_flags zero, the v0 encoding implied construction complete.

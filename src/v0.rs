@@ -22,6 +22,7 @@ use crate::map::input::Input;
 #[cfg(feature = "base64")]
 use crate::psbt::ParsePsbtError;
 use crate::psbt::{MagicEncoder, Psbt, PSBT_MAGIC, PSBT_MAGIC_BYTES, PSBT_SEPARATOR};
+use crate::tx_modifiable_flags::TxModifiableFlags;
 
 /// A PSBT locked to version 0 (BIP-174).
 ///
@@ -65,31 +66,42 @@ impl PsbtV0 {
     /// Extract the inner [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.psbt }
 
-    /// Reports which v2 fields will be demoted to unknown key-value pairs
-    /// when this PSBT is encoded as v0 (BIP-174).
+    /// Returns a [`Degraded`] report of which v2 (BIP-370) metadata will be
+    /// lost when this PSBT is encoded as v0 (BIP-174).
+    ///
+    /// See [`Degraded`] for a breakdown of each degradation category and
+    /// the [`is_empty`](Degraded::is_empty) method to check whether any loss
+    /// occurred.
     pub fn degraded(&self) -> Degraded {
-        #[cfg(feature = "silent-payments")]
-        {
-            Degraded {
-                sp_ecdh_shares: self.psbt.global.sp_ecdh_shares.len(),
-                sp_dleq_proofs: self.psbt.global.sp_dleq_proofs.len(),
-                sp_dropped_inputs: self
-                    .psbt
-                    .inputs
-                    .iter()
-                    .filter(|i| !i.sp_ecdh_shares.is_empty() || !i.sp_dleq_proofs.is_empty())
-                    .count(),
-                sp_dropped_outputs: self
-                    .psbt
-                    .outputs
-                    .iter()
-                    .filter(|o| o.sp_v0_info.is_some() || o.sp_v0_label.is_some())
-                    .count(),
-            }
-        }
-        #[cfg(not(feature = "silent-payments"))]
-        {
-            Degraded::default()
+        let lock_time_inputs = self
+            .psbt
+            .inputs
+            .iter()
+            .filter(|i| i.min_time.is_some() || i.min_height.is_some())
+            .count();
+
+        Degraded {
+            lock_time_inputs,
+            tx_modifiable_flags: (self.psbt.global.tx_modifiable_flags != TxModifiableFlags::new())
+                .then_some(self.psbt.global.tx_modifiable_flags),
+            #[cfg(feature = "silent-payments")]
+            sp_ecdh_shares: self.psbt.global.sp_ecdh_shares.len(),
+            #[cfg(feature = "silent-payments")]
+            sp_dleq_proofs: self.psbt.global.sp_dleq_proofs.len(),
+            #[cfg(feature = "silent-payments")]
+            sp_dropped_inputs: self
+                .psbt
+                .inputs
+                .iter()
+                .filter(|i| !i.sp_ecdh_shares.is_empty() || !i.sp_dleq_proofs.is_empty())
+                .count(),
+            #[cfg(feature = "silent-payments")]
+            sp_dropped_outputs: self
+                .psbt
+                .outputs
+                .iter()
+                .filter(|o| o.sp_v0_info.is_some() || o.sp_v0_label.is_some())
+                .count(),
         }
     }
 
@@ -143,30 +155,78 @@ impl PsbtV0 {
     }
 }
 
-/// Reports which v2-only fields will be demoted to unknown key-value pairs by a v0
-/// (BIP-174) encoding.
+/// Reports what metadata is degraded by a v0 (BIP-174) encoding.
+///
+/// # What "Degraded" Means
+///
+/// Encoding a v2 PSBT as v0 is a lossy conversion. Some v2-only fields have no
+/// corresponding v0 key type and are either dropped, resolved into the unsigned
+/// transaction, or demoted to unknown keys. This struct categorizes every kind
+/// of loss so callers can decide whether the degradation is acceptable before
+/// serializing.
+///
+/// # Degradation Categories
+///
+/// | Category | What happens | Field |
+/// |----------|-------------|-------|
+/// | Per-input lock time | [`Input::min_time`] / [`Input::min_height`] are resolved into a single `nLockTime` via [`Psbt::determine_lock_time`]; per-input identity is lost | [`lock_time_inputs`](Self::lock_time_inputs) |
+/// | Tx modifiable flags | `PSBT_GLOBAL_TX_MODIFIABLE` (`0x06`) is dropped entirely; the v0 decoder always sets flags to zero | [`tx_modifiable_flags`](Self::tx_modifiable_flags) |
+/// | SP global ECDH shares | Encoded as unknown global keys (`0x07`) | `sp_ecdh_shares` |
+/// | SP global DLEQ proofs | Encoded as unknown global keys (`0x08`) | `sp_dleq_proofs` |
+/// | Per-input SP fields | Encoded as unknown per-input keys (`0x1d` / `0x1e`) | `sp_dropped_inputs` |
+/// | Per-output SP fields | Encoded as unknown per-output keys (`0x09` / `0x0a`) | `sp_dropped_outputs` |
+///
+/// Other v2-only fields (transaction version, input/output counts, sequence
+/// numbers) are embedded in the unsigned transaction body and survive the
+/// round-trip intact.
+///
+/// [`Input::min_time`]: crate::Input::min_time
+/// [`Input::min_height`]: crate::Input::min_height
+/// [`Psbt::determine_lock_time`]: crate::Psbt::determine_lock_time
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Degraded {
+    /// Number of inputs whose per-input lock time requirements
+    /// ([`min_time`](crate::Input::min_time) /
+    /// [`min_height`](crate::Input::min_height)) are resolved into the
+    /// single unsigned transaction `nLockTime`, losing per-input identity.
+    pub lock_time_inputs: usize,
+    /// The [`TxModifiableFlags`] that will be cleared. `None` means the flags
+    /// were already all-zero (no construction state was lost). `Some(flags)`
+    /// means the PSBT was still under construction and that signal is
+    /// irrevocably lost in the v0 encoding.
+    pub tx_modifiable_flags: Option<TxModifiableFlags>,
     /// Number of silent payment ECDH shares encoded as unknown global keys (`0x07`).
+    #[cfg(feature = "silent-payments")]
     pub sp_ecdh_shares: usize,
-    /// Number of silent payment DLEQ proofs encoded as unknown global keys from the global map
-    /// (`0x08`).
+    /// Number of silent payment DLEQ proofs encoded as unknown global keys (`0x08`).
+    #[cfg(feature = "silent-payments")]
     pub sp_dleq_proofs: usize,
     /// Number of inputs whose silent payment fields were encoded as unknown
     /// per-input keys (`0x1d` / `0x1e`).
+    #[cfg(feature = "silent-payments")]
     pub sp_dropped_inputs: usize,
-    /// Number of outputs whose silent payment fields were encoded as unknown per-output keys
-    /// (`0x09` and/or `0x0a` was `Some`).
+    /// Number of outputs whose silent payment fields were encoded as unknown
+    /// per-output keys (`0x09` and/or `0x0a` was `Some`).
+    #[cfg(feature = "silent-payments")]
     pub sp_dropped_outputs: usize,
 }
 
 impl Degraded {
-    /// Returns `true` if no fields were demoted to unknowns.
+    /// Returns `true` if no metadata was degraded by the v0 encoding.
     pub fn is_empty(&self) -> bool {
-        self.sp_ecdh_shares == 0
-            && self.sp_dleq_proofs == 0
-            && self.sp_dropped_inputs == 0
-            && self.sp_dropped_outputs == 0
+        let base = self.lock_time_inputs == 0 && self.tx_modifiable_flags.is_none();
+        #[cfg(feature = "silent-payments")]
+        {
+            base && self.sp_ecdh_shares == 0
+                && self.sp_dleq_proofs == 0
+                && self.sp_dropped_inputs == 0
+                && self.sp_dropped_outputs == 0
+        }
+        #[cfg(not(feature = "silent-payments"))]
+        {
+            base
+        }
     }
 }
 
