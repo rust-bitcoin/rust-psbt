@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ser = created.serialize();
 
     // The first constructor entity receives the PSBT and adds an input.
-    let psbt = Psbt::deserialize(&ser)?;
+    let psbt = Psbt::deserialize_unresolved(&ser)?;
     let in_0 = dummy_out_point();
     let ser = Constructor::<InputsOnlyModifiable>::new(psbt)?
         .input(InputBuilder::new(&in_0).build())?
@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .serialize();
 
     // The second constructor entity receives the PSBT with one input and adds a second input.
-    let psbt = Psbt::deserialize(&ser)?;
+    let psbt = Psbt::deserialize_unresolved(&ser)?;
     let in_1 = dummy_out_point();
     let ser = Constructor::<InputsOnlyModifiable>::new(psbt)?
         .input(InputBuilder::new(&in_1).build())?
@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .serialize();
 
     // The third constructor entity receives the PSBT with inputs and adds an output.
-    let psbt = Psbt::deserialize(&ser)?;
+    let psbt = Psbt::deserialize_unresolved(&ser)?;
     let output = dummy_tx_out();
     let ser = Constructor::<OutputsOnlyModifiable>::new(psbt)?
         .output(OutputBuilder::new(output).build())?
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .serialize();
 
     // The PSBT is now ready for handling with the updater role.
-    let _updatable_psbt = Psbt::deserialize(&ser)?;
+    let _updatable_psbt = Psbt::deserialize_unresolved(&ser)?;
 
     Ok(())
 }

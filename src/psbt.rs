@@ -316,7 +316,14 @@ impl Psbt {
     /// Serializes as raw binary data
     pub fn serialize(&self) -> Vec<u8> { encode_to_vec(self) }
 
-    /// Deserializes a value from raw binary data.
+    /// Deserializes a PSBT from raw binary data and resolves its lock time.
+    ///
+    /// Returns a [`ResolvedPsbt`], ready to be passed to any role constructor
+    /// ([`Updater::new`](crate::Updater::new), [`Signer::new`](crate::Signer::new),
+    /// [`Finalizer::new`](crate::Finalizer::new), etc.). If you need to inspect or
+    /// modify the PSBT before resolving the locktime, use
+    /// [`deserialize_unresolved`](Self::deserialize_unresolved) followed by
+    /// [`resolve`](Self::try_resolve).
     ///
     /// Returns an error if the input contains trailing bytes after the PSBT.
     ///
@@ -336,7 +343,21 @@ impl Psbt {
     /// // `remaining` now points to whatever followed the PSBT
     /// # Ok::<(), DeserializeError>(())
     /// ```
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, DeserializeError> {
+    pub fn deserialize(bytes: &[u8]) -> Result<ResolvedPsbt, DeserializeError> {
+        let psbt = Self::deserialize_unresolved(bytes)?;
+        let lock_time = psbt.determine_lock_time().map_err(DeserializeError::LockTime)?;
+        Ok(ResolvedPsbt::from_parts(psbt, lock_time))
+    }
+
+    /// Deserializes a PSBT from raw binary data without resolving the lock time.
+    ///
+    /// Returns an error if the input contains trailing bytes after the PSBT.
+    ///
+    /// This is the escape hatch for cases where you need the raw [`Psbt`] before locktime
+    /// resolution, for example, to inspect or modify fields before entering a role. In normal
+    /// workflows, prefer [`deserialize`](Self::deserialize) which resolves the locktime
+    /// automatically.
+    pub fn deserialize_unresolved(bytes: &[u8]) -> Result<Self, DeserializeError> {
         crate::encoding::decode_from_slice::<Self>(bytes).map_err(|e| match e {
             bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
             bitcoin_consensus_encoding::DecodeError::Unconsumed(_) => DeserializeError::Unconsumed,
@@ -550,7 +571,7 @@ mod display_from_str {
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             let data = BASE64_STANDARD.decode(s).map_err(ParsePsbtError::Base64Encoding)?;
-            Self::deserialize(&data).map_err(ParsePsbtError::PsbtEncoding)
+            Self::deserialize_unresolved(&data).map_err(ParsePsbtError::PsbtEncoding)
         }
     }
 

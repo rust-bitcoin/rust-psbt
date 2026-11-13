@@ -26,7 +26,7 @@ fn main() {
         process::exit(1);
     });
 
-    let psbt = Psbt::deserialize(&bytes).unwrap_or_else(|_| {
+    let psbt = Psbt::deserialize_unresolved(&bytes).unwrap_or_else(|_| {
         let v0 = PsbtV0::deserialize(&bytes).unwrap_or_else(|e| {
             eprintln!("Failed to decode PSBT: {e}");
             process::exit(1);

@@ -27,6 +27,8 @@ pub enum DeserializeError {
     EarlyEnd(&'static str),
     /// Bytes remained unconsumed after completing decoding.
     Unconsumed,
+    /// PSBT has conflicting locking requirements so the locktime cannot be determined.
+    LockTime(DetermineLockTimeError),
 }
 
 impl fmt::Display for DeserializeError {
@@ -41,6 +43,7 @@ impl fmt::Display for DeserializeError {
             Self::DecodeOutputs(e) => write!(f, "error decoding output maps: {}", e),
             Self::EarlyEnd(s) => write!(f, "early end of PSBT (still decoding {})", s),
             Self::Unconsumed => write!(f, "unconsumed bytes after PSBT"),
+            Self::LockTime(e) => write!(f, "lock time error: {}", e),
         }
     }
 }
@@ -55,7 +58,8 @@ impl std::error::Error for DeserializeError {
             Self::InvalidMagic(_)
             | Self::InvalidSeparator(_)
             | Self::EarlyEnd(_)
-            | Self::Unconsumed => None,
+            | Self::Unconsumed
+            | Self::LockTime(_) => None,
         }
     }
 }
