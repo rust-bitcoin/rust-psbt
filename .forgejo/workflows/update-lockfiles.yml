@@ -11,7 +11,7 @@ env:
   RUSTUP_HOME: /home/ci/tmp
 
 jobs:
-  update-toolchains:
+  update-lockfiles:
     runs-on: debian-trixie
     steps:
       - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
@@ -26,10 +26,24 @@ jobs:
         run: |
           git config user.name "RBMT Bot"
           git config user.email "bot@example.com"
-      - name: Update lockfiles
+      - name: Update lockfiles and commit
         run: |
           cargo rbmt lock --lockfiles minimal,maximum
           if git add . && git commit -m "Update lockfiles"; then
+            echo "LOCKFILE_UPDATE=true" >> $FORGEJO_ENV
+          fi
+      - name: Update fuzz lockfiles and commit
+        working-directory: fuzz
+        run: |
+          cargo rbmt lock
+          if git add . && git commit -m "fuzz: update lockfiles"; then
+            echo "LOCKFILE_UPDATE=true" >> $FORGEJO_ENV
+          fi
+      - name: Update bitcoind-tests lockfiles and commit
+        working-directory: bitcoind-tests
+        run: |
+          cargo rbmt lock
+          if git add . && git commit -m "bitcoind-tests: update lockfiles"; then
             echo "LOCKFILE_UPDATE=true" >> $FORGEJO_ENV
           fi
       - name: Create pull request using agit

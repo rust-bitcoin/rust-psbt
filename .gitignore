@@ -3,6 +3,10 @@
 # Ignore library lock file.
 /Cargo.lock
 
+# Ignore regular lock files for sub-crates (rbmt manages the -minimal variants).
+fuzz/Cargo.lock
+bitcoind-tests/Cargo.lock
+
 # Build artifacts
 target
 
