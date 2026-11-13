@@ -364,10 +364,6 @@ impl std::error::Error for FeeError {
     }
 }
 
-impl From<FundingUtxoError> for FeeError {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
-}
-
 /// An error getting the funding transaction for this input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
