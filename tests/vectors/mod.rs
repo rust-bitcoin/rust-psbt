@@ -345,8 +345,7 @@ impl TestCase {
                         session.signable_inputs().expect("inputs are well formed and verifiable");
                     session.get_all(&signable_inputs, &key_map, &secp)
                 });
-                signer.apply(sigs).unwrap();
-                let psbt = signer.psbt();
+                let psbt = signer.apply(sigs).unwrap().psbt();
 
                 assert_eq!(psbt, expected_psbt);
             }
@@ -383,8 +382,7 @@ impl TestCase {
                     let inputs = session.assume_checked_inputs().expect("inputs are well formed");
                     session.get_all(&inputs, &key_map, &secp)
                 });
-                signer.apply(sigs).unwrap();
-                let psbt = signer.psbt();
+                let psbt = signer.apply(sigs).unwrap().psbt();
 
                 assert_eq!(psbt, expected_psbt);
             }

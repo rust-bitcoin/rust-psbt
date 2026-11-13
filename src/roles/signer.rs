@@ -115,8 +115,7 @@ impl Signer {
     ///     let input = session.signable_input(0).unwrap();
     ///     session.get_input_sigs(&input, &keys, &secp)
     /// });
-    /// signer.apply([sigs]).unwrap();
-    /// let psbt = signer.psbt();
+    /// let psbt = signer.apply([sigs]).unwrap().psbt();
     /// assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     /// ```
     ///
@@ -128,22 +127,27 @@ impl Signer {
         f(SigningSession { psbt: &self.psbt, cache: &mut self.cache, id: PhantomData })
     }
 
-    /// Writes signatures produced by a [`SigningSession`] into the [`Psbt`] in-place.
+    /// Writes signatures produced by a [`SigningSession`] into the [`Psbt`], returning the
+    /// [`Signer`] for chaining.
     ///
     /// Clears `PSBT_GLOBAL_TX_MODIFIABLE` for each input signed.
     ///
     /// Fails on the first entry whose index is out of bounds (only possible for signatures created
     /// for a different [`Psbt`]). Entries that produced no signatures are accepted and skipped.
-    ///
-    /// After applying, use [`psbt`](Self::psbt) to extract the [`Psbt`] for serialization.
-    pub fn apply(&mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<(), SignError> {
+    pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Self, SignError> {
+        // Collect and validate all indices before mutating anything.
+        // This ensures a failed apply has no partial side-effects.
+        let sigs: Vec<InputSigs> = sigs.into_iter().collect();
+        for entry in &sigs {
+            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
+                let _ = psbt.checked_input_mut(entry.index).map_err(SignError::IndexOutOfBounds)?;
+                Ok(())
+            })?;
+        }
+
+        // All indices validated; the application pass is infallible.
         for InputSigs { index, signatures } in sigs {
-            // Bounds-check even empty entries, then skip.
             if signatures.is_empty() {
-                self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
-                    let _ = psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
-                    Ok(())
-                })?;
                 continue;
             }
 
@@ -155,9 +159,9 @@ impl Signer {
             };
 
             // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
-            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
+            self.psbt.with_psbt(|psbt| {
                 let psbt_input =
-                    psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
+                    psbt.checked_input_mut(index).expect("index validated in first pass");
                 match signatures {
                     TypedSigs::Ecdsa(sigs) =>
                         for (pk, sig) in sigs {
@@ -175,16 +179,12 @@ impl Signer {
                             }
                         },
                 }
-                Ok(())
-            })?;
+            });
 
-            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
-                psbt.clear_tx_modifiable(sighash_ty);
-                Ok(())
-            })?;
+            self.psbt.with_psbt(|psbt| psbt.clear_tx_modifiable(sighash_ty));
         }
 
-        Ok(())
+        Ok(self)
     }
 
     /// Transitions to the [`Finalizer`] role.
@@ -664,8 +664,7 @@ impl<'a, 'id> SigningSession<'a, 'id> {
 ///
 /// ```ignore
 /// let sigs = signer.session(sign_input(0, &keys, &secp))?;
-/// signer.apply([sigs?])?;
-/// let psbt = signer.psbt();
+/// let psbt = signer.apply([sigs?])?.psbt();
 /// ```
 ///
 /// The input is strictly verified first; see [`SignableInput`] for the checks. For the
@@ -1829,8 +1828,7 @@ mod test {
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].len(), 1);
 
-        signer.apply(sigs).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply(sigs).unwrap().psbt();
         let sig = psbt.inputs[0].tap_script_sigs.get(&(xonly, leaf_hash)).expect("script-path sig");
         assert_eq!(sig.sighash_type, TapSighashType::Default);
     }
@@ -1872,8 +1870,7 @@ mod test {
         });
         assert_eq!(sigs.len(), 1);
 
-        signer.apply([sigs]).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply([sigs]).unwrap().psbt();
         assert!(psbt.inputs[0].tap_key_sig.is_some());
     }
 
@@ -1937,8 +1934,7 @@ mod test {
         let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert!(sigs.iter().all(|input_sigs| input_sigs.is_empty()));
-        signer.apply(sigs).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply(sigs).unwrap().psbt();
         assert_eq!(psbt.inputs[0].tap_key_sig.unwrap().signature, existing);
 
         // An existing script-path signature for a leaf is not duplicated.
@@ -1988,8 +1984,7 @@ mod test {
         });
         if let TypedSigs::Ecdsa(signatures) = &sigs.signatures {
             let used: Vec<PublicKey> = signatures.iter().map(|(pk, _)| *pk).collect();
-            signer.apply([sigs]).expect("fresh signable input signatures");
-            let psbt = signer.psbt();
+            let psbt = signer.apply([sigs]).expect("fresh signable input signatures").psbt();
             assert_eq!(used, vec![pubkey]);
             assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
         } else {
@@ -2006,8 +2001,7 @@ mod test {
         let sigs = signer.session(sign_input(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.index, 0);
         assert_eq!(sigs.len(), 1);
-        signer.apply([sigs]).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply([sigs]).unwrap().psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2019,8 +2013,7 @@ mod test {
         let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_all(&key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
-        signer.apply(sigs).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply(sigs).unwrap().psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2040,8 +2033,7 @@ mod test {
         // Unchecked: the caller attests the funding data out-of-band.
         let sigs = signer.session(sign_input_unchecked(0, &key_map, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
-        signer.apply([sigs]).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply([sigs]).unwrap().psbt();
         assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     }
 
@@ -2072,7 +2064,7 @@ mod test {
     fn apply_rejects_out_of_bounds_index_even_when_empty() {
         // An entry with no signatures is skipped only after its index is bounds-checked.
         let (psbt, _) = keyed_psbt();
-        let mut signer = Signer::new(psbt.try_resolve().unwrap());
+        let signer = Signer::new(psbt.try_resolve().unwrap());
         let empty = InputSigs { index: 1, signatures: TypedSigs::Ecdsa(vec![]) };
         let err = signer.apply([empty]).expect_err("out-of-bounds index is rejected");
         assert_eq!(

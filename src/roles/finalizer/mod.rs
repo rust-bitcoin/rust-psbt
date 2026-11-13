@@ -193,8 +193,8 @@ mod tests {
         });
         signer
             .apply(sigs)
-            .expect("signature created in this same function, should be within bounds");
-        signer.psbt()
+            .expect("signature created in this same function, should be within bounds")
+            .psbt()
     }
 
     /// Builds a signed P2WPKH PSBT: the fixture signed with `TEST_XPRIV`.

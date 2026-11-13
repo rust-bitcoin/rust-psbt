@@ -263,8 +263,7 @@ fn sign_then_convert_preserves_signatures() {
             .expect("test environment, inputs should be well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
-    signer.apply(sigs).unwrap();
-    let signed = signer.psbt();
+    let signed = signer.apply(sigs).unwrap().psbt();
 
     let parsed = round_trip_v0(&signed);
     assert_eq!(parsed.inputs[0].partial_sigs, signed.inputs[0].partial_sigs);

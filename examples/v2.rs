@@ -247,8 +247,7 @@ impl Bob {
                 .expect("owned input with full tx prevout should be verifiable");
             session.get_input_sigs(&input, &xpriv, &self.0.secp)
         });
-        signer.apply([sigs]).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply([sigs]).unwrap().psbt();
         Ok(psbt)
     }
 
@@ -335,8 +334,7 @@ impl Entity {
                 session.assume_checked_inputs().expect("Malformed input, cannot be signed");
             session.get_all(&inputs, &xpriv, &self.secp)
         });
-        signer.apply(sigs).unwrap();
-        let psbt = signer.psbt();
+        let psbt = signer.apply(sigs).unwrap().psbt();
         Ok(psbt)
     }
 }

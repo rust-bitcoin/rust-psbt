@@ -217,8 +217,7 @@ fn assume_signs_witness_only_input() {
     // The user attests the funding data out-of-band and signs anyway.
     let sigs = signer.session(sign_input_unchecked(0, &keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 1);
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
 }
 
@@ -249,8 +248,7 @@ fn strict_sign_all_blocked_by_other_users_input() {
 
     // User B can still strictly sign his own input alone.
     let sigs = signer.session(sign_input(1, &b_keys, &secp)).unwrap();
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
     assert!(psbt.inputs[0].partial_sigs.is_empty());
     assert_eq!(psbt.inputs[1].partial_sigs.len(), 1);
 }
@@ -277,15 +275,13 @@ fn mixed_assume_and_strict_signers() {
             let input = session.assume_checked_input(0).unwrap();
             session.get_input_sigs(&input, &a_keys, &secp)
         });
-        signer.apply([sigs]).unwrap();
-        signer.psbt()
+        signer.apply([sigs]).unwrap().psbt()
     };
 
     // User B receives the PSBT and strictly signs his own input.
     let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_input(1, &b_keys, &secp)).unwrap();
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
 
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     assert_eq!(psbt.inputs[1].partial_sigs.len(), 1);
@@ -331,8 +327,7 @@ fn strict_sign_succeeds_after_utxo_upgrade() {
     // User B's strict signing now succeeds.
     let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&b_keys, &secp)).unwrap();
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
     assert!(psbt.inputs[0].partial_sigs.is_empty());
     assert_eq!(psbt.inputs[1].partial_sigs.len(), 1);
 }
@@ -366,8 +361,7 @@ fn taproot_input_requires_all_signable_inputs() {
     assert_eq!(all_signatures[0].len(), 1); // P2TR gets signed
     assert_eq!(all_signatures[1], singular); // P2WPKH does not change
 
-    signer.apply(all_signatures).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(all_signatures).unwrap().psbt();
     assert!(psbt.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
     assert_eq!(psbt.inputs[1].partial_sigs.len(), 1); // P2WPKH gets signed
 }
@@ -406,8 +400,7 @@ fn two_users_sign_2_of_2_wsh() {
         let mut signer = Signer::new(psbt.try_resolve().unwrap());
         let sigs = signer.session(sign_input(0, &a_keys, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
-        signer.apply([sigs]).unwrap();
-        signer.psbt()
+        signer.apply([sigs]).unwrap().psbt()
     };
 
     // User B receives the PSBT and strictly signs: the existing matching
@@ -415,8 +408,7 @@ fn two_users_sign_2_of_2_wsh() {
     let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_input(0, &b_keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 1);
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
 
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 2);
     assert!(psbt.inputs[0].partial_sigs.contains_key(&a_public_key));
@@ -471,8 +463,7 @@ fn two_users_sign_taproot_script_path() {
         let sigs = signer.session(sign_all(&a_keys, &secp)).unwrap();
         assert_eq!(sigs.len(), 1);
         assert_eq!(sigs[0].len(), 1);
-        signer.apply(sigs).unwrap();
-        signer.psbt()
+        signer.apply(sigs).unwrap().psbt()
     };
     assert!(psbt.inputs[0].tap_script_sigs.contains_key(&(a_xonly, leaf_hash)));
 
@@ -482,8 +473,7 @@ fn two_users_sign_taproot_script_path() {
     let sigs = signer.session(sign_all(&b_keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 1);
     assert_eq!(sigs[0].len(), 1);
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
 
     assert_eq!(psbt.inputs[0].tap_script_sigs.len(), 2);
     assert!(psbt.inputs[0].tap_script_sigs.contains_key(&(a_xonly, leaf_hash)));
@@ -514,8 +504,7 @@ fn sighash_mismatch_strict_rejects_assume_signs() {
     // The assume path only trusts the caller's funding-data attestation and signs: the fresh
     // SIGHASH_ALL signature replaces the mismatching one.
     let sigs = signer.session(sign_input_unchecked(0, &keys, &secp)).unwrap();
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     assert_eq!(psbt.inputs[0].partial_sigs[&public_key].sighash_type, EcdsaSighashType::All);
 }
@@ -564,8 +553,7 @@ fn anyonecanpay_taproot_allowed_standalone() {
     });
 
     assert_eq!(sigs.len(), 1); // P2TR gets signed
-    signer.apply([sigs]).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply([sigs]).unwrap().psbt();
     assert!(psbt.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
 }
 
@@ -580,8 +568,7 @@ fn apply_clears_tx_modifiable_flags() {
     assert!(unsigned.global.tx_modifiable_flags.is_outputs_modifiable());
     let mut signer = Signer::new(unsigned.try_resolve().unwrap());
     let sigs = signer.session(sign_input(0, &keys, &secp)).unwrap();
-    signer.apply([sigs]).unwrap();
-    let signed = signer.psbt();
+    let signed = signer.apply([sigs]).unwrap().psbt();
     assert!(!signed.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(!signed.global.tx_modifiable_flags.is_outputs_modifiable());
 
@@ -590,8 +577,7 @@ fn apply_clears_tx_modifiable_flags() {
     assert!(unsigned.global.tx_modifiable_flags.is_outputs_modifiable());
     let mut signer = Signer::new(unsigned.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
-    signer.apply(sigs).unwrap();
-    let signed = signer.psbt();
+    let signed = signer.apply(sigs).unwrap().psbt();
     assert!(signed.inputs[0].tap_key_sig.is_some()); // P2TR gets signed
     assert!(!signed.global.tx_modifiable_flags.is_inputs_modifiable());
     assert!(!signed.global.tx_modifiable_flags.is_outputs_modifiable());
@@ -641,8 +627,7 @@ fn sign_all_unchecked_signs_all_witness_only() {
 
     let sigs = signer.session(sign_all_unchecked(&keys, &secp)).unwrap();
     assert_eq!(sigs.len(), 2);
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     assert_eq!(psbt.inputs[1].partial_sigs.len(), 1);
 }
@@ -674,8 +659,7 @@ fn get_some_signs_user_selected_inputs() {
     assert_eq!(sigs[1].index, 2);
     assert!(sigs.iter().all(|input_sigs| input_sigs.len() == 1));
 
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
     assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
     assert!(psbt.inputs[1].partial_sigs.is_empty());
     assert_eq!(psbt.inputs[2].partial_sigs.len(), 1);
@@ -693,8 +677,7 @@ fn ecdsa_signatures_are_low_r() {
     let inputs = (0..INPUTS).map(|vout| wpkh_input(public_key, vout, Funding::WitnessOnly));
     let mut signer = Signer::new(unsigned_psbt(inputs.collect()).try_resolve().unwrap());
     let sigs = signer.session(sign_all_unchecked(&keys, &secp)).unwrap();
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
 
     for (index, input) in psbt.inputs.iter().enumerate() {
         let sig = input.partial_sigs[&public_key].signature;
@@ -717,8 +700,7 @@ fn ecdsa_grinding_2_bytes_signatures_are_at_most_69_bytes() {
         let inputs = session.assume_checked_inputs().unwrap().grind_2_bytes();
         session.get_all(&inputs, &keys, &secp)
     });
-    signer.apply(sigs).unwrap();
-    let psbt = signer.psbt();
+    let psbt = signer.apply(sigs).unwrap().psbt();
 
     for input in &psbt.inputs {
         assert!(input.partial_sigs[&public_key].signature.serialize_der().len() <= 69);
