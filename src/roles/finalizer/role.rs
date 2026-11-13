@@ -136,7 +136,7 @@ impl Finalizer {
 
     // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
     fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
-        let fields = self.final_scripts(input)?;
+        let fields = self.final_scripts(input, false)?;
         Ok(input.finalize(fields))
     }
 
@@ -146,7 +146,7 @@ impl Finalizer {
     pub fn finalize_input_mall(&self, index: usize) -> Result<Input, FinalizeError> {
         let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
         let fields = self
-            .final_scripts_mall(input)
+            .final_scripts(input, true)
             .map_err(|e| FinalizeError::Input { input_index: index, error: e })?;
         Ok(input.finalize(fields))
     }
@@ -170,13 +170,48 @@ impl Finalizer {
     // > they do, the Transaction Extractor should ...
     //
     // TODO: Check that we are doing the right thing at the right time between finalization and extraction.
-    fn final_scripts(&self, input: &Input) -> Result<FinalScripts, InputError> {
+    fn final_scripts(&self, input: &Input, malleable: bool) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
             self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
         let sat = InputSatisfier { input, lock_time };
 
         Ok(match output_type {
+            OutputType::Wpkh | OutputType::Wsh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(wit, _)| Witness::from_slice(&wit))
+                    .map(|witness| FinalScripts::Segwit { witness })?
+            }
+            OutputType::ShWpkh | OutputType::ShWsh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(wit, script_sig)| (Witness::from_slice(&wit), script_sig))
+                    .map(|(witness, script_sig)| FinalScripts::Wrapped { script_sig, witness })?
+            }
+            OutputType::Bare | OutputType::Sh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(_, script_sig)| FinalScripts::Legacy { script_sig })?
+            }
             // Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
             // because the information about all the scripts might not be present. Also, currently the spec does
             // not support hidden branches, so inferring a descriptor is not possible.
@@ -211,79 +246,12 @@ impl Finalizer {
                                     Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script)
                                         .ok()?
                                         .substitute_raw_pkh(&map);
-                                let mut wit = ms.satisfy(&sat).ok()?;
-                                wit.push(ms.encode().into_bytes());
-                                wit.push(control_block.serialize());
-                                Some(wit)
-                            })
-                            .min_by_key(|wit| super::witness_size(wit))
-                            .ok_or(InputError::CouldNotSatisfyTr)?
-                    }
-                };
-                FinalScripts::Segwit { witness: Witness::from_slice(&wit) }
-            }
-            OutputType::Wpkh | OutputType::Wsh => input
-                .get_descriptor()?
-                .get_satisfaction(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(wit, _)| Witness::from_slice(&wit))
-                .map(|witness| FinalScripts::Segwit { witness })?,
-            OutputType::ShWpkh | OutputType::ShWsh => input
-                .get_descriptor()?
-                .get_satisfaction(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(wit, script_sig)| (Witness::from_slice(&wit), script_sig))
-                .map(|(witness, script_sig)| FinalScripts::Wrapped { script_sig, witness })?,
-            OutputType::Bare | OutputType::Sh => input
-                .get_descriptor()?
-                .get_satisfaction(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(_, script_sig)| FinalScripts::Legacy { script_sig })?,
-        })
-    }
-
-    fn final_scripts_mall(&self, input: &Input) -> Result<FinalScripts, InputError> {
-        let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
-        let lock_time =
-            self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
-        let sat = InputSatisfier { input, lock_time };
-
-        Ok(match output_type {
-            // Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
-            // because the information about all the scripts might not be present. Also, currently the spec does
-            // not support hidden branches, so inferring a descriptor is not possible.
-            OutputType::Tr => {
-                // Try the key spend path first.
-                let key_spend = sat.input.tap_internal_key.and_then(|ref key| {
-                    <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(
-                        &sat, key,
-                    )
-                });
-                let wit = match key_spend {
-                    Some(sig) => vec![sig.to_vec()],
-                    None => {
-                        // Script spend. Miniscript decodes the raw leaf script without the
-                        // descriptor's pkh() fragments, producing expr_raw_pkh nodes;
-                        // tap_key_origins holds every descriptor key, so use it to substitute.
-                        let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
-                            .input
-                            .tap_key_origins
-                            .keys()
-                            .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
-                            .collect();
-
-                        sat.input
-                            .tap_scripts
-                            .iter()
-                            .filter_map(|(control_block, (script, ver))| {
-                                if *ver != LeafVersion::TapScript {
-                                    return None; // Non-default leaf versions unsupported.
+                                let mut wit = if malleable {
+                                    ms.satisfy_malleable(&sat)
+                                } else {
+                                    ms.satisfy(&sat)
                                 }
-                                let ms =
-                                    Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script)
-                                        .ok()?
-                                        .substitute_raw_pkh(&map);
-                                let mut wit = ms.satisfy_malleable(&sat).ok()?;
+                                .ok()?;
                                 wit.push(ms.encode().into_bytes());
                                 wit.push(control_block.serialize());
                                 Some(wit)
@@ -294,23 +262,6 @@ impl Finalizer {
                 };
                 FinalScripts::Segwit { witness: Witness::from_slice(&wit) }
             }
-            OutputType::Wpkh | OutputType::Wsh => input
-                .get_descriptor()?
-                .get_satisfaction_mall(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(wit, _)| Witness::from_slice(&wit))
-                .map(|witness| FinalScripts::Segwit { witness })?,
-            OutputType::ShWpkh | OutputType::ShWsh => input
-                .get_descriptor()?
-                .get_satisfaction_mall(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(wit, script_sig)| (Witness::from_slice(&wit), script_sig))
-                .map(|(witness, script_sig)| FinalScripts::Wrapped { script_sig, witness })?,
-            OutputType::Bare | OutputType::Sh => input
-                .get_descriptor()?
-                .get_satisfaction_mall(sat)
-                .map_err(InputError::MiniscriptError)
-                .map(|(_, script_sig)| FinalScripts::Legacy { script_sig })?,
         })
     }
 }
