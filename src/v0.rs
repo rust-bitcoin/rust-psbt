@@ -441,3 +441,140 @@ impl Decoder for PsbtV0Decoder {
 impl Default for PsbtV0Decoder {
     fn default() -> Self { Self { stage: V0DecoderStage::Magic(ArrayDecoder::default()) } }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use bitcoin::absolute;
+
+    use super::*;
+    use crate::{Creator, Input, Output};
+
+    #[test]
+    fn degraded_default_is_empty() {
+        assert!(Degraded::default().is_empty());
+    }
+
+    #[test]
+    fn degraded_not_empty_with_lock_time_inputs() {
+        let d = Degraded { lock_time_inputs: 1, ..Default::default() };
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn degraded_not_empty_with_tx_modifiable_flags() {
+        let d = Degraded {
+            tx_modifiable_flags: Some(TxModifiableFlags::with_inputs_modifiable()),
+            ..Default::default()
+        };
+        assert!(!d.is_empty());
+    }
+
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn degraded_not_empty_with_sp_fields() {
+        // Each SP field independently makes is_empty() return false.
+        let d = Degraded { sp_ecdh_shares: 1, ..Default::default() };
+        assert!(!d.is_empty());
+        let d = Degraded { sp_dleq_proofs: 1, ..Default::default() };
+        assert!(!d.is_empty());
+        let d = Degraded { sp_dropped_inputs: 1, ..Default::default() };
+        assert!(!d.is_empty());
+        let d = Degraded { sp_dropped_outputs: 1, ..Default::default() };
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn degraded_input_locktimes() {
+        let mut input = Input::new(&bitcoin::OutPoint::null());
+        input.min_time = Some(absolute::Time::from_consensus(500_000_001).unwrap());
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .expect("well-formed input")
+            .output(Output::new(bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1),
+                script_pubkey: bitcoin::ScriptBuf::from(vec![0xab; 4]),
+            }))
+            .expect("valid output")
+            .psbt();
+
+        let degraded = PsbtV0::from_psbt(psbt).unwrap().degraded();
+        assert_eq!(degraded.lock_time_inputs, 1);
+
+        // Reverse case: min_height only, no min_time.
+        let height = absolute::Height::from_consensus(100_000).unwrap();
+        let mut input = Input::new(&bitcoin::OutPoint::null());
+        input.min_height = Some(crate::RequiredHeightLockTime::try_from(height).unwrap());
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .expect("well-formed input")
+            .output(Output::new(bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1),
+                script_pubkey: bitcoin::ScriptBuf::from(vec![0xab; 4]),
+            }))
+            .expect("valid output")
+            .psbt();
+
+        let degraded = PsbtV0::from_psbt(psbt).unwrap().degraded();
+        assert_eq!(degraded.lock_time_inputs, 1);
+    }
+
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn degraded_counts_input_with_only_sp_ecdh() {
+        use bitcoin::CompressedPublicKey;
+
+        let pk_bytes = [0x02u8; 33];
+        let pk = CompressedPublicKey::from_slice(&pk_bytes).unwrap();
+
+        let mut input = Input::new(&bitcoin::OutPoint::null());
+        input.sp_ecdh_shares.insert(pk, pk);
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .expect("well-formed input")
+            .output(Output::new(bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1),
+                script_pubkey: bitcoin::ScriptBuf::from(vec![0xab; 4]),
+            }))
+            .expect("valid output")
+            .psbt();
+
+        let degraded = PsbtV0::from_psbt(psbt).unwrap().degraded();
+        assert_eq!(degraded.sp_dropped_inputs, 1);
+    }
+
+    #[cfg(feature = "silent-payments")]
+    #[test]
+    fn degraded_counts_input_with_only_sp_dleq() {
+        use bitcoin::CompressedPublicKey;
+
+        use crate::DleqProof;
+
+        let pk_bytes = [0x02u8; 33];
+        let pk = CompressedPublicKey::from_slice(&pk_bytes).unwrap();
+
+        let mut input = Input::new(&bitcoin::OutPoint::null());
+        input.sp_dleq_proofs.insert(pk, DleqProof([0xAB; 64]));
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .expect("well-formed input")
+            .output(Output::new(bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1),
+                script_pubkey: bitcoin::ScriptBuf::from(vec![0xab; 4]),
+            }))
+            .expect("valid output")
+            .psbt();
+
+        let degraded = PsbtV0::from_psbt(psbt).unwrap().degraded();
+        assert_eq!(degraded.sp_dropped_inputs, 1);
+    }
+}
