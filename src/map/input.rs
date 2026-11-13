@@ -193,14 +193,14 @@ impl Input {
 
     /// Returns the [`OutputType`] of the spend utxo for this PSBT's input.
     pub fn output_type_untrusted(&self) -> Result<OutputType, SignError> {
-        let utxo = self.funding_utxo_untrusted()?;
+        let utxo = self.funding_utxo_untrusted().map_err(SignError::FundingUtxo)?;
         self.output_type_from_spk(&utxo.script_pubkey)
     }
 
     /// Like [`output_type`](Self::output_type) but sources the spent output from
     /// [`funding_utxo`](Self::funding_utxo) (trusted).
     pub(crate) fn output_type(&self) -> Result<OutputType, SignError> {
-        let utxo = self.funding_utxo()?;
+        let utxo = self.funding_utxo().map_err(SignError::FundingUtxo)?;
         self.output_type_from_spk(&utxo.script_pubkey)
     }
 

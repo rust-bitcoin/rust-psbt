@@ -491,7 +491,7 @@ impl Psbt {
     pub fn fee(&self) -> Result<Amount, FeeError> {
         // For the inputs we have to get the value from the input UTXOs.
         let input_value = self.iter_funding_utxos().try_fold(0u64, |acc, input| {
-            let val = input?.value.to_sat();
+            let val = input.map_err(FeeError::FundingUtxo)?.value.to_sat();
             acc.checked_add(val).ok_or(FeeError::InputOverflow)
         })?;
         // For the outputs we have the value directly in the `Output`.

@@ -234,22 +234,6 @@ impl std::error::Error for SignError {
     }
 }
 
-impl From<sighash::P2wpkhError> for SignError {
-    fn from(e: sighash::P2wpkhError) -> Self { Self::P2wpkhSighash(e) }
-}
-
-impl From<IndexOutOfBoundsError> for SignError {
-    fn from(e: IndexOutOfBoundsError) -> Self { Self::IndexOutOfBounds(e) }
-}
-
-impl From<sighash::TaprootError> for SignError {
-    fn from(e: sighash::TaprootError) -> Self { Self::TaprootError(e) }
-}
-
-impl From<FundingUtxoError> for SignError {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
-}
-
 /// The input is not 100% unsigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -378,10 +362,6 @@ impl std::error::Error for FeeError {
             Self::InputOverflow | Self::OutputOverflow | Self::Negative => None,
         }
     }
-}
-
-impl From<FundingUtxoError> for FeeError {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
 }
 
 /// An error getting the funding transaction for this input.
