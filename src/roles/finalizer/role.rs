@@ -37,9 +37,9 @@ impl Finalizer {
     /// A finalizer can only be created if all inputs have a funding UTXO, the lock time can be
     /// determined, and every signature's sighash type matches the input's required type.
     pub fn new(psbt: Psbt) -> Result<Self, FinalizeError> {
-        let _ = psbt.determine_lock_time()?;
+        let _ = psbt.determine_lock_time().map_err(FinalizeError::DetermineLockTime)?;
         for (input_index, input) in psbt.inputs.iter().enumerate() {
-            let _ = input.funding_utxo()?;
+            let _ = input.funding_utxo().map_err(FinalizeError::FundingUtxo)?;
             if let Some((source, got)) = input.sighash_mismatch() {
                 return Err(FinalizeError::SignatureSighashType(SignatureSighashTypeError {
                     input_index,
@@ -95,7 +95,7 @@ impl Finalizer {
         psbt: &Psbt,
         secp: &Secp256k1<C>,
     ) -> Result<(), FinalizeError> {
-        let unsigned_tx = psbt.unsigned_tx()?;
+        let unsigned_tx = psbt.unsigned_tx().map_err(FinalizeError::DetermineLockTime)?;
 
         let utxos: Vec<&TxOut> = psbt
             .iter_funding_utxos()
@@ -503,18 +503,6 @@ impl std::error::Error for FinalizeError {
             Self::InterpreterSatisfaction { input_index: _, ref error } => Some(error),
         }
     }
-}
-
-impl From<FundingUtxoError> for FinalizeError {
-    fn from(e: FundingUtxoError) -> Self { Self::FundingUtxo(e) }
-}
-
-impl From<DetermineLockTimeError> for FinalizeError {
-    fn from(e: DetermineLockTimeError) -> Self { Self::DetermineLockTime(e) }
-}
-
-impl From<SignatureSighashTypeError> for FinalizeError {
-    fn from(e: SignatureSighashTypeError) -> Self { Self::SignatureSighashType(e) }
 }
 
 /// Error type for Pbst Input
