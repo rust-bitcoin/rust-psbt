@@ -80,7 +80,7 @@ pub use crate::encoding::{decode_from_reader, encode_to_writer};
 pub use crate::psbt::ParsePsbtError;
 #[cfg(feature = "miniscript")]
 #[doc(inline)]
-pub use crate::roles::{FinalizeError, Finalizer, InputError};
+pub use crate::roles::{FinalizeError, FinalizedPsbt, Finalizer, InputError};
 #[cfg(feature = "silent-payments")]
 #[doc(inline)]
 pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
@@ -112,7 +112,8 @@ pub use crate::{
         Vout,
     },
     psbt::{
-        combine, CombineError, OutputType, Psbt, PsbtV2Decoder, PsbtV2Encoder, SigningAlgorithm,
+        combine, CombineError, OutputType, Psbt, PsbtV2Decoder, PsbtV2Encoder, ResolvedPsbt,
+        SigningAlgorithm,
     },
     roles::{
         sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,

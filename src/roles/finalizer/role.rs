@@ -24,20 +24,20 @@ use miniscript::{
 use super::satisfy::InputSatisfier;
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
-use crate::psbt::{OutputType, Psbt};
-use crate::{DetermineLockTimeError, SignatureSighashTypeError};
+use crate::psbt::{OutputType, Psbt, ResolvedPsbt};
+use crate::roles::{ExtractError, Extractor};
+use crate::SignatureSighashTypeError;
 
 /// Implements the BIP-370 Finalized role.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Finalizer(Psbt);
+pub struct Finalizer(ResolvedPsbt);
 
 impl Finalizer {
     /// Creates a `Finalizer`.
     ///
-    /// A finalizer can only be created if all inputs have a funding UTXO, the lock time can be
-    /// determined, and every signature's sighash type matches the input's required type.
-    pub fn new(psbt: Psbt) -> Result<Self, FinalizeError> {
-        let _ = psbt.determine_lock_time().map_err(FinalizeError::DetermineLockTime)?;
+    /// A finalizer can only be created if all inputs have a funding UTXO and every signature's
+    /// sighash type matches the input's required type.
+    pub fn new(psbt: ResolvedPsbt) -> Result<Self, FinalizeError> {
         for (input_index, input) in psbt.inputs.iter().enumerate() {
             let _ = input.funding_utxo().map_err(FinalizeError::FundingUtxo)?;
             if let Some((source, got)) = input.sighash_mismatch() {
@@ -54,17 +54,16 @@ impl Finalizer {
     }
 
     /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Txid {
-        self.0.id().expect("Finalizer guarantees lock time can be determined")
-    }
+    pub fn id(&self) -> Txid { self.0.id() }
 
-    /// Finalize the PSBT.
+    /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
     ///
-    /// # Returns
-    ///
-    /// Returns the finalized PSBT without modifying the original.
-    #[must_use = "returns the finalized PSBT without modifying the original"]
-    pub fn finalize<C: Verification>(&self, secp: &Secp256k1<C>) -> Result<Psbt, FinalizeError> {
+    /// Use [`FinalizedPsbt::psbt`] to extract the finalized [`Psbt`] for serialization, or
+    /// [`FinalizedPsbt::extractor`] to transition to the [`Extractor`](crate::Extractor) role.
+    pub fn finalize<C: Verification>(
+        self,
+        secp: &Secp256k1<C>,
+    ) -> Result<FinalizedPsbt, FinalizeError> {
         let mut inputs = vec![];
         for (input_index, input) in self.0.inputs.iter().enumerate() {
             // Already-finalized inputs are passed through unchanged.
@@ -79,11 +78,12 @@ impl Finalizer {
             }
         }
 
-        let finalized =
-            Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() };
-
+        let lock_time = self.0.lock_time();
+        let mut psbt = self.0.into_psbt();
+        psbt.inputs = inputs;
+        let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
         Self::interpreter_check(&finalized, secp)?;
-        Ok(finalized)
+        Ok(FinalizedPsbt(finalized))
     }
 
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
@@ -92,10 +92,10 @@ impl Finalizer {
     /// The psbt must have included final script sig and final witness. In other words, this checks
     /// whether the finalized psbt interprets correctly.
     pub(crate) fn interpreter_check<C: Verification>(
-        psbt: &Psbt,
+        psbt: &ResolvedPsbt,
         secp: &Secp256k1<C>,
     ) -> Result<(), FinalizeError> {
-        let unsigned_tx = psbt.unsigned_tx().map_err(FinalizeError::DetermineLockTime)?;
+        let unsigned_tx = psbt.unsigned_tx();
 
         let utxos: Vec<&TxOut> = psbt
             .iter_funding_utxos()
@@ -165,10 +165,7 @@ impl Finalizer {
         let (witness, script_sig) = {
             let spk =
                 &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
-            let lock_time = self
-                .0
-                .determine_lock_time()
-                .expect("Finalizer guarantees lock time can be determined");
+            let lock_time = self.0.lock_time();
             let sat = InputSatisfier { input, lock_time };
 
             if spk.is_p2tr() {
@@ -364,6 +361,31 @@ impl Finalizer {
     }
 }
 
+/// A PSBT that has been finalized by [`Finalizer::finalize`].
+///
+/// This proof of finalization is the only way to reach the [`Psbt`] serialization point or
+/// transition to the [`Extractor`](crate::Extractor) role, so neither can be reached with an
+/// unfinalized PSBT.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FinalizedPsbt(ResolvedPsbt);
+
+impl FinalizedPsbt {
+    /// Returns this PSBT's unique identification.
+    pub fn id(&self) -> Txid { self.0.id() }
+
+    /// Returns the finalized [`Psbt`].
+    pub fn psbt(self) -> Psbt { self.0.into_psbt() }
+
+    /// Transitions to the [`Extractor`](crate::Extractor) role.
+    pub fn extractor(self) -> Result<Extractor, ExtractError> { Extractor::new(self.0) }
+}
+
+impl core::ops::Deref for FinalizedPsbt {
+    type Target = Psbt;
+
+    fn deref(&self) -> &Psbt { &self.0 }
+}
+
 // Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
 // because the information about all the scripts might not be present. Also, currently the spec does
 // not support hidden branches, so inferring a descriptor is not possible.
@@ -447,8 +469,6 @@ fn construct_tap_witness(
 pub enum FinalizeError {
     /// An input is missing its funding UTXO.
     FundingUtxo(FundingUtxoError),
-    /// Finalizer must be able to determine the lock time.
-    DetermineLockTime(DetermineLockTimeError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
     /// Failed to finalize an input.
@@ -478,8 +498,6 @@ impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
-            Self::DetermineLockTime(ref e) =>
-                write_err!(f, "finalizer must be able to determine the lock time"; e),
             Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
             Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
@@ -496,7 +514,6 @@ impl std::error::Error for FinalizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FundingUtxo(ref e) => Some(e),
-            Self::DetermineLockTime(ref e) => Some(e),
             Self::SignatureSighashType(ref e) => Some(e),
             Self::Input { input_index: _, ref error } => Some(error),
             Self::InterpreterConstructor { input_index: _, ref error } => Some(error),

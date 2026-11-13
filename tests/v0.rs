@@ -256,14 +256,14 @@ fn sign_then_convert_preserves_signatures() {
     let secp = Secp256k1::<psbt_v2::bitcoin::secp256k1::All>::new();
     let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
 
-    let mut signer = Signer::new(psbt).unwrap();
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(|mut session| {
         let inputs = session
             .assume_checked_inputs()
             .expect("test environment, inputs should be well formed");
         session.get_all(&inputs, &xpriv, &secp)
     });
-    let signed = signer.apply(sigs).unwrap();
+    let signed = signer.apply(sigs).unwrap().psbt();
 
     let parsed = round_trip_v0(&signed);
     assert_eq!(parsed.inputs[0].partial_sigs, signed.inputs[0].partial_sigs);

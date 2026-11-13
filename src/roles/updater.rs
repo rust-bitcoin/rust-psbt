@@ -12,10 +12,9 @@ use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash, TapTree};
 use bitcoin::{PublicKey, ScriptBuf, Sequence, Transaction, TxOut, Txid};
 
 use crate::encoding::codecs::leaf_script::TapLeafScript;
-use crate::error::DetermineLockTimeError;
 use crate::input::Input;
 use crate::output::Output;
-use crate::psbt::{CombineError, Psbt};
+use crate::psbt::{CombineError, Psbt, ResolvedPsbt};
 use crate::roles::signer::Signer;
 use crate::{Global, ProprietaryKey, PsbtSighashType};
 
@@ -48,7 +47,7 @@ use crate::{Global, ProprietaryKey, PsbtSighashType};
 ///     .expect("output must be valid")
 ///     .psbt();
 ///
-/// let updater = Updater::new(psbt).expect("lock time must be determinable");
+/// let updater = Updater::new(psbt.try_resolve().expect("lock time must be determinable"));
 ///
 /// let updater = updater
 ///     .update(|mut patch| {
@@ -61,12 +60,12 @@ use crate::{Global, ProprietaryKey, PsbtSighashType};
 ///     })
 ///     .expect("the patch describes the same transaction");
 ///
-/// let _psbt = updater.psbt().expect("lock time must be determinable");
+/// let _psbt = updater.psbt();
 /// ```
 ///
 /// [`Signer`]: crate::Signer
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Updater(pub(crate) Psbt);
+pub struct Updater(pub(crate) ResolvedPsbt);
 
 /// The updatable fields of a PSBT.
 ///
@@ -174,18 +173,11 @@ pub struct OutputPatch {
 }
 
 impl Updater {
-    /// Creates an `Updater`.
-    ///
-    /// An updater can only accept a PSBT that has a valid combination of lock times.
-    pub fn new(psbt: Psbt) -> Result<Self, DetermineLockTimeError> {
-        let _ = psbt.determine_lock_time()?;
-        Ok(Self(psbt))
-    }
+    /// Creates an `Updater` from a PSBT whose locktime has already been resolved.
+    pub fn new(psbt: ResolvedPsbt) -> Self { Self(psbt) }
 
     /// Returns this PSBT's unique identification.
-    pub fn id(&self) -> Txid {
-        self.0.id().expect("Updater guarantees lock time can be determined")
-    }
+    pub fn id(&self) -> Txid { self.0.id() }
 
     /// Takes a copy of the updatable fields of the inner [`Psbt`].
     pub(crate) fn patch(&self) -> UpdaterPatch {
@@ -314,17 +306,14 @@ impl Updater {
                 .collect(),
         };
 
-        let combined = self.0.combine_with(delta)?;
-        Ok(Self(combined))
+        let lock_time = self.0.lock_time();
+        let combined = self.0.into_psbt().combine_with(delta)?;
+        Ok(Self(ResolvedPsbt::from_parts(combined, lock_time)))
     }
 
-    /// Consumes the `Updater` and returns the inner [`Psbt`], re-validating that the lock
-    /// time is still determinable after any mutations.
-    pub fn psbt(self) -> Result<Psbt, DetermineLockTimeError> {
-        let _ = self.0.determine_lock_time()?;
-        Ok(self.0)
-    }
+    /// Consumes the `Updater` and returns the inner [`Psbt`].
+    pub fn psbt(self) -> Psbt { self.0.into_psbt() }
 
     /// Transitions directly to the [`Signer`] role after completing all updates.
-    pub fn signer(self) -> Result<Signer, DetermineLockTimeError> { Signer::new(self.psbt()?) }
+    pub fn signer(self) -> Signer { Signer::new(self.0) }
 }

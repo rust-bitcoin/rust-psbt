@@ -72,14 +72,14 @@ fn two_party_psbt(input_a: Input, input_b: Input) -> Psbt {
 fn update_then_extract_psbt() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let updater = updater
         .update(|mut draft| {
             draft.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
             draft
         })
         .unwrap();
-    let psbt = updater.psbt().unwrap();
+    let psbt = updater.psbt();
 
     assert_eq!(psbt.inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
     // The sighash type was not set by this update, so it remains unset.
@@ -93,7 +93,7 @@ fn update_then_extract_psbt() {
 fn multiple_updates_accumulate() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let updater = updater
         .update(|mut draft| {
@@ -109,7 +109,7 @@ fn multiple_updates_accumulate() {
         })
         .unwrap();
 
-    let psbt = updater.psbt().unwrap();
+    let psbt = updater.psbt();
 
     assert_eq!(psbt.inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
     assert_eq!(psbt.inputs[1].sequence, Some(Sequence::ENABLE_RBF_NO_LOCKTIME));
@@ -125,7 +125,7 @@ fn cross_map_read_and_write() {
 
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             // Read a derivation from input 0, apply the same derivation to input 1.
@@ -137,8 +137,7 @@ fn cross_map_read_and_write() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[1].bip32_derivations.len(), 1);
 }
@@ -149,7 +148,7 @@ fn update_sets_input_fields() {
     let xonly = XOnlyPublicKey::from_slice(&[2u8; 32]).unwrap();
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let mut cb_bytes = vec![0x01u8];
     cb_bytes.extend_from_slice(&xonly.serialize());
     let leaf = TapLeafHash::from_byte_array([12u8; 32]);
@@ -169,8 +168,7 @@ fn update_sets_input_fields() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
     assert_eq!(psbt.inputs[0].non_witness_utxo, Some(funding_tx(1)));
@@ -194,15 +192,14 @@ fn update_sets_witness_utxo() {
     let input_a = Input::new(&OutPoint { txid: funding_tx(1).compute_txid(), vout: 0 });
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             draft.inputs[0].witness_utxo = Some(funding_tx(1).output[0].clone());
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].witness_utxo, Some(funding_tx(1).output[0].clone()));
 }
@@ -212,15 +209,14 @@ fn update_sets_witness_utxo() {
 fn update_sets_sighash_type() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             draft.inputs[0].sighash_type = Some(PsbtSighashType::ALL);
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].sighash_type, Some(PsbtSighashType::ALL));
 }
@@ -236,7 +232,7 @@ fn update_adds_preimage_maps() {
     let hash256_preimage = b"hash256 preimage".to_vec();
 
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let psbt = updater
         .update(|mut draft| {
@@ -255,8 +251,7 @@ fn update_adds_preimage_maps() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(
         psbt.inputs[0].ripemd160_preimages.get(&ripemd160::Hash::hash(&ripemd160_preimage)),
@@ -284,7 +279,7 @@ fn update_sets_output_fields() {
     let leaf = TapLeafHash::from_byte_array([12u8; 32]);
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             draft.outputs[0].redeem_script = Some(ScriptBuf::from_bytes(vec![0x51]));
@@ -298,8 +293,7 @@ fn update_sets_output_fields() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.outputs[0].redeem_script, Some(ScriptBuf::from_bytes(vec![0x51])));
     assert_eq!(psbt.outputs[0].witness_script, Some(ScriptBuf::from_bytes(vec![0x52])));
@@ -317,15 +311,14 @@ fn update_sets_output_fields() {
 fn update_does_not_delete_information() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             draft.inputs[0].witness_utxo = None;
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].witness_utxo, Some(funding_tx(1).output[0].clone()));
 }
@@ -339,7 +332,7 @@ fn update_does_not_delete_map_entries() {
     input_a.bip32_derivations.insert(pk, KeySource::default());
 
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let psbt = updater
         .update(|mut draft| {
@@ -347,8 +340,7 @@ fn update_does_not_delete_map_entries() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].bip32_derivations.get(&pk), Some(&KeySource::default()));
 }
@@ -365,7 +357,7 @@ fn update_preserves_set_map_entries() {
     input_a.bip32_derivations.insert(pk, path_source.clone());
 
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let other_pk = test_key(2);
     let psbt = updater
@@ -377,8 +369,7 @@ fn update_preserves_set_map_entries() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     // The key source already set in the PSBT is preserved; the draft cannot override it.
     assert_eq!(psbt.inputs[0].bip32_derivations.get(&pk), Some(&path_source));
@@ -393,7 +384,7 @@ fn update_preserves_existing_sighash_type() {
     input_a.sighash_type = Some(PsbtSighashType::ALL);
 
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let psbt = updater
         .update(|mut draft| {
@@ -402,8 +393,7 @@ fn update_preserves_existing_sighash_type() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.inputs[0].sighash_type, Some(PsbtSighashType::ALL));
 }
@@ -419,7 +409,7 @@ fn update_adds_global_xpubs_and_proprietaries() {
         ProprietaryKey { prefix: b"test".to_vec(), subtype: 0x01u64, key: vec![0xaa; 2] };
 
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     let psbt = updater
         .update(|mut draft| {
@@ -430,8 +420,7 @@ fn update_adds_global_xpubs_and_proprietaries() {
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.global.xpubs.get(&xpub), Some(&KeySource::default()));
     assert_eq!(psbt.global.proprietaries.get(&proprietary), Some(&vec![0x42]));
@@ -457,7 +446,7 @@ fn update_rejects_sequence_change_with_existing_signature() {
     );
 
     let psbt = two_party_psbt(input_a, funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     // Changing the sequence of the signed input itself.
     let err = updater
@@ -493,7 +482,7 @@ fn update_rejects_sequence_change_with_existing_signature() {
 #[test]
 fn update_rejects_mismatched_draft_shape() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
 
     // Under-sized draft.
     let err = updater
@@ -537,9 +526,9 @@ fn update_rejects_mismatched_draft_shape() {
     assert!(matches!(err, CombineError::OutputsLenMismatch { this: 1, that: 2 }));
 }
 
-/// `Updater::new` validates that lock time is determinable on entry.
+/// `Psbt::try_resolve` rejects a PSBT with conflicting lock-time requirements.
 #[test]
-fn new_rejects_indeterminate_lock_time() {
+fn try_resolve_rejects_indeterminate_lock_time() {
     use psbt_v2::bitcoin::absolute;
 
     let mut psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
@@ -550,7 +539,7 @@ fn new_rejects_indeterminate_lock_time() {
     psbt.inputs[1].min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
     psbt.inputs[1].min_time = None;
 
-    let result = Updater::new(psbt);
+    let result = psbt.try_resolve();
     assert!(result.is_err());
 }
 
@@ -559,7 +548,7 @@ fn new_rejects_indeterminate_lock_time() {
 fn id_is_stable_across_updates() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let id = updater.id();
 
     let updater = updater
@@ -570,8 +559,8 @@ fn id_is_stable_across_updates() {
         .unwrap();
     assert_eq!(updater.id(), id);
 
-    let psbt = updater.psbt().unwrap();
-    assert_eq!(Updater::new(psbt).unwrap().id(), id);
+    let psbt = updater.psbt();
+    assert_eq!(Updater::new(psbt.try_resolve().unwrap()).id(), id);
 }
 
 /// Transitioning directly to the Signer role preserves the updates made through the draft.
@@ -579,15 +568,13 @@ fn id_is_stable_across_updates() {
 fn signer_preserves_updates() {
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
 
-    let signer = Updater::new(psbt)
-        .unwrap()
+    let signer = Updater::new(psbt.try_resolve().unwrap())
         .update(|mut draft| {
             draft.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
             draft
         })
         .unwrap()
-        .signer()
-        .unwrap();
+        .signer();
 
     assert_eq!(signer.as_psbt().inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
 }
@@ -608,15 +595,14 @@ fn update_sets_sp_v0_label() {
     let mut psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
     psbt.outputs[0].sp_v0_info = Some(info);
 
-    let updater = Updater::new(psbt).unwrap();
+    let updater = Updater::new(psbt.try_resolve().unwrap());
     let psbt = updater
         .update(|mut draft| {
             draft.outputs[0].sp_v0_label = Some(7);
             draft
         })
         .unwrap()
-        .psbt()
-        .unwrap();
+        .psbt();
 
     assert_eq!(psbt.outputs[0].sp_v0_label, Some(7));
     // The output info is not an Updater field and cannot be changed through the draft.
@@ -630,8 +616,7 @@ fn update_rejects_sp_v0_label_without_info() {
     use psbt_v2::output;
 
     let psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
-    let err = Updater::new(psbt)
-        .unwrap()
+    let err = Updater::new(psbt.try_resolve().unwrap())
         .update(|mut draft| {
             draft.outputs[0].sp_v0_label = Some(7);
             draft

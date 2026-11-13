@@ -187,7 +187,8 @@ impl TestCase {
                 // The BIP-174 signer validity checks run upfront in `sign` (before any
                 // signature is produced), so signing must fail even though we hold no keys.
                 let inputs_len = psbt.inputs.len();
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let any_err = signer.session(|session| {
                     (0..inputs_len).map(|x| session.signable_input(x)).any(|x| x.is_err())
                 });
@@ -203,7 +204,8 @@ impl TestCase {
                 // full tx prevout.
                 // Under strict signing, inputs with missing full tx prevout must fail while
                 // getting the signable inputs.
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let any_err = signer.session(|session| {
                     (0..input_len).any(|idx| session.signable_input(idx).is_err())
                 });
@@ -336,13 +338,14 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let sigs = signer.session(|mut session| {
                     let signable_inputs =
                         session.signable_inputs().expect("inputs are well formed and verifiable");
                     session.get_all(&signable_inputs, &key_map, &secp)
                 });
-                let psbt = signer.apply(sigs).unwrap();
+                let psbt = signer.apply(sigs).unwrap().psbt();
 
                 assert_eq!(psbt, expected_psbt);
             }
@@ -373,12 +376,13 @@ impl TestCase {
                     key_map.insert(wif_priv.public_key(&secp), *wif_priv);
                 }
 
-                let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+                let mut signer =
+                    Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
                 let sigs = signer.session(|mut session| {
                     let inputs = session.assume_checked_inputs().expect("inputs are well formed");
                     session.get_all(&inputs, &key_map, &secp)
                 });
-                let psbt = signer.apply(sigs).unwrap();
+                let psbt = signer.apply(sigs).unwrap().psbt();
 
                 assert_eq!(psbt, expected_psbt);
             }
@@ -407,8 +411,11 @@ impl TestCase {
                     base64_psbt_v0(&expected.base64).expect("finalize expected PSBT must be valid");
 
                 let secp = Secp256k1::verification_only();
-                let finalizer = Finalizer::new(psbt).expect("finalizer requirements must be met");
-                let psbt = finalizer.finalize(&secp).expect("input psbt must be finalizable");
+                let psbt = Finalizer::new(psbt.try_resolve().unwrap())
+                    .expect("finalizer requirements must be met")
+                    .finalize(&secp)
+                    .expect("input psbt must be finalizable")
+                    .psbt();
 
                 assert_eq!(psbt, expected_psbt);
             }
@@ -416,7 +423,8 @@ impl TestCase {
             Task::Extract { psbt, tx: expected_tx_hex } => {
                 let psbt = base64_psbt_v0(&psbt.base64).expect("extract input PSBT must be valid");
 
-                let extractor = Extractor::new(psbt).expect("extract task PSBT must be finalized");
+                let extractor = Extractor::new(psbt.try_resolve().unwrap())
+                    .expect("extract task PSBT must be finalized");
                 let tx = extractor.extract_tx();
                 assert_eq!(serialize_hex(&tx), expected_tx_hex.as_str());
             }

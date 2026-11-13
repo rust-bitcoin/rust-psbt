@@ -10,17 +10,17 @@ fn do_test(data: (&[u8], &[u8])) {
     let (bytes_a, bytes_b) = data;
 
     // Deserialize first PSBT v2.
-    let Ok(psbt_a) = Psbt::deserialize(bytes_a) else {
+    let Ok(psbt_a) = Psbt::deserialize_unresolved(bytes_a) else {
         return;
     };
 
     // Test round-trip. The v2 serializer/deserializer must be inverses.
     let ser = psbt_a.serialize();
-    let deser = Psbt::deserialize(&ser).expect("serialize output must deserialize");
+    let deser = Psbt::deserialize_unresolved(&ser).expect("serialize output must deserialize");
     assert_eq!(ser, deser.serialize());
 
     // Test combining two PSBTs.
-    let Ok(psbt_b) = Psbt::deserialize(bytes_b) else {
+    let Ok(psbt_b) = Psbt::deserialize_unresolved(bytes_b) else {
         return;
     };
 

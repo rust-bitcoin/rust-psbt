@@ -251,31 +251,6 @@ pub struct Psbt {
 }
 
 impl Psbt {
-    /// Returns this PSBT's unique identification.
-    pub(crate) fn id(&self) -> Result<Txid, DetermineLockTimeError> {
-        let mut tx = self.unsigned_tx()?;
-        // Updaters may change the sequence so to calculate ID we set it to zero.
-        tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
-        tx.output = self.outputs.iter().map(Output::id_tx_out).collect();
-
-        Ok(tx.compute_txid())
-    }
-
-    /// Creates an unsigned transaction from the inner [`Psbt`].
-    ///
-    /// Quidado! this transaction should not be used to determine the ID of
-    /// the [`Pbst`], use `Self::id()` instead.
-    pub(crate) fn unsigned_tx(&self) -> Result<Transaction, DetermineLockTimeError> {
-        let lock_time = self.determine_lock_time()?;
-
-        Ok(Transaction {
-            version: self.global.tx_version,
-            lock_time,
-            input: self.inputs.iter().map(Input::unsigned_tx_in).collect(),
-            output: self.outputs.iter().map(Output::tx_out).collect(),
-        })
-    }
-
     /// Determines the lock time as specified in [BIP-370] if it is possible to do so.
     ///
     /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#determining-lock-time>
@@ -326,6 +301,12 @@ impl Psbt {
         Ok(lock)
     }
 
+    /// Resolves the lock time and returns a [`ResolvedPsbt`].
+    pub fn try_resolve(self) -> Result<ResolvedPsbt, DetermineLockTimeError> {
+        let lock_time = self.determine_lock_time()?;
+        Ok(ResolvedPsbt { psbt: self, lock_time })
+    }
+
     /// Returns true if all inputs for this PSBT have been finalized.
     pub fn is_finalized(&self) -> bool { self.inputs.iter().all(Input::is_finalized) }
 
@@ -335,7 +316,15 @@ impl Psbt {
     /// Serializes as raw binary data
     pub fn serialize(&self) -> Vec<u8> { encode_to_vec(self) }
 
-    /// Deserializes a value from raw binary data.
+    /// Deserializes a PSBT from raw binary data and resolves its lock time.
+    ///
+    /// Returns a [`ResolvedPsbt`], ready to be passed to
+    /// [`Updater::new`](crate::Updater::new), [`Signer::new`](crate::Signer::new),
+    /// [`Finalizer::new`](crate::Finalizer::new), or
+    /// [`Extractor::new`](crate::Extractor::new). If you need to inspect or
+    /// modify the PSBT before resolving the locktime, use
+    /// [`deserialize_unresolved`](Self::deserialize_unresolved) followed by
+    /// [`resolve`](Self::try_resolve).
     ///
     /// Returns an error if the input contains trailing bytes after the PSBT.
     ///
@@ -355,7 +344,21 @@ impl Psbt {
     /// // `remaining` now points to whatever followed the PSBT
     /// # Ok::<(), DeserializeError>(())
     /// ```
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, DeserializeError> {
+    pub fn deserialize(bytes: &[u8]) -> Result<ResolvedPsbt, DeserializeError> {
+        let psbt = Self::deserialize_unresolved(bytes)?;
+        let lock_time = psbt.determine_lock_time().map_err(DeserializeError::LockTime)?;
+        Ok(ResolvedPsbt::from_parts(psbt, lock_time))
+    }
+
+    /// Deserializes a PSBT from raw binary data without resolving the lock time.
+    ///
+    /// Returns an error if the input contains trailing bytes after the PSBT.
+    ///
+    /// This is the escape hatch for cases where you need the raw [`Psbt`] before locktime
+    /// resolution, for example, to inspect or modify fields before entering a role. In normal
+    /// workflows, prefer [`deserialize`](Self::deserialize) which resolves the locktime
+    /// automatically.
+    pub fn deserialize_unresolved(bytes: &[u8]) -> Result<Self, DeserializeError> {
         crate::encoding::decode_from_slice::<Self>(bytes).map_err(|e| match e {
             bitcoin_consensus_encoding::DecodeError::Parse(e) => e,
             bitcoin_consensus_encoding::DecodeError::Unconsumed(_) => DeserializeError::Unconsumed,
@@ -569,7 +572,7 @@ mod display_from_str {
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             let data = BASE64_STANDARD.decode(s).map_err(ParsePsbtError::Base64Encoding)?;
-            Self::deserialize(&data).map_err(ParsePsbtError::PsbtEncoding)
+            Self::deserialize_unresolved(&data).map_err(ParsePsbtError::PsbtEncoding)
         }
     }
 
@@ -687,6 +690,103 @@ impl std::error::Error for CombineError {
             | Self::OutputsLenMismatch { .. }
             | Self::LockTimeMismatch { .. }
             | Self::SequenceMismatch { .. } => None,
+        }
+    }
+}
+
+/// A PSBT whose lock time has been resolved.
+///
+/// Created via [`Psbt::try_resolve`], a `ResolvedPsbt` caches the lock time so that downstream
+/// roles can assert determinability at construction time rather than deferring the check.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedPsbt {
+    psbt: Psbt,
+    lock_time: absolute::LockTime,
+}
+
+impl core::ops::Deref for ResolvedPsbt {
+    type Target = Psbt;
+
+    fn deref(&self) -> &Psbt { &self.psbt }
+}
+
+impl ResolvedPsbt {
+    /// Creates a `ResolvedPsbt` from a PSBT and its pre-computed locktime.
+    ///
+    /// The caller must ensure `lock_time` matches what
+    /// [`Psbt::determine_lock_time`] would return for `psbt`, that is, the
+    /// locktime is already resolved and the PSBT's locktime-affecting fields
+    /// (`min_time`, `min_height`, `fallback_lock_time`) have not changed since
+    /// resolution.
+    pub(crate) fn from_parts(psbt: Psbt, lock_time: absolute::LockTime) -> Self {
+        debug_assert_eq!(
+            lock_time,
+            psbt.determine_lock_time().expect("locktime must be determinable"),
+            "from_parts locktime does not match the PSBT"
+        );
+        Self { psbt, lock_time }
+    }
+
+    /// Returns the resolved lock time.
+    pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
+
+    /// Consumes the proof and returns the underlying [`Psbt`].
+    pub fn into_psbt(self) -> Psbt { self.psbt }
+
+    /// Gives mutable access to the inner [`Psbt`] through `f`.
+    ///
+    /// The mutation **MUST NOT** change the locktime. This happens if the mutation:
+    ///
+    /// - Adds, removes, or changes an input's `min_time` or `min_height` field.
+    /// - Changes the global `fallback_lock_time`.
+    ///
+    /// In debug builds a check ensures the cached locktime is still consistent with the inner
+    /// PSBT after the mutation.
+    pub(crate) fn with_psbt<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut Psbt),
+    {
+        f(&mut self.psbt);
+        debug_assert_eq!(
+            self.lock_time,
+            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
+            "mutation changed the locktime"
+        );
+    }
+
+    pub(crate) fn try_with_psbt<E, F>(&mut self, f: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut Psbt) -> Result<(), E>,
+    {
+        f(&mut self.psbt)?;
+        debug_assert_eq!(
+            self.lock_time,
+            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
+            "mutation changed the locktime"
+        );
+        Ok(())
+    }
+
+    /// Returns this PSBT's unique identification.
+    pub fn id(&self) -> Txid {
+        let mut tx = self.unsigned_tx();
+        tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
+        tx.output = self.outputs.iter().map(Output::id_tx_out).collect();
+        tx.compute_txid()
+    }
+
+    /// Creates an unsigned transaction from the inner [`Psbt`].
+    ///
+    /// Quidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
+    /// use [`Self::id`] instead. `id` zeroes the input sequences and uses the identification
+    /// form of the outputs, so `unsigned_tx().compute_txid()` differs from [`Self::id`] in
+    /// general.
+    pub fn unsigned_tx(&self) -> Transaction {
+        Transaction {
+            version: self.global.tx_version,
+            lock_time: self.lock_time,
+            input: self.inputs.iter().map(Input::unsigned_tx_in).collect(),
+            output: self.outputs.iter().map(Output::tx_out).collect(),
         }
     }
 }
@@ -964,19 +1064,19 @@ mod tests {
         // the default applied by `Input::unsigned_tx_in` cannot affect the result.
         let baseline = valid_psbt();
         assert!(baseline.inputs[0].sequence.is_none());
-        let expected = baseline.id().expect("lock time must be determinable");
+        let expected = baseline.try_resolve().unwrap().id();
 
         for sequence in [Sequence::ZERO, Sequence::ENABLE_LOCKTIME_NO_RBF, Sequence::MAX] {
             let mut psbt = valid_psbt();
             psbt.inputs[0].sequence = Some(sequence);
-            assert_eq!(psbt.id().expect("lock time must be determinable"), expected);
+            assert_eq!(psbt.try_resolve().unwrap().id(), expected);
         }
     }
 
     fn id_for_output(output: Output) -> Txid {
         let mut psbt = single_input_psbt();
         psbt.outputs[0] = output;
-        psbt.id().expect("lock time must be determinable")
+        psbt.try_resolve().unwrap().id()
     }
 
     #[test]
@@ -1158,7 +1258,7 @@ mod tests {
         psbt.global.tx_modifiable_flags.set_inputs_modifiable();
         psbt.global.tx_modifiable_flags.set_outputs_modifiable();
 
-        let mut signer = Signer::new(psbt).expect("lock time must be determinable");
+        let mut signer = Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
         signer.ecdsa_clear_tx_modifiable(EcdsaSighashType::All);
 
         let psbt = signer.psbt();

@@ -10,7 +10,7 @@ use bitcoin::locktime::absolute;
 use crate::error::{write_err, DetermineLockTimeError};
 use crate::input::Input;
 use crate::output::{self, Output};
-use crate::psbt::Psbt;
+use crate::psbt::{Psbt, ResolvedPsbt};
 use crate::roles::{Creator, Updater};
 
 /// Marker for a `Constructor` with both inputs and outputs modifiable.
@@ -112,7 +112,7 @@ impl<T: Mod> Constructor<T> {
     /// Consumes the `Constructor` and returns an [`Updater`] ready for the next role.
     pub fn updater(self) -> Updater {
         let this = self.no_more_inputs().no_more_outputs();
-        Updater(this.0)
+        Updater(ResolvedPsbt::from_parts(this.0, this.1))
     }
 }
 

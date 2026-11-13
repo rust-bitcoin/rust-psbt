@@ -87,12 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The updater role.
 
     // We can act as updater.
-    let updater = Updater::new(psbt)?;
+    let updater = Updater::new(psbt.try_resolve()?);
     let updater = updater.update(|mut draft| {
         draft.inputs[1].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
         draft
     })?;
-    let psbt = updater.psbt()?;
+    let psbt = updater.psbt();
 
     // Or we can get Alice and Bob to act as updaters.
     let updated_by_a = alice.update(psbt.clone())?;
@@ -240,14 +240,14 @@ impl Bob {
         let path = Self::PATH.parse::<DerivationPath>()?;
         let xpriv = self.0.master.derive_priv(&self.0.secp, &path)?;
 
-        let mut signer = Signer::new(psbt)?;
+        let mut signer = Signer::new(psbt.try_resolve()?);
         let sigs = signer.session(|mut session| {
             let input = session
                 .signable_input(1)
                 .expect("owned input with full tx prevout should be verifiable");
             session.get_input_sigs(&input, &xpriv, &self.0.secp)
         });
-        let psbt = signer.apply([sigs]).unwrap();
+        let psbt = signer.apply([sigs]).unwrap().psbt();
         Ok(psbt)
     }
 
@@ -328,13 +328,13 @@ impl Entity {
         let path = derivation_path.parse::<DerivationPath>()?;
         let xpriv = self.master.derive_priv(&self.secp, &path)?;
 
-        let mut signer = Signer::new(psbt)?;
+        let mut signer = Signer::new(psbt.try_resolve()?);
         let sigs = signer.session(|mut session| {
             let inputs =
                 session.assume_checked_inputs().expect("Malformed input, cannot be signed");
             session.get_all(&inputs, &xpriv, &self.secp)
         });
-        let psbt = signer.apply(sigs).unwrap();
+        let psbt = signer.apply(sigs).unwrap().psbt();
         Ok(psbt)
     }
 }
