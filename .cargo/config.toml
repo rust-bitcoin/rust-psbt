@@ -1,0 +1,2 @@
+[alias]
+",mutants" = "rbmt with --lockfile maximum --toolchain nightly -- cargo mutants"

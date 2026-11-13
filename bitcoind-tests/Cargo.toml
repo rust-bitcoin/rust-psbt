@@ -6,13 +6,16 @@ license = "CC0-1.0"
 edition = "2021"
 publish = false
 
-[package.metadata.rbmt.toolchains]
-stable = "1.99.1"
+[package.metadata]
+rbmt.toolchains = { nightly = "nightly-2026-11-07", stable = "1.99.1" }
+rbmt.lock.lockfiles = ["minimal"]
 
 [dependencies]
-bitcoind = { version = "0.41.0", features = ["download"] }
+# `bitcoind` (via `corepc-regtest-client`) uses `log::debug!` but only requires `log = "0.4"`.
+log = "0.4.8"
+bitcoind = { version = "0.43.2", features = ["download"] }
 psbt-v2 = { path = "..", features = ["std", "miniscript", "rand", "base64"] }
 
 [features]
-"latest" = ["bitcoind/31_0"]  # Most recent Bitcoin Core version.
+"latest" = ["bitcoind/31_1"]  # Most recent Bitcoin Core version.
 "v0" = ["bitcoind/0_17_2"]    # Initial PSBT v0 (BIP-174) support.
