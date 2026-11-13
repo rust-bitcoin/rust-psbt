@@ -77,7 +77,7 @@ impl PsbtV0 {
             .psbt
             .inputs
             .iter()
-            .filter(|i| i.min_time.is_some() || i.min_height.is_some())
+            .filter(|i| i.min_time().is_some() || i.min_height().is_some())
             .count();
 
         Degraded {
@@ -123,7 +123,7 @@ impl PsbtV0 {
     /// # use psbt_v2::bitcoin::{OutPoint, Txid};
     /// # use bitcoin_consensus_encoding::decode_from_slice_unbounded_with_decoder;
     /// # let psbt = Psbt {
-    /// #     global: Global { input_count: Count::from(1), output_count: Count::from(0), ..Global::default() },
+    /// #     global: { let mut g = Global::default(); g.input_count = Count::from(1); g.output_count = Count::from(0); g },
     /// #     inputs: vec![Input::new(&OutPoint { txid: Txid::hash(b"x"), vout: 0 })],
     /// #     outputs: vec![],
     /// # };
@@ -180,15 +180,15 @@ impl PsbtV0 {
 /// numbers) are embedded in the unsigned transaction body and survive the
 /// round-trip intact.
 ///
-/// [`Input::min_time`]: crate::Input::min_time
-/// [`Input::min_height`]: crate::Input::min_height
+/// [`Input::min_time`]: crate::Input::min_time()
+/// [`Input::min_height`]: crate::Input::min_height()
 /// [`Psbt::determine_lock_time`]: crate::Psbt::determine_lock_time
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct Degraded {
     /// Number of inputs whose per-input lock time requirements
-    /// ([`min_time`](crate::Input::min_time) /
-    /// [`min_height`](crate::Input::min_height)) are resolved into the
+    /// ([`min_time`](crate::Input::min_time()) /
+    /// [`min_height`](crate::Input::min_height())) are resolved into the
     /// single unsigned transaction `nLockTime`, losing per-input identity.
     pub lock_time_inputs: usize,
     /// The [`TxModifiableFlags`] that will be cleared. `None` means the flags
@@ -414,7 +414,8 @@ impl Decoder for PsbtV0Decoder {
             // The v0 format has no per-input lock time fields (min_time/min_height
             // are v2-only), so no need to derive (and possibly fail on) a lock time.
             V0DecoderStage::Done(psbt) => {
-                let lock_time = psbt.global.fallback_lock_time.unwrap_or(absolute::LockTime::ZERO);
+                let lock_time =
+                    psbt.global.fallback_lock_time().unwrap_or(absolute::LockTime::ZERO);
                 Ok(PsbtV0 { psbt, lock_time })
             }
             V0DecoderStage::Magic(_) => Err(DeserializeError::EarlyEnd("magic")),
@@ -449,7 +450,7 @@ mod tests {
     use bitcoin::absolute;
 
     use super::*;
-    use crate::{Creator, Input, Output};
+    use crate::{Creator, InputBuilder, Output};
 
     #[test]
     fn degraded_default_is_empty() {
@@ -487,8 +488,11 @@ mod tests {
 
     #[test]
     fn degraded_input_locktimes() {
-        let mut input = Input::new(&bitcoin::OutPoint::null());
-        input.min_time = Some(absolute::Time::from_consensus(500_000_001).unwrap());
+        let input = InputBuilder::new(&bitcoin::OutPoint::null())
+            .minimum_required_time_based_lock_time(
+                absolute::Time::from_consensus(500_000_001).unwrap(),
+            )
+            .build();
 
         let psbt = Creator::new()
             .constructor_modifiable()
@@ -506,8 +510,11 @@ mod tests {
 
         // Reverse case: min_height only, no min_time.
         let height = absolute::Height::from_consensus(100_000).unwrap();
-        let mut input = Input::new(&bitcoin::OutPoint::null());
-        input.min_height = Some(crate::RequiredHeightLockTime::try_from(height).unwrap());
+        let input = InputBuilder::new(&bitcoin::OutPoint::null())
+            .minimum_required_height_based_lock_time(
+                crate::RequiredHeightLockTime::try_from(height).unwrap(),
+            )
+            .build();
 
         let psbt = Creator::new()
             .constructor_modifiable()

@@ -13,7 +13,7 @@ use bitcoin::{
     TxIn, TxOut, Txid, Witness,
 };
 use psbt_v2::{
-    input, CombineError, Count, Global, Input, Output, Psbt, PsbtSighashType,
+    input, CombineError, Count, Global, Input, InputBuilder, Output, Psbt, PsbtSighashType,
     RequiredHeightLockTime,
 };
 
@@ -52,19 +52,21 @@ fn dummy_tx(label: &[u8]) -> Transaction {
 #[test]
 fn combine_rejects_previous_txid_mismatch() {
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"a"))],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"b"))],
         outputs: vec![dummy_output()],
@@ -78,10 +80,11 @@ fn combine_rejects_previous_txid_mismatch() {
 fn combine_rejects_amount_mismatch() {
     let op = outpoint(b"in");
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&op)],
         outputs: vec![Output::new(TxOut {
@@ -90,10 +93,11 @@ fn combine_rejects_amount_mismatch() {
         })],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&op)],
         outputs: vec![Output::new(TxOut {
@@ -110,21 +114,23 @@ fn combine_rejects_amount_mismatch() {
 fn combine_rejects_tx_version_mismatch() {
     let op = outpoint(b"in");
     let psbt_a = Psbt {
-        global: Global {
-            tx_version: transaction::Version::ONE,
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.tx_version = transaction::Version::ONE;
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&op)],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            tx_version: transaction::Version::TWO,
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.tx_version = transaction::Version::TWO;
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&op)],
         outputs: vec![dummy_output()],
@@ -145,19 +151,21 @@ fn combine_sequence_semantics() {
     input_b.sequence = Some(Sequence::ZERO);
 
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_a],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_b],
         outputs: vec![dummy_output()],
@@ -178,19 +186,21 @@ fn combine_sequence_semantics() {
     input_b.sequence = Some(Sequence::ZERO);
 
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_a],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_b],
         outputs: vec![dummy_output()],
@@ -217,19 +227,21 @@ fn combine_merges_map_fields() {
     input_b.partial_sigs.insert(pk2, sig2);
 
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_a],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_b],
         outputs: vec![dummy_output()],
@@ -250,10 +262,11 @@ fn combine_is_commutative_when_no_fields_overlap() {
     input_b.sighash_type = Some(PsbtSighashType::ALL);
 
     let base = || Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&op)],
         outputs: vec![dummy_output()],
@@ -273,15 +286,19 @@ fn combine_rejects_lock_time_type_mismatch() {
     let op1 = outpoint(b"input 1");
 
     // PSBT A: input 0 requires time-based lock, input 1 has no lock time fields.
-    let mut input_a0 = Input::new(&op0);
-    input_a0.min_time = Some(absolute::Time::from_consensus(1_657_048_459).unwrap());
+    let input_a0 = InputBuilder::new(&op0)
+        .minimum_required_time_based_lock_time(
+            absolute::Time::from_consensus(1_657_048_459).unwrap(),
+        )
+        .build();
     let input_a1 = Input::new(&op1);
 
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(2),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_a0, input_a1],
         outputs: vec![dummy_output()],
@@ -289,14 +306,18 @@ fn combine_rejects_lock_time_type_mismatch() {
 
     // PSBT B: input 0 has no lock time fields, input 1 requires height-based lock.
     let input_b0 = Input::new(&op0);
-    let mut input_b1 = Input::new(&op1);
-    input_b1.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
+    let input_b1 = InputBuilder::new(&op1)
+        .minimum_required_height_based_lock_time(
+            RequiredHeightLockTime::from_consensus(800_000).unwrap(),
+        )
+        .build();
 
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(2),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_b0, input_b1],
         outputs: vec![dummy_output()],
@@ -321,26 +342,34 @@ fn combine_rejects_lock_time_value_mismatch() {
     // different heights. Each is individually determinable; the resolved lock
     // times still differ, so the combination is rejected rather than silently
     // keeping one of the values.
-    let mut input_a = Input::new(&op);
-    input_a.min_height = Some(RequiredHeightLockTime::from_consensus(700_000).unwrap());
+    let input_a = InputBuilder::new(&op)
+        .minimum_required_height_based_lock_time(
+            RequiredHeightLockTime::from_consensus(700_000).unwrap(),
+        )
+        .build();
 
-    let mut input_b = Input::new(&op);
-    input_b.min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
+    let input_b = InputBuilder::new(&op)
+        .minimum_required_height_based_lock_time(
+            RequiredHeightLockTime::from_consensus(800_000).unwrap(),
+        )
+        .build();
 
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_a],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input_b],
         outputs: vec![dummy_output()],
@@ -368,10 +397,11 @@ fn combine_rejects_sequence_mismatch_with_signatures() {
     input_b.partial_sigs.insert(keypair(1), make_sig(1, EcdsaSighashType::All));
 
     let psbt = |input| Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input],
         outputs: vec![dummy_output()],
@@ -413,10 +443,11 @@ fn combine_rejects_sequence_mismatch_on_other_input_with_all_sigs() {
     input_b1.sequence = Some(Sequence::MAX);
 
     let psbt = |inputs: [Input; 2]| Psbt {
-        global: Global {
-            input_count: Count::from(2),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: inputs.to_vec(),
         outputs: vec![dummy_output()],
@@ -442,10 +473,11 @@ fn combine_accepts_unset_sequence_with_explicit_max_and_signatures() {
     input_b.partial_sigs.insert(keypair(1), make_sig(1, EcdsaSighashType::All));
 
     let psbt = |input| Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input],
         outputs: vec![dummy_output()],
@@ -460,10 +492,11 @@ fn combine_utxo_conflicts() {
     let op = outpoint(b"in");
 
     let psbt = |input| Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input],
         outputs: vec![dummy_output()],
@@ -518,10 +551,11 @@ fn combine_rejects_cross_form_utxo_mismatch() {
     input_b.non_witness_utxo = Some(funding_tx);
 
     let psbt = |input| Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![input],
         outputs: vec![dummy_output()],
@@ -553,19 +587,21 @@ fn combine_rejects_inputs_len_mismatch() {
     // Two PSBTs describing transactions with different input counts cannot describe the same
     // transaction; the length pre-check rejects them before any field is merged.
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"in"))],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(2),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"in")), Input::new(&outpoint(b"other in"))],
         outputs: vec![dummy_output()],
@@ -583,19 +619,21 @@ fn combine_rejects_inputs_len_mismatch() {
 fn combine_rejects_outputs_len_mismatch() {
     // Same for the output count.
     let psbt_a = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"in"))],
         outputs: vec![dummy_output()],
     };
     let psbt_b = Psbt {
-        global: Global {
-            input_count: Count::from(1),
-            output_count: Count::from(2),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(2);
+            g
         },
         inputs: vec![Input::new(&outpoint(b"in"))],
         outputs: vec![dummy_output(), dummy_output()],

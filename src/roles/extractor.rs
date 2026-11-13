@@ -194,10 +194,11 @@ mod tests {
 
     fn psbt_with(output: Output) -> Psbt {
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![finalized_input()],
             outputs: vec![output],
@@ -259,10 +260,11 @@ mod fee_rate_tests {
 
     fn psbt_with(output: Output) -> Psbt {
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![finalized_input()],
             outputs: vec![output],

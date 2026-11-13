@@ -97,7 +97,7 @@ impl Signer {
     /// #     input.non_witness_utxo = Some(funding);
     /// #     input.bip32_derivations.insert(pk, Default::default());
     /// #     Psbt {
-    /// #         global: Global { input_count: Count::from(1), output_count: Count::from(1), ..Global::default() },
+    /// #         global: { let mut g = Global::default(); g.input_count = Count::from(1); g.output_count = Count::from(1); g },
     /// #         inputs: vec![input],
     /// #         outputs: vec![Output::new(TxOut {
     /// #             value: Amount::from_sat(900),
@@ -139,10 +139,11 @@ impl Signer {
         // This ensures a failed apply has no partial side-effects.
         let sigs: Vec<InputSigs> = sigs.into_iter().collect();
         for entry in &sigs {
-            self.psbt.try_with_psbt(|psbt| -> Result<(), SignError> {
-                let _ = psbt.checked_input_mut(entry.index).map_err(SignError::IndexOutOfBounds)?;
-                Ok(())
-            })?;
+            let _ = self
+                .psbt
+                .inner
+                .checked_input_mut(entry.index)
+                .map_err(SignError::IndexOutOfBounds)?;
         }
 
         // All indices validated; the application pass is infallible.
@@ -159,9 +160,9 @@ impl Signer {
             };
 
             // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
-            self.psbt.with_psbt(|psbt| {
+            {
                 let psbt_input =
-                    psbt.checked_input_mut(index).expect("index validated in first pass");
+                    self.psbt.inner.checked_input_mut(index).expect("index validated in first pass");
                 match signatures {
                     TypedSigs::Ecdsa(sigs) =>
                         for (pk, sig) in sigs {
@@ -179,9 +180,9 @@ impl Signer {
                             }
                         },
                 }
-            });
+            }
 
-            self.psbt.with_psbt(|psbt| psbt.clear_tx_modifiable(sighash_ty));
+            self.psbt.inner.clear_tx_modifiable(sighash_ty);
         }
 
         Ok(self)
@@ -199,7 +200,7 @@ impl Signer {
     /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
     /// > inputs so that it accurately reflects the state of the PSBT.
     pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.psbt.with_psbt(|psbt| psbt.clear_tx_modifiable(PsbtSighashType::from(ty)))
+        self.psbt.inner.clear_tx_modifiable(PsbtSighashType::from(ty))
     }
 
     /// Returns the inner [`Psbt`].
@@ -1395,10 +1396,11 @@ mod test {
         input.witness_utxo = Some(tx_out);
         input.non_witness_utxo = Some(funding_tx);
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
@@ -1436,10 +1438,11 @@ mod test {
         input.non_witness_utxo = Some(funding_tx);
         input.bip32_derivations.insert(pubkey, bitcoin::bip32::KeySource::default());
         let psbt = Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
@@ -1481,10 +1484,11 @@ mod test {
         input.tap_internal_key = Some(xonly);
         input.tap_key_origins.insert(xonly, (vec![], KeySource::default()));
         let psbt = Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
@@ -1511,10 +1515,11 @@ mod test {
         input.witness_utxo = Some(tx_out);
         input.non_witness_utxo = Some(funding_tx);
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {
@@ -1526,10 +1531,11 @@ mod test {
 
     fn single_input_psbt() -> Psbt {
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
@@ -1541,10 +1547,11 @@ mod test {
 
     fn two_inputs_one_output_psbt() -> Psbt {
         Psbt {
-            global: Global {
-                input_count: Count::from(2),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(2);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![Input::new(&OutPoint::null()), Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
@@ -1757,10 +1764,11 @@ mod test {
         input.witness_utxo = Some(tx_out.clone());
         input.non_witness_utxo = Some(funding_tx);
         let psbt = Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![input],
             outputs: vec![Output::new(TxOut {

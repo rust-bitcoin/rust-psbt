@@ -276,7 +276,7 @@ impl Psbt {
                 let height = self
                     .inputs
                     .iter()
-                    .map(|input| input.min_height)
+                    .map(|input| input.min_height())
                     .max()
                     .expect("we know we have at least one non-none min_height field")
                     .expect("so we know that max is non-none");
@@ -285,7 +285,7 @@ impl Psbt {
                 let time = self
                     .inputs
                     .iter()
-                    .map(|input| input.min_time)
+                    .map(|input| input.min_time())
                     .max()
                     .expect("we know we have at least one non-none min_time field")
                     .expect("so we know that max is non-none");
@@ -295,7 +295,7 @@ impl Psbt {
             // > If none of the inputs have a PSBT_IN_REQUIRED_TIME_LOCKTIME and
             // > PSBT_IN_REQUIRED_HEIGHT_LOCKTIME, then PSBT_GLOBAL_FALLBACK_LOCKTIME must be used.
             // > If PSBT_GLOBAL_FALLBACK_LOCKTIME is not provided, then it is assumed to be 0.
-            self.global.fallback_lock_time.unwrap_or(absolute::LockTime::ZERO)
+            self.global.fallback_lock_time().unwrap_or(absolute::LockTime::ZERO)
         };
 
         Ok(lock)
@@ -304,7 +304,7 @@ impl Psbt {
     /// Resolves the lock time and returns a [`ResolvedPsbt`].
     pub fn try_resolve(self) -> Result<ResolvedPsbt, DetermineLockTimeError> {
         let lock_time = self.determine_lock_time()?;
-        Ok(ResolvedPsbt { psbt: self, lock_time })
+        Ok(ResolvedPsbt { inner: self, lock_time })
     }
 
     /// Returns true if all inputs for this PSBT have been finalized.
@@ -700,14 +700,14 @@ impl std::error::Error for CombineError {
 /// roles can assert determinability at construction time rather than deferring the check.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedPsbt {
-    psbt: Psbt,
+    pub(crate) inner: Psbt,
     lock_time: absolute::LockTime,
 }
 
 impl core::ops::Deref for ResolvedPsbt {
     type Target = Psbt;
 
-    fn deref(&self) -> &Psbt { &self.psbt }
+    fn deref(&self) -> &Psbt { &self.inner }
 }
 
 impl ResolvedPsbt {
@@ -719,53 +719,14 @@ impl ResolvedPsbt {
     /// (`min_time`, `min_height`, `fallback_lock_time`) have not changed since
     /// resolution.
     pub(crate) fn from_parts(psbt: Psbt, lock_time: absolute::LockTime) -> Self {
-        debug_assert_eq!(
-            lock_time,
-            psbt.determine_lock_time().expect("locktime must be determinable"),
-            "from_parts locktime does not match the PSBT"
-        );
-        Self { psbt, lock_time }
+        Self { inner: psbt, lock_time }
     }
 
     /// Returns the resolved lock time.
     pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
 
     /// Consumes the proof and returns the underlying [`Psbt`].
-    pub fn into_psbt(self) -> Psbt { self.psbt }
-
-    /// Gives mutable access to the inner [`Psbt`] through `f`.
-    ///
-    /// The mutation **MUST NOT** change the locktime. This happens if the mutation:
-    ///
-    /// - Adds, removes, or changes an input's `min_time` or `min_height` field.
-    /// - Changes the global `fallback_lock_time`.
-    ///
-    /// In debug builds a check ensures the cached locktime is still consistent with the inner
-    /// PSBT after the mutation.
-    pub(crate) fn with_psbt<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut Psbt),
-    {
-        f(&mut self.psbt);
-        debug_assert_eq!(
-            self.lock_time,
-            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
-            "mutation changed the locktime"
-        );
-    }
-
-    pub(crate) fn try_with_psbt<E, F>(&mut self, f: F) -> Result<(), E>
-    where
-        F: FnOnce(&mut Psbt) -> Result<(), E>,
-    {
-        f(&mut self.psbt)?;
-        debug_assert_eq!(
-            self.lock_time,
-            self.psbt.determine_lock_time().expect("locktime must remain determinable"),
-            "mutation changed the locktime"
-        );
-        Ok(())
-    }
+    pub fn into_psbt(self) -> Psbt { self.inner }
 
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid {
@@ -809,10 +770,11 @@ mod tests {
 
     fn single_input_psbt() -> Psbt {
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![Input::new(&OutPoint::null())],
             outputs: vec![Output::new(TxOut {
@@ -826,10 +788,11 @@ mod tests {
         use crate::bitcoin::hashes::Hash as _;
 
         Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: vec![Input::new(&OutPoint {
                 txid: Txid::hash(b"some arbitrary bytes"),
@@ -897,10 +860,11 @@ mod tests {
     fn deserialize_one_input_no_outputs() {
         use crate::bitcoin::hashes::Hash as _;
         let psbt = Psbt {
-            global: Global {
-                input_count: Count::from(1),
-                output_count: Count::from(0),
-                ..Global::default()
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(0);
+                g
             },
             inputs: vec![Input::new(&OutPoint {
                 txid: Txid::hash(b"some arbitrary bytes"),
