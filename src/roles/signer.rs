@@ -137,7 +137,8 @@ impl Signer {
     /// for a different [`Psbt`]). Entries that produced no signatures are accepted and skipped.
     pub fn apply(mut self, sigs: impl IntoIterator<Item = InputSigs>) -> Result<Psbt, SignError> {
         for InputSigs { index, signatures } in sigs {
-            let psbt_input = self.psbt.checked_input_mut(index)?;
+            let psbt_input =
+                self.psbt.checked_input_mut(index).map_err(SignError::IndexOutOfBounds)?;
 
             if signatures.is_empty() {
                 continue;
