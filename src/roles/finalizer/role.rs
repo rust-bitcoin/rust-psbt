@@ -51,7 +51,9 @@ impl Finalizer {
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid { self.0.id() }
 
-    /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
+    /// Finalizes the PSBT, all inputs non-malleably, returning the finalized [`FinalizedPsbt`].
+    ///
+    /// Use [`Finalizer::finalize_inputs`] to set malleability per input.
     ///
     /// The whole PSBT is always validated with the interpreter check.
     ///
@@ -61,38 +63,27 @@ impl Finalizer {
         self,
         secp: &Secp256k1<C>,
     ) -> Result<FinalizedPsbt, Vec<FinalizeError>> {
-        let mut inputs = vec![];
-        let mut errors: Vec<FinalizeError> = vec![];
-        for (input_index, input) in self.0.inputs.iter().enumerate() {
-            // Already-finalized inputs are passed through unchanged.
-            if input.is_finalized() {
-                inputs.push(input.clone());
-                continue;
-            }
-            match self.finalize_input(FinalizableInput {
-                finalizer: &self,
-                input_index,
-                malleable: false,
-            }) {
-                Ok(input) => inputs.push(input),
-                Err(error) => errors.push(error),
-            }
-        }
+        self.finalize_inputs(
+            (0..self.0.inputs.len())
+                .map(|index| FinalizableInput {
+                    finalizer: &self,
+                    input_index: index,
+                    malleable: false,
+                })
+                .collect(),
+        )
+        .and_then(|inputs| {
+            let lock_time = self.0.lock_time();
+            let mut psbt = self.0.into_psbt();
+            psbt.inputs = inputs;
+            let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
 
-        let lock_time = self.0.lock_time();
-        let mut psbt = self.0.into_psbt();
-        psbt.inputs = inputs;
-        let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
-
-        if errors.is_empty() {
-            if let Err(e) = Self::interpreter_check(&finalized, secp) {
-                errors.push(e);
+            if let Err(err) = Self::interpreter_check(&finalized, secp) {
+                Err(vec![err])
             } else {
-                return Ok(FinalizedPsbt(finalized));
+                Ok(FinalizedPsbt(finalized))
             }
-        }
-
-        Err(errors)
+        })
     }
 
     /// Finalizes the given inputs, each with its own malleability setting.
@@ -109,7 +100,7 @@ impl Finalizer {
     pub fn finalize_inputs<'a>(
         &'a self,
         inputs: Vec<FinalizableInput<'a>>,
-    ) -> Result<Psbt, Vec<FinalizeError>> {
+    ) -> Result<Vec<Input>, Vec<FinalizeError>> {
         let selected: BTreeMap<usize, bool> =
             inputs.into_iter().map(|input| (input.input_index, input.malleable)).collect();
 
@@ -131,11 +122,8 @@ impl Finalizer {
             }
         }
 
-        let finalized =
-            Psbt { global: self.0.global.clone(), inputs, outputs: self.0.outputs.to_vec() };
-
         if errors.is_empty() {
-            return Ok(finalized);
+            return Ok(inputs);
         }
 
         Err(errors)

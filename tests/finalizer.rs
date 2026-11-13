@@ -186,8 +186,8 @@ fn finalize_inputs_does_not_validate_all_inputs() {
     // Selecting only input 0 leaves input 1 unfinalized: the interpreter check fails.
     assert!(finalized.is_ok());
 
-    assert!(finalized.as_ref().unwrap().inputs[0].final_script_witness.is_some());
-    assert!(finalized.unwrap().inputs[1].final_script_witness.is_none());
+    assert!(finalized.as_ref().unwrap()[0].final_script_witness.is_some());
+    assert!(finalized.unwrap()[1].final_script_witness.is_none());
 }
 
 // A downstream crate must be able to name `FinalizableInput` in its own signatures.
