@@ -58,8 +58,8 @@ impl std::error::Error for DeserializeError {
             Self::InvalidMagic(_)
             | Self::InvalidSeparator(_)
             | Self::EarlyEnd(_)
-            | Self::Unconsumed
-            | Self::LockTime(_) => None,
+            | Self::Unconsumed => None,
+            Self::LockTime(e) => Some(e),
         }
     }
 }

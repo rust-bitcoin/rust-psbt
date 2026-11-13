@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .serialize();
 
     // The PSBT is now ready for handling with the updater role.
-    let _updatable_psbt = Psbt::deserialize_unresolved(&ser)?;
+    let _updatable_psbt = Psbt::deserialize(&ser)?;
 
     Ok(())
 }

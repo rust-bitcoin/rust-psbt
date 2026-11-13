@@ -318,9 +318,10 @@ impl Psbt {
 
     /// Deserializes a PSBT from raw binary data and resolves its lock time.
     ///
-    /// Returns a [`ResolvedPsbt`], ready to be passed to any role constructor
-    /// ([`Updater::new`](crate::Updater::new), [`Signer::new`](crate::Signer::new),
-    /// [`Finalizer::new`](crate::Finalizer::new), etc.). If you need to inspect or
+    /// Returns a [`ResolvedPsbt`], ready to be passed to
+    /// [`Updater::new`](crate::Updater::new), [`Signer::new`](crate::Signer::new),
+    /// [`Finalizer::new`](crate::Finalizer::new), or
+    /// [`Extractor::new`](crate::Extractor::new). If you need to inspect or
     /// modify the PSBT before resolving the locktime, use
     /// [`deserialize_unresolved`](Self::deserialize_unresolved) followed by
     /// [`resolve`](Self::try_resolve).
