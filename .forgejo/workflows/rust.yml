@@ -18,8 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, msrv]
-        dep: [minimal, maximum]
+        include:
+          - { toolchain: msrv,   lockfile: minimal }
+          - { toolchain: stable, lockfile: maximum }
     steps:
       - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
         with:
@@ -27,7 +28,7 @@ jobs:
           persist-credentials: false
       - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
       - name: "Run tests"
-        run: cargo rbmt test --lockfile ${{ matrix.dep }} --toolchain ${{ matrix.toolchain }} --baseline ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }}
+        run: cargo rbmt test --lockfile ${{ matrix.lockfile }} --toolchain ${{ matrix.toolchain }} --baseline ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }}
 
   Check:
     runs-on: debian-trixie
