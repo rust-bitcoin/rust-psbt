@@ -1090,13 +1090,15 @@ impl GetKey for Xpriv {
             KeyRequest::Pubkey(_) | KeyRequest::XOnlyPubkey(_) => Err(GetKeyError::NotSupported),
             KeyRequest::Bip32((fingerprint, path)) => {
                 let key = if self.fingerprint(secp) == *fingerprint {
-                    let k = self.derive_priv(secp, path)?;
+                    let k = self.derive_priv(secp, path).map_err(GetKeyError::Bip32)?;
                     Some(k.to_priv())
                 } else if self.parent_fingerprint == *fingerprint
                     && !path.is_empty()
                     && path[0] == self.child_number
                 {
-                    let k = self.derive_priv(secp, &path[1..].iter().as_slice())?;
+                    let k = self
+                        .derive_priv(secp, &path[1..].iter().as_slice())
+                        .map_err(GetKeyError::Bip32)?;
                     Some(k.to_priv())
                 } else {
                     None
@@ -1343,10 +1345,6 @@ impl std::error::Error for GetKeyError {
             Self::Bip32(ref e) => Some(e),
         }
     }
-}
-
-impl From<bip32::Error> for GetKeyError {
-    fn from(e: bip32::Error) -> Self { Self::Bip32(e) }
 }
 
 #[cfg(test)]
