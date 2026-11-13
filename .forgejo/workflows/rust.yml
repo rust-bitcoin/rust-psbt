@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 0 # History required to diff against the baseline.
       - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
       - name: "Check mutants"
-        run: git diff ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }} | cargo rbmt with --lockfile maximum --toolchain nightly -- cargo mutants --in-diff /dev/stdin -- -- -Z unstable-options --fail-fast --nocapture
+        run: git diff ${{ forgejo.event.pull_request.base.sha || forgejo.event.before }} | cargo ,mutants --in-diff /dev/stdin -- -- -Z unstable-options --fail-fast --nocapture
 
   Prerelease:
     runs-on: debian-trixie
