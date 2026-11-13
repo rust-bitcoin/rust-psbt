@@ -526,9 +526,9 @@ fn update_rejects_mismatched_draft_shape() {
     assert!(matches!(err, CombineError::OutputsLenMismatch { this: 1, that: 2 }));
 }
 
-/// `Updater::new` validates that lock time is determinable on entry.
+/// `Psbt::try_resolve` rejects a PSBT with conflicting lock-time requirements.
 #[test]
-fn new_rejects_indeterminate_lock_time() {
+fn try_resolve_rejects_indeterminate_lock_time() {
     use psbt_v2::bitcoin::absolute;
 
     let mut psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
