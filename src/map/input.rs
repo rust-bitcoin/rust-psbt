@@ -496,6 +496,10 @@ impl Input {
     }
 
     /// Combines this [`Input`] with `other`.
+    ///
+    /// A finalized `self` is terminal: only unknown and proprietary fields merge into it.
+    /// Combining fails if `other` is finalized and `self` is not; see
+    /// [`CombineError::OtherFinalized`] for how to recover.
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         if self.previous_txid != other.previous_txid {
             return Err(CombineError::PreviousTxidMismatch {
@@ -557,6 +561,19 @@ impl Input {
             }
         }
 
+        // Adopting foreign final scripts without validation is unsound: the finalizer must
+        // produce final scripts from the merged signing material instead.
+        if other.is_finalized() && !self.is_finalized() {
+            return Err(CombineError::OtherFinalized);
+        }
+
+        v2_combine_map!(proprietaries, self, other);
+        v2_combine_map!(unknowns, self, other);
+
+        if self.is_finalized() {
+            return Ok(());
+        }
+
         // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
         // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
         // when combining, an explicit Sequence::MAX is viewed as a decision by the user, and
@@ -588,8 +605,6 @@ impl Input {
         v2_combine_map!(sp_ecdh_shares, self, other);
         #[cfg(feature = "silent-payments")]
         v2_combine_map!(sp_dleq_proofs, self, other);
-        v2_combine_map!(proprietaries, self, other);
-        v2_combine_map!(unknowns, self, other);
 
         Ok(())
     }
@@ -2163,6 +2178,14 @@ pub enum CombineError {
         /// The output at the spent output index of the `non_witness_utxo` transaction.
         non_witness: TxOut,
     },
+    /// `other` is finalized while `self` is not.
+    ///
+    /// Adopting foreign final scripts without validation is unsound. Validate `other`'s
+    /// finalized inputs with the Finalizer's interpreter check
+    /// (`Finalizer::check_finalized_inputs`), then retry the combine in the opposite
+    /// direction, where the finalized inputs are terminal and kept as-is. The offending
+    /// inputs can be found with [`Input::is_finalized`].
+    OtherFinalized,
 }
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2187,6 +2210,8 @@ impl fmt::Display for CombineError {
                 "combine two PSBTs with conflicting witness and non-witness UTXOs: {:?} {:?}",
                 witness, non_witness
             ),
+            Self::OtherFinalized =>
+                write!(f, "cannot merge a finalized input into an unfinalized input"),
         }
     }
 }
@@ -2199,7 +2224,8 @@ impl std::error::Error for CombineError {
             | Self::SpentOutputIndexMismatch { .. }
             | Self::WitnessUtxoMismatch { .. }
             | Self::NonWitnessUtxoMismatch { .. }
-            | Self::UtxoMismatch { .. } => None,
+            | Self::UtxoMismatch { .. }
+            | Self::OtherFinalized => None,
         }
     }
 }
@@ -2413,6 +2439,51 @@ mod test {
             a.non_witness_utxo.is_some(),
             "combiner must retain non_witness_utxo (BIP 174); without it amounts cannot be verified for non-p2tr scripts"
         );
+    }
+
+    #[test]
+    fn combine_keeps_finalized_input_terminal() {
+        let mut a = Input::new(&out_point());
+        a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+
+        let mut b = Input::new(&out_point());
+        b.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
+        b.sequence = Some(Sequence::from_consensus(10));
+        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+
+        a.combine(b).expect("combining into a finalized input keeps self");
+
+        assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
+        assert!(a.final_script_sig.is_none(), "final scripts of self must be kept");
+        assert!(a.sequence.is_none(), "nothing but unknowns and proprietaries may merge");
+        assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
+    }
+
+    #[test]
+    fn combine_rejects_finalized_other() {
+        let mut a = Input::new(&out_point());
+        a.sequence = Some(Sequence::from_consensus(10));
+        let before = a.clone();
+
+        let mut b = Input::new(&out_point());
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+
+        assert!(matches!(a.combine(b), Err(CombineError::OtherFinalized)));
+        assert_eq!(a, before, "the error must leave self untouched");
+    }
+
+    #[test]
+    fn combine_two_finalized_inputs_keeps_self() {
+        let mut a = Input::new(&out_point());
+        a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+
+        let mut b = Input::new(&out_point());
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
+
+        a.combine(b).expect("both finalized: self is kept");
+        assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
     }
 
     #[test]
