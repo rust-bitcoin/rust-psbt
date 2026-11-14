@@ -24,6 +24,9 @@ use crate::roles::{ExtractError, Extractor};
 use crate::{IndexOutOfBoundsError, SignatureSighashTypeError};
 
 /// Implements the BIP-370 Finalized role.
+///
+/// Only miniscript-expressible spending conditions can be finalized; consensus-valid scripts
+/// outside miniscript, like bare OP_TRUE, are rejected with [`InputError::MiniscriptError`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Finalizer(ResolvedPsbt);
 
@@ -51,11 +54,15 @@ impl Finalizer {
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid { self.0.id() }
 
-    /// Finalizes the PSBT, all inputs non-malleably, returning the finalized [`FinalizedPsbt`].
+    /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
+    ///
+    /// Inputs not already finalized are satisfied non-malleably; already-finalized inputs pass
+    /// through unchanged, whatever their malleability.
     ///
     /// Use [`Finalizer::finalize_inputs`] to set malleability per input.
     ///
-    /// The whole PSBT is always validated with the interpreter check.
+    /// The whole PSBT is always validated with the interpreter check. On interpreter-check
+    /// failure the returned vec holds the single interpreter error.
     ///
     /// Use [`FinalizedPsbt::psbt`] to extract the finalized [`Psbt`] for serialization, or
     /// [`FinalizedPsbt::extractor`] to transition to the [`Extractor`](crate::Extractor) role.
@@ -377,9 +384,8 @@ impl Finalizer {
 
 /// A PSBT that has been finalized by [`Finalizer::finalize`].
 ///
-/// This proof of finalization is the only way to reach the [`Psbt`] serialization point or
-/// transition to the [`Extractor`](crate::Extractor) role, so neither can be reached with an
-/// unfinalized PSBT.
+/// An all-finalized PSBT can still reach the Extractor without that check via `Extractor::new`;
+/// this type is the checked path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FinalizedPsbt(ResolvedPsbt);
 
