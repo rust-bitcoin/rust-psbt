@@ -476,6 +476,8 @@ impl Input {
     /// The required type is `PSBT_IN_SIGHASH_TYPE` when set. Otherwise signatures must use
     /// `SIGHASH_DEFAULT` or `SIGHASH_ALL`, so a type that does not commit to every output, such as
     /// `SIGHASH_NONE`, needs an explicit `PSBT_IN_SIGHASH_TYPE`.
+    /// `SIGHASH_ALL|ANYONECANPAY` also requires an explicit `PSBT_IN_SIGHASH_TYPE`, even though it
+    /// commits to every output.
     #[cfg(feature = "miniscript")]
     pub(crate) fn sighash_mismatch(&self) -> Option<(SignatureSource, PsbtSighashType)> {
         let ecdsa = self.partial_sigs.iter().map(|(pubkey, sig)| {
