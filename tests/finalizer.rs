@@ -9,13 +9,16 @@ use std::collections::BTreeMap;
 
 use psbt_v2::bitcoin::absolute::LockTime;
 use psbt_v2::bitcoin::bip32::KeySource;
+use psbt_v2::bitcoin::key::{Keypair, TapTweak};
 use psbt_v2::bitcoin::opcodes::all::{OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
 use psbt_v2::bitcoin::script::Builder;
-use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey, XOnlyPublicKey};
-use psbt_v2::bitcoin::taproot::{LeafVersion, TaprootBuilder};
+use psbt_v2::bitcoin::secp256k1::{Message, Secp256k1, SecretKey, XOnlyPublicKey};
+use psbt_v2::bitcoin::sighash::{Prevouts, SighashCache};
+use psbt_v2::bitcoin::taproot::{LeafVersion, Signature as TapSignature, TaprootBuilder};
 use psbt_v2::bitcoin::transaction::Version;
 use psbt_v2::bitcoin::{
-    Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, Transaction, TxIn, TxOut,
+    Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, TapSighashType, Transaction, TxIn,
+    TxOut,
 };
 use psbt_v2::{
     sign_all, Creator, FinalizableInput, FinalizeError, Finalizer, Input, Output, Psbt, Signer,
@@ -103,6 +106,40 @@ fn finalize_taproot_key_spend() {
 
     let finalized = Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
     assert_eq!(finalized.inputs[0].final_script_witness.as_ref().unwrap().len(), 1);
+}
+
+// BIP-371 makes PSBT_IN_TAP_INTERNAL_KEY optional: a key-spend input that only carries the
+// signature (produced off-band by a tweaked-key signer) finalizes to the key-spend witness.
+#[test]
+fn finalize_taproot_key_spend_without_internal_key() {
+    let secp = Secp256k1::new();
+    let keypair = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[3u8; 32]).unwrap());
+    let (xonly, _) = keypair.x_only_public_key();
+
+    let tx_out = TxOut {
+        value: Amount::from_sat(1_000),
+        script_pubkey: ScriptBuf::new_p2tr(&secp, xonly, None),
+    };
+    let funding = funding_tx(0, tx_out.clone());
+    let mut input = Input::new(&OutPoint { txid: funding.compute_txid(), vout: 0 });
+    input.witness_utxo = Some(tx_out.clone());
+    // No tap_internal_key, no tap_key_origins: only the signature identifies the key spend.
+
+    let mut psbt = unsigned_psbt(vec![input]);
+
+    // Sign the key-spend sighash with the tweaked keypair, as a tweaked-key signer would.
+    let tx = psbt.clone().try_resolve().unwrap().unsigned_tx();
+    let sighash = SighashCache::new(&tx)
+        .taproot_key_spend_signature_hash(0, &Prevouts::All(&[&tx_out]), TapSighashType::Default)
+        .unwrap();
+    let tweaked = keypair.tap_tweak(&secp, None);
+    let signature = secp.sign_schnorr_no_aux_rand(&Message::from(sighash), &tweaked.to_keypair());
+    psbt.inputs[0].tap_key_sig =
+        Some(TapSignature { signature, sighash_type: TapSighashType::Default });
+
+    let finalized = Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
+    let witness = finalized.inputs[0].final_script_witness.as_ref().unwrap();
+    assert_eq!(witness.len(), 1);
 }
 
 // Two users sign a single taproot script-path input (a 2-of-2 tapscript multisig leaf): the

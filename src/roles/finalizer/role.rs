@@ -14,7 +14,7 @@ use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::{ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, XOnlyPublicKey};
-use miniscript::{interpreter, Interpreter, Miniscript, Satisfier, SigType, Tap, ToPublicKey};
+use miniscript::{interpreter, Interpreter, Miniscript, SigType, Tap, ToPublicKey};
 
 use super::satisfy::InputSatisfier;
 use crate::error::{write_err, FundingUtxoError};
@@ -327,12 +327,10 @@ impl Finalizer {
             // because the information about all the scripts might not be present. Also, currently the spec does
             // not support hidden branches, so inferring a descriptor is not possible.
             OutputType::Tr => {
-                // Try the key spend path first.
-                let key_spend = sat.input.tap_internal_key.and_then(|ref key| {
-                    <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(
-                        &sat, key,
-                    )
-                });
+                // Try the key spend path first. The internal key is not required: BIP-371 makes
+                // PSBT_IN_TAP_INTERNAL_KEY optional, and the interpreter check validates the
+                // signature against the output key of the funding UTXO.
+                let key_spend = sat.input.tap_key_sig;
                 let wit = match key_spend {
                     Some(sig) => vec![sig.to_vec()],
                     None => {
