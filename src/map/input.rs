@@ -614,8 +614,8 @@ impl Input {
     /// Also sanity checks that the witness script and redeem script are consistent with the script
     /// pubkey.
     /// Does *not* check signatures.
-    /// We parse the insane version while satisfying because we want to move the script is probably
-    /// already created and we want to satisfy it in any way possible.
+    /// Scripts failing the miniscript sanity checks, like uncompressed keys in a segwit context,
+    /// cannot be finalized even though they are consensus-valid.
     #[cfg(feature = "miniscript")]
     pub(crate) fn get_descriptor(&self) -> Result<Descriptor<bitcoin::PublicKey>, InputError> {
         // Use BIP32 Derivation to get set of all possible keys.
