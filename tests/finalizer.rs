@@ -181,7 +181,7 @@ fn finalize_inputs_does_not_validate_all_inputs() {
     let psbt = signer.apply(sigs).unwrap().psbt();
 
     let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
-    let finalized = finalizer.finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()]);
+    let finalized = finalizer.finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()], &secp);
 
     // Selecting only input 0 leaves input 1 unfinalized: the interpreter check fails.
     assert!(finalized.is_ok());
@@ -228,4 +228,29 @@ fn finalizable_input_rejects_finalized_input() {
         Err(FinalizeError::AlreadyFinalized { input_index }) => assert_eq!(input_index, 0),
         other => panic!("expected AlreadyFinalized, got {:?}", other),
     }
+}
+
+// A witness is only valid for the transaction it was produced for: finalizing a signed input
+// against a PSBT whose outputs were changed after signing must fail the interpreter check.
+#[test]
+fn finalize_inputs_rejects_witness_invalid_for_the_transaction() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(public_key)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
+    let mut psbt = signer.apply(sigs).unwrap().psbt();
+
+    // SIGHASH_DEFAULT key-spend signatures commit to every output.
+    psbt.outputs[0].amount = Amount::from_sat(800);
+
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    let error = finalizer
+        .finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()], &secp)
+        .unwrap_err();
+    assert!(matches!(
+        error.as_slice(),
+        [FinalizeError::InterpreterSatisfaction { input_index: 0, .. }]
+    ));
 }

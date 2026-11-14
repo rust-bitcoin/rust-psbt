@@ -13,7 +13,7 @@ use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey};
+use bitcoin::{ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, XOnlyPublicKey};
 use miniscript::{interpreter, Interpreter, Miniscript, Satisfier, SigType, Tap, ToPublicKey};
 
 use super::satisfy::InputSatisfier;
@@ -71,6 +71,7 @@ impl Finalizer {
                     malleable: false,
                 })
                 .collect(),
+            secp,
         )
         .and_then(|inputs| {
             let lock_time = self.0.lock_time();
@@ -91,18 +92,30 @@ impl Finalizer {
     /// Inputs not present in `inputs` are passed through unchanged, as are already-finalized
     /// inputs. If the same index appears twice the last entry wins.
     ///
+    /// Newly finalized inputs are validated with the interpreter check; pass-through inputs are
+    /// not.
+    ///
     /// The PSBT may not be fully finalized after this call.
     ///
     /// # Returns
     ///
-    /// Returns the finalized PSBT without modifying the original.
-    #[must_use = "returns the finalized PSBT without modifying the original"]
-    pub fn finalize_inputs<'a>(
+    /// Returns all inputs, the selected ones finalized, without modifying the original.
+    #[must_use = "returns the finalized inputs without modifying the original"]
+    pub fn finalize_inputs<'a, C: Verification>(
         &'a self,
         inputs: Vec<FinalizableInput<'a>>,
+        secp: &Secp256k1<C>,
     ) -> Result<Vec<Input>, Vec<FinalizeError>> {
         let selected: BTreeMap<usize, bool> =
             inputs.into_iter().map(|input| (input.input_index, input.malleable)).collect();
+
+        let unsigned_tx = self.0.unsigned_tx();
+        let utxos: Vec<&TxOut> = self
+            .0
+            .iter_funding_utxos()
+            .map(|res| res.expect("Finalizer guarantees funding utxos"))
+            .collect();
+        let utxos = &Prevouts::All(&utxos);
 
         let mut inputs = vec![];
         let mut errors: Vec<FinalizeError> = vec![];
@@ -117,7 +130,19 @@ impl Finalizer {
             };
             match self.finalize_input(FinalizableInput { finalizer: self, input_index, malleable })
             {
-                Ok(input) => inputs.push(input),
+                Ok(input) => {
+                    if let Err(error) = Self::interpreter_check_input(
+                        &unsigned_tx,
+                        utxos,
+                        input_index,
+                        &input,
+                        secp,
+                    ) {
+                        errors.push(error);
+                    } else {
+                        inputs.push(input);
+                    }
+                }
                 Err(error) => errors.push(error),
             }
         }
@@ -139,37 +164,47 @@ impl Finalizer {
         secp: &Secp256k1<C>,
     ) -> Result<(), FinalizeError> {
         let unsigned_tx = psbt.unsigned_tx();
-
         let utxos: Vec<&TxOut> = psbt
             .iter_funding_utxos()
             .map(|res| res.expect("finalized PSBT has funding utxos"))
             .collect();
         let utxos = &Prevouts::All(&utxos);
+        for (index, input) in psbt.inputs.iter().enumerate() {
+            Self::interpreter_check_input(&unsigned_tx, utxos, index, input, secp)?;
+        }
+        Ok(())
+    }
+
+    /// Interprets a single input and checks whether the script is correctly interpreted according
+    /// to the context.
+    fn interpreter_check_input<C: Verification>(
+        unsigned_tx: &Transaction,
+        utxos: &Prevouts<'_, &TxOut>,
+        index: usize,
+        input: &Input,
+        secp: &Secp256k1<C>,
+    ) -> Result<(), FinalizeError> {
+        let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+
+        // Use the resolved lock time from the unsigned transaction rather
+        // than per-input min_height/min_time fields, which may be None
+        // after a v0 roundtrip (the v0 format collapses them into the
+        // single nLockTime).
+        let cltv = unsigned_tx.lock_time;
+        // Assumed MAX if omitted.
+        let csv = input.sequence.unwrap_or(Sequence::MAX);
+
         let empty_witness = Witness::default();
         let empty_script = ScriptBuf::new();
-        for (index, input) in psbt.inputs.iter().enumerate() {
-            let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+        let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
+        let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
 
-            // Use the resolved lock time from the unsigned transaction rather
-            // than per-input min_height/min_time fields, which may be None
-            // after a v0 roundtrip (the v0 format collapses them into the
-            // single nLockTime).
-            let cltv = unsigned_tx.lock_time;
-            // Assumed MAX if omitted.
-            let csv = input.sequence.unwrap_or(Sequence::MAX);
+        let interpreter = Interpreter::from_txdata(spk, script_sig, witness, csv, cltv)
+            .map_err(|error| FinalizeError::InterpreterConstructor { input_index: index, error })?;
 
-            let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
-            let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
-
-            let interpreter =
-                Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
-                    FinalizeError::InterpreterConstructor { input_index: index, error }
-                })?;
-
-            let iter = interpreter.iter(secp, &unsigned_tx, index, utxos);
-            if let Some(error) = iter.filter_map(Result::err).next() {
-                return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
-            };
+        let iter = interpreter.iter(secp, unsigned_tx, index, utxos);
+        if let Some(error) = iter.filter_map(Result::err).next() {
+            return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
         }
         Ok(())
     }
