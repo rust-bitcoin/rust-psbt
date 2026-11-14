@@ -254,3 +254,34 @@ fn finalize_inputs_rejects_witness_invalid_for_the_transaction() {
         [FinalizeError::InterpreterSatisfaction { input_index: 0, .. }]
     ));
 }
+
+// A PSBT assembled from finalized inputs contributed by several parties can be validated
+// input-by-input before the remaining inputs are finalized.
+#[test]
+fn check_finalized_inputs_validates_partially_finalized_psbt() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(public_key), wpkh_input(public_key, 1)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
+    let signed = signer.apply(sigs).unwrap().psbt();
+
+    let finalizer = Finalizer::new(signed.clone().try_resolve().unwrap()).unwrap();
+    let inputs =
+        finalizer.finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()], &secp).unwrap();
+
+    let mut psbt = signed;
+    psbt.inputs = inputs;
+
+    // Only input 0 carries final scripts: validating the finalized inputs passes.
+    Finalizer::new(psbt.clone().try_resolve().unwrap())
+        .unwrap()
+        .check_finalized_inputs(&secp)
+        .unwrap();
+
+    // A tampered final witness is caught.
+    psbt.inputs[0].final_script_witness.as_mut().unwrap().clear();
+    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
+    assert!(finalizer.check_finalized_inputs(&secp).is_err());
+}
