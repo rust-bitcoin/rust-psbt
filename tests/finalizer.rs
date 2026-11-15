@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use bitcoin::TapSighashType;
 use psbt_v2::bitcoin::absolute::LockTime;
 use psbt_v2::bitcoin::bip32::KeySource;
 use psbt_v2::bitcoin::key::{Keypair, TapTweak};
@@ -17,8 +18,7 @@ use psbt_v2::bitcoin::sighash::{Prevouts, SighashCache};
 use psbt_v2::bitcoin::taproot::{LeafVersion, Signature as TapSignature, TaprootBuilder};
 use psbt_v2::bitcoin::transaction::Version;
 use psbt_v2::bitcoin::{
-    Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, TapSighashType, Transaction, TxIn,
-    TxOut,
+    Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, Transaction, TxIn, TxOut, Witness,
 };
 use psbt_v2::{
     sign_all, Creator, FinalizableInput, FinalizeError, Finalizer, Input, Output, Psbt, Signer,
@@ -317,8 +317,9 @@ fn check_finalized_inputs_validates_partially_finalized_psbt() {
         .check_finalized_inputs(&secp)
         .unwrap();
 
-    // A tampered final witness is caught.
-    psbt.inputs[0].final_script_witness.as_mut().unwrap().clear();
+    // A tampered final witness is caught. (Emptied entirely, the input would no longer count as
+    // finalized; garbage signature material is the tampering the check must catch.)
+    psbt.inputs[0].final_script_witness = Some(Witness::from_slice(&[vec![0x01; 64]]));
     let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
     assert!(finalizer.check_finalized_inputs(&secp).is_err());
 }

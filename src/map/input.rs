@@ -429,13 +429,24 @@ impl Input {
 
     /// Returns true if this input has been finalized.
     ///
+    /// From BIP 174's Input Finalizer section:
+    /// > If scriptSig is empty for an input, 0x07 should remain unset rather than assigned an empty
+    /// > array.
+    /// > Likewise, if no scriptWitness exists for an input, 0x08 should remain unset rather than
+    /// > assigned an empty array.
+    ///
+    /// From BIP 174's Extractor section:
     /// > It checks whether all inputs have complete scriptSigs and scriptWitnesses by checking for
     /// > the presence of 0x07 Finalized scriptSig and 0x08 Finalized scriptWitness typed records.
     ///
     /// Only one of the two records is required. An input spending a legacy output has no final
     /// script witness, and an input with a final script witness may have no final script sig.
+    ///
+    /// An explicitly empty record, which BIP-174 forbids, does not count, matching Bitcoin
+    /// Core's `PSBTInputSigned`.
     pub fn is_finalized(&self) -> bool {
-        self.final_script_sig.is_some() || self.final_script_witness.is_some()
+        self.final_script_sig.as_ref().is_some_and(|s| !s.is_empty())
+            || self.final_script_witness.as_ref().is_some_and(|w| !w.is_empty())
     }
 
     /// Returns true if this input carries any signature data.
@@ -2608,6 +2619,26 @@ mod test {
 
         assert_eq!(finalized.proprietaries, input.proprietaries);
         assert_eq!(finalized.unknowns, input.unknowns);
+    }
+
+    #[test]
+    fn is_finalized_requires_a_non_empty_final_record() {
+        let mut input = Input::new(&out_point());
+        assert!(!input.is_finalized());
+
+        // An explicitly empty witness record, which BIP-174 forbids, does not count.
+        input.final_script_witness = Some(Witness::new());
+        assert!(!input.is_finalized());
+
+        input.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        assert!(input.is_finalized());
+
+        let mut legacy = Input::new(&out_point());
+        legacy.final_script_sig = Some(ScriptBuf::new());
+        assert!(!legacy.is_finalized(), "an empty script sig record must not count as finalized");
+
+        legacy.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
+        assert!(legacy.is_finalized());
     }
 
     #[cfg(feature = "miniscript")]
