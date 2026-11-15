@@ -14,13 +14,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
-      - name: "Activate maximum lockfile"
-        run: cp Cargo-maximum.lock Cargo.lock
       - name: Run cargo mutants
         id: mutants
         run: |
           set +e
-          cargo +$(cargo rbmt toolchains --nightly) mutants --in-place -- -- -Z unstable-options --fail-fast
+          cargo ,mutants --in-place -- -- -Z unstable-options --fail-fast
           echo "exit_code=$?" >> "$FORGEJO_OUTPUT"
       - name: Open issue when new mutants are found
         if: steps.mutants.outputs.exit_code == '2'
