@@ -270,7 +270,6 @@ impl Finalizer {
     }
 
     /// Returns the final script_sig and final witness for this input.
-    // TODO: Think harder about this.
     //
     // Input finalizer should only set script sig and witness iff one is required
     //
@@ -287,7 +286,8 @@ impl Finalizer {
     // > the presence of 0x07 Finalized scriptSig and 0x08 Finalized scriptWitness typed records. If
     // > they do, the Transaction Extractor should ...
     //
-    // TODO: Check that we are doing the right thing at the right time between finalization and extraction.
+    // The fields the Extractor rebuilds the transaction from survive finalization, so the extracted
+    // transaction is the one the signatures committed to.
     fn final_scripts(&self, input: &Input, malleable: bool) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
         let lock_time =
