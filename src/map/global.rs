@@ -51,7 +51,7 @@ pub struct Global {
     /// [`Creator::transaction_version`]: crate::Creator::transaction_version
     pub tx_version: transaction::Version,
     /// The transaction locktime to use if no inputs specify a required locktime.
-    pub fallback_lock_time: Option<absolute::LockTime>,
+    fallback_lock_time: Option<absolute::LockTime>,
     /// A bitfield for various transaction modification flags.
     pub tx_modifiable_flags: TxModifiableFlags,
     /// The number of inputs in this PSBT.
@@ -93,6 +93,20 @@ impl Global {
             proprietaries: Default::default(),
             unknowns: Default::default(),
         }
+    }
+
+    /// Returns the fallback lock time, if set.
+    ///
+    /// This is the `PSBT_GLOBAL_FALLBACK_LOCKTIME` field, the transaction
+    /// locktime to use when no inputs specify a required locktime. When absent,
+    /// BIP-370 specifies it is assumed to be `0`.
+    pub fn fallback_lock_time(&self) -> Option<absolute::LockTime> { self.fallback_lock_time }
+
+    /// Consumes `self` and returns a new [`Global`] with the fallback lock time set.
+    /// Only the [`Creator`](crate::Creator) role should call this during construction.
+    pub(crate) fn with_fallback_lock_time(mut self, lock: absolute::LockTime) -> Self {
+        self.fallback_lock_time = Some(lock);
+        self
     }
 
     /// Combines [`Global`] with `other`.

@@ -2,6 +2,7 @@
 
 //! The BIP-370 Creator role.
 
+use alloc::vec;
 use core::marker::PhantomData;
 
 use bitcoin::locktime::absolute;
@@ -23,40 +24,33 @@ use crate::roles::{Constructor, InputsOnlyModifiable, Modifiable, OutputsOnlyMod
 ///
 /// See `examples/v2-separate-creator-constructor.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Creator(Psbt);
+pub struct Creator(Global);
 
 impl Creator {
     /// Creates a new PSBT Creator.
-    pub fn new() -> Self {
-        let psbt = Psbt {
-            global: Global::default(),
-            inputs: Default::default(),
-            outputs: Default::default(),
-        };
-        Self(psbt)
-    }
+    pub fn new() -> Self { Self(Global::default()) }
 
     /// Sets the fallback lock time.
     pub fn fallback_lock_time(mut self, fallback: absolute::LockTime) -> Self {
-        self.0.global.fallback_lock_time = Some(fallback);
+        self.0 = self.0.with_fallback_lock_time(fallback);
         self
     }
 
     /// Sets the "has sighash single" flag in then transaction modifiable flags.
     pub fn sighash_single(mut self) -> Self {
-        self.0.global.tx_modifiable_flags.set_sighash_single();
+        self.0.tx_modifiable_flags.set_sighash_single();
         self
     }
 
     /// Sets the inputs modifiable bit in the transaction modifiable flags.
     pub fn inputs_modifiable(mut self) -> Self {
-        self.0.global.tx_modifiable_flags.set_inputs_modifiable();
+        self.0.tx_modifiable_flags.set_inputs_modifiable();
         self
     }
 
     /// Sets the outputs modifiable bit in the transaction modifiable flags.
     pub fn outputs_modifiable(mut self) -> Self {
-        self.0.global.tx_modifiable_flags.set_outputs_modifiable();
+        self.0.tx_modifiable_flags.set_outputs_modifiable();
         self
     }
 
@@ -66,7 +60,7 @@ impl Creator {
     /// version since BIP-68 and is used by default. Provided for the rare case
     /// where version 1 or 3 is required.
     pub fn transaction_version(mut self, version: transaction::Version) -> Self {
-        self.0.global.tx_version = version;
+        self.0.tx_version = version;
         self
     }
 
@@ -90,10 +84,10 @@ impl Creator {
     /// // Or the more terse:
     /// let _constructor = Constructor::<Modifiable>::default();
     /// ```
-    pub fn constructor_modifiable(self) -> Constructor<Modifiable> {
-        let mut psbt = self.0;
-        psbt.global.tx_modifiable_flags.set_inputs_modifiable();
-        psbt.global.tx_modifiable_flags.set_outputs_modifiable();
+    pub fn constructor_modifiable(mut self) -> Constructor<Modifiable> {
+        self.0.tx_modifiable_flags.set_inputs_modifiable();
+        self.0.tx_modifiable_flags.set_outputs_modifiable();
+        let psbt = Psbt { global: self.0, inputs: vec![], outputs: vec![] };
         let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
         Constructor(psbt, lock_time, PhantomData)
     }
@@ -117,10 +111,10 @@ impl Creator {
     /// // Or the more terse:
     /// let _constructor = Constructor::<InputsOnlyModifiable>::default();
     /// ```
-    pub fn constructor_inputs_only_modifiable(self) -> Constructor<InputsOnlyModifiable> {
-        let mut psbt = self.0;
-        psbt.global.tx_modifiable_flags.set_inputs_modifiable();
-        psbt.global.tx_modifiable_flags.clear_outputs_modifiable();
+    pub fn constructor_inputs_only_modifiable(mut self) -> Constructor<InputsOnlyModifiable> {
+        self.0.tx_modifiable_flags.set_inputs_modifiable();
+        self.0.tx_modifiable_flags.clear_outputs_modifiable();
+        let psbt = Psbt { global: self.0, inputs: vec![], outputs: vec![] };
         let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
         Constructor(psbt, lock_time, PhantomData)
     }
@@ -144,10 +138,10 @@ impl Creator {
     /// // Or the more terse:
     /// let _constructor = Constructor::<OutputsOnlyModifiable>::default();
     /// ```
-    pub fn constructor_outputs_only_modifiable(self) -> Constructor<OutputsOnlyModifiable> {
-        let mut psbt = self.0;
-        psbt.global.tx_modifiable_flags.clear_inputs_modifiable();
-        psbt.global.tx_modifiable_flags.set_outputs_modifiable();
+    pub fn constructor_outputs_only_modifiable(mut self) -> Constructor<OutputsOnlyModifiable> {
+        self.0.tx_modifiable_flags.clear_inputs_modifiable();
+        self.0.tx_modifiable_flags.set_outputs_modifiable();
+        let psbt = Psbt { global: self.0, inputs: vec![], outputs: vec![] };
         let lock_time = psbt.determine_lock_time().unwrap_or(absolute::LockTime::ZERO);
         Constructor(psbt, lock_time, PhantomData)
     }
@@ -156,7 +150,7 @@ impl Creator {
     ///
     /// This is only required if the Creator and Constructor are separate entities. If the Creator
     /// is also acting as the Constructor use one of the `Self::constructor_foo` functions.
-    pub fn psbt(self) -> Psbt { self.0 }
+    pub fn psbt(self) -> Psbt { Psbt { global: self.0, inputs: vec![], outputs: vec![] } }
 }
 
 impl Default for Creator {
@@ -174,7 +168,7 @@ mod tests {
     fn fallback_lock_time_is_set() {
         let lock_time = absolute::LockTime::from_consensus(500);
         let psbt = Creator::new().fallback_lock_time(lock_time).psbt();
-        assert_eq!(psbt.global.fallback_lock_time, Some(lock_time));
+        assert_eq!(psbt.global.fallback_lock_time(), Some(lock_time));
     }
 
     #[test]

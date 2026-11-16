@@ -82,10 +82,11 @@ fn strict_validation_allocations(input_count: u32) -> usize {
         })
         .collect();
     let psbt = Psbt {
-        global: Global {
-            input_count: Count::from(input_count as usize),
-            output_count: Count::from(1),
-            ..Global::default()
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(input_count as usize);
+            g.output_count = Count::from(1);
+            g
         },
         inputs,
         outputs: vec![Output::new(TxOut { value: Amount::from_sat(500), script_pubkey: script })],

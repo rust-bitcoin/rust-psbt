@@ -224,10 +224,9 @@ impl TestCase {
 
                 let mut psbt = Constructor::<Modifiable>::default();
                 for prev_out in inputs {
-                    let input = Input {
-                        sequence: Some(Sequence::MAX),
-                        ..Input::new(&OutPoint { txid: prev_out.txid, vout: prev_out.vout })
-                    };
+                    let mut input =
+                        Input::new(&OutPoint { txid: prev_out.txid, vout: prev_out.vout });
+                    input.sequence = Some(Sequence::MAX);
                     psbt = psbt.input(input).expect("lock time must be determinable");
                 }
                 for txout in outputs {

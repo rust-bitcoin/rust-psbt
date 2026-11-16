@@ -14,7 +14,7 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
-use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
+use bitcoin::{ecdsa, taproot, OutPoint, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
 use bitcoin_consensus_encoding::{
     ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder, EncoderStatus,
     ExactVecDecoderWith, IterEncoder,
@@ -28,7 +28,6 @@ use super::super::input::{
 #[cfg(feature = "silent-payments")]
 use super::super::input::{DleqPairIter, EcdhPairIter};
 use super::super::por_commitment::PorCommitment;
-use super::super::vout::Vout;
 use super::super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
     TapInternalKeyPair, UnknownKeyValueIter,
@@ -721,39 +720,37 @@ impl InputV0 {
     /// Promote this `InputV0` into a full [`Input`](crate::Input) by injecting
     /// the unsigned-transaction fields that the v0 input map does not carry.
     pub(crate) fn into_input(self, txid: Txid, vout: u32, sequence: Sequence) -> Input {
-        Input {
-            previous_txid: txid,
-            spent_output_index: Vout::from(vout),
-            sequence: Some(sequence),
-            min_time: None,
-            min_height: None,
-            non_witness_utxo: self.non_witness_utxo,
-            witness_utxo: self.witness_utxo,
-            partial_sigs: self.partial_sigs,
-            sighash_type: self.sighash_type,
-            redeem_script: self.redeem_script,
-            witness_script: self.witness_script,
-            bip32_derivations: self.bip32_derivations,
-            final_script_sig: self.final_script_sig,
-            final_script_witness: self.final_script_witness,
-            por_commitment: self.por_commitment,
-            ripemd160_preimages: self.ripemd160_preimages,
-            sha256_preimages: self.sha256_preimages,
-            hash160_preimages: self.hash160_preimages,
-            hash256_preimages: self.hash256_preimages,
-            tap_key_sig: self.tap_key_sig,
-            tap_script_sigs: self.tap_script_sigs,
-            tap_scripts: self.tap_scripts,
-            tap_key_origins: self.tap_key_origins,
-            tap_internal_key: self.tap_internal_key,
-            tap_merkle_root: self.tap_merkle_root,
-            #[cfg(feature = "silent-payments")]
-            sp_ecdh_shares: self.sp_ecdh_shares,
-            #[cfg(feature = "silent-payments")]
-            sp_dleq_proofs: self.sp_dleq_proofs,
-            proprietaries: self.proprietaries,
-            unknowns: self.unknowns,
+        let outpoint = OutPoint { txid, vout };
+        let mut input = Input::new(&outpoint);
+        input.sequence = Some(sequence);
+        input.non_witness_utxo = self.non_witness_utxo;
+        input.witness_utxo = self.witness_utxo;
+        input.partial_sigs = self.partial_sigs;
+        input.sighash_type = self.sighash_type;
+        input.redeem_script = self.redeem_script;
+        input.witness_script = self.witness_script;
+        input.bip32_derivations = self.bip32_derivations;
+        input.final_script_sig = self.final_script_sig;
+        input.final_script_witness = self.final_script_witness;
+        input.por_commitment = self.por_commitment;
+        input.ripemd160_preimages = self.ripemd160_preimages;
+        input.sha256_preimages = self.sha256_preimages;
+        input.hash160_preimages = self.hash160_preimages;
+        input.hash256_preimages = self.hash256_preimages;
+        input.tap_key_sig = self.tap_key_sig;
+        input.tap_script_sigs = self.tap_script_sigs;
+        input.tap_scripts = self.tap_scripts;
+        input.tap_key_origins = self.tap_key_origins;
+        input.tap_internal_key = self.tap_internal_key;
+        input.tap_merkle_root = self.tap_merkle_root;
+        #[cfg(feature = "silent-payments")]
+        {
+            input.sp_ecdh_shares = self.sp_ecdh_shares;
+            input.sp_dleq_proofs = self.sp_dleq_proofs;
         }
+        input.proprietaries = self.proprietaries;
+        input.unknowns = self.unknowns;
+        input
     }
 }
 

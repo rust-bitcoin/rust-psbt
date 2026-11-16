@@ -81,9 +81,9 @@ pub struct Input {
     /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]) as stated in BIP-370.
     pub sequence: Option<Sequence>,
     /// The minimum Unix timestamp that this input requires to be set as the transaction's lock time.
-    pub min_time: Option<absolute::Time>,
+    min_time: Option<absolute::Time>,
     /// The minimum block height that this input requires to be set as the transaction's lock time.
-    pub min_height: Option<RequiredHeightLockTime>,
+    min_height: Option<RequiredHeightLockTime>,
     /// The non-witness transaction this input spends from. Should only be
     /// `Option::Some` for inputs which spend non-segwit outputs or
     /// if it is unknown whether an input spends a segwit output.
@@ -308,6 +308,18 @@ impl Input {
             unknowns: self.unknowns.clone(),
         }
     }
+
+    /// Returns the minimum required time-based lock time for this input, if set.
+    ///
+    /// This is the `PSBT_IN_REQUIRED_TIME_LOCKTIME` field, the minimum Unix
+    /// timestamp the transaction's `nLockTime` must reach for this input to be valid.
+    pub fn min_time(&self) -> Option<absolute::Time> { self.min_time }
+
+    /// Returns the minimum required height-based lock time for this input, if set.
+    ///
+    /// This is the `PSBT_IN_REQUIRED_HEIGHT_LOCKTIME` field, the minimum block
+    /// height the transaction's `nLockTime` must reach for this input to be valid.
+    pub fn min_height(&self) -> Option<RequiredHeightLockTime> { self.min_height }
 
     pub(crate) fn has_lock_time(&self) -> bool {
         self.min_time.is_some() || self.min_height.is_some()
@@ -2081,13 +2093,13 @@ impl InputBuilder {
     /// Creates a new builder that can be used to build an [`Input`] that spends `previous_output`.
     pub fn new(previous_output: &OutPoint) -> Self { Self(Input::new(previous_output)) }
 
-    /// Sets the [`Input::min_time`] field.
+    /// Sets the [`Input::min_time()`] field.
     pub fn minimum_required_time_based_lock_time(mut self, lock: absolute::Time) -> Self {
         self.0.min_time = Some(lock);
         self
     }
 
-    /// Sets the [`Input::min_height`] field.
+    /// Sets the [`Input::min_height()`] field.
     pub fn minimum_required_height_based_lock_time(mut self, lock: RequiredHeightLockTime) -> Self {
         self.0.min_height = Some(lock);
         self

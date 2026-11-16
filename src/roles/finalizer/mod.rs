@@ -78,7 +78,7 @@ mod tests {
     use miniscript::{Miniscript, Segwitv0};
 
     use super::*;
-    use crate::map::input::Input;
+    use crate::map::input::{Input, InputBuilder};
     use crate::psbt::Psbt;
     use crate::roles::{Creator, Signer};
     use crate::{Count, Output, RequiredHeightLockTime};
@@ -100,10 +100,11 @@ mod tests {
             sighash_type: bitcoin::TapSighashType::Default,
         });
         let psbt = Psbt {
-            global: crate::Global {
-                input_count: Count::from(1),
-                output_count: Count::from(1),
-                ..Default::default()
+            global: {
+                let mut g = crate::Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
             },
             inputs: alloc::vec![input],
             outputs: alloc::vec![Output::new(TxOut {
@@ -291,13 +292,39 @@ mod tests {
     #[test]
     fn finalize_preserves_lock_time_used_in_signature() {
         // Sign with a required height lock time so the signature commits to the lock time.
-        let mut unsigned = unsigned_psbt();
-        unsigned.inputs[0].min_height =
-            Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
-        unsigned.inputs[0].sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+        let secp_signer = Secp256k1::new();
+        let xpriv = TEST_XPRIV.parse::<Xpriv>().unwrap();
+        let path = "m/0".into_derivation_path().unwrap();
+        let pk = PublicKey::new(
+            xpriv.derive_priv(&secp_signer, &path).unwrap().to_keypair(&secp_signer).public_key(),
+        );
+
+        let input = InputBuilder::new(&OutPoint::null())
+            .segwit_fund(TxOut {
+                value: Amount::from_sat(123_456),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            })
+            .minimum_required_height_based_lock_time(
+                RequiredHeightLockTime::from_consensus(800_000).unwrap(),
+            )
+            .build();
+        let mut input = input;
+        input.bip32_derivations.insert(pk, (xpriv.fingerprint(&secp_signer), path));
+        input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+
+        let psbt = Creator::new()
+            .constructor_modifiable()
+            .input(input)
+            .expect("lock time must be determinable")
+            .output(Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            }))
+            .expect("fixture output must be valid")
+            .psbt();
 
         let secp = Secp256k1::verification_only();
-        Finalizer::new(sign(unsigned).try_resolve().unwrap())
+        Finalizer::new(sign(psbt).try_resolve().unwrap())
             .unwrap()
             .finalize(&secp)
             .expect("finalize must preserve the lock time the signature commits to");
@@ -327,13 +354,15 @@ mod tests {
         input_0.bip32_derivations.insert(pk, origin.clone());
         input_0.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
-        let mut input_1 = Input::new(&OutPoint::new(Txid::all_zeros(), 1));
-        input_1.witness_utxo = Some(TxOut {
-            value: Amount::from_sat(123_456),
-            script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
-        });
+        let input_1 = InputBuilder::new(&OutPoint::new(Txid::all_zeros(), 1))
+            .segwit_fund(TxOut {
+                value: Amount::from_sat(123_456),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            })
+            .minimum_required_time_based_lock_time(time)
+            .build();
+        let mut input_1 = input_1;
         input_1.bip32_derivations.insert(pk, origin);
-        input_1.min_time = Some(time);
         input_1.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let psbt = Creator::new()
@@ -381,13 +410,15 @@ mod tests {
         input_0.bip32_derivations.insert(pk, origin.clone());
         input_0.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
-        let mut input_1 = Input::new(&OutPoint::new(Txid::all_zeros(), 1));
-        input_1.witness_utxo = Some(TxOut {
-            value: Amount::from_sat(123_456),
-            script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
-        });
+        let input_1 = InputBuilder::new(&OutPoint::new(Txid::all_zeros(), 1))
+            .segwit_fund(TxOut {
+                value: Amount::from_sat(123_456),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            })
+            .minimum_required_time_based_lock_time(time)
+            .build();
+        let mut input_1 = input_1;
         input_1.bip32_derivations.insert(pk, origin);
-        input_1.min_time = Some(time);
         input_1.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let psbt = Creator::new()
@@ -439,13 +470,15 @@ mod tests {
         input_0.bip32_derivations.insert(pk_1, origin_1);
         input_0.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
-        let mut input_1 = Input::new(&OutPoint::new(Txid::all_zeros(), 1));
-        input_1.witness_utxo = Some(TxOut {
-            value: Amount::from_sat(123_456),
-            script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
-        });
+        let input_1 = InputBuilder::new(&OutPoint::new(Txid::all_zeros(), 1))
+            .segwit_fund(TxOut {
+                value: Amount::from_sat(123_456),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            })
+            .minimum_required_time_based_lock_time(time)
+            .build();
+        let mut input_1 = input_1;
         input_1.bip32_derivations.insert(pk, origin);
-        input_1.min_time = Some(time);
         input_1.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let psbt = Creator::new()
@@ -496,13 +529,15 @@ mod tests {
         input_0.bip32_derivations.insert(pk, origin.clone());
         // A missing sequence is `Sequence::MAX`, under which CLTV fails.
 
-        let mut input_1 = Input::new(&OutPoint::new(Txid::all_zeros(), 1));
-        input_1.witness_utxo = Some(TxOut {
-            value: Amount::from_sat(123_456),
-            script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
-        });
+        let input_1 = InputBuilder::new(&OutPoint::new(Txid::all_zeros(), 1))
+            .segwit_fund(TxOut {
+                value: Amount::from_sat(123_456),
+                script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+            })
+            .minimum_required_time_based_lock_time(time)
+            .build();
+        let mut input_1 = input_1;
         input_1.bip32_derivations.insert(pk, origin);
-        input_1.min_time = Some(time);
         input_1.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
         let psbt = Creator::new()

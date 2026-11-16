@@ -12,11 +12,10 @@ use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash, TapTree};
 use bitcoin::{PublicKey, ScriptBuf, Sequence, Transaction, TxOut, Txid};
 
 use crate::encoding::codecs::leaf_script::TapLeafScript;
-use crate::input::Input;
 use crate::output::Output;
 use crate::psbt::{CombineError, Psbt, ResolvedPsbt};
 use crate::roles::signer::Signer;
-use crate::{Global, ProprietaryKey, PsbtSighashType};
+use crate::{ProprietaryKey, PsbtSighashType};
 
 /// Implements the BIP-370 Updater role.
 ///
@@ -256,34 +255,36 @@ impl Updater {
             });
         }
         let delta = Psbt {
-            global: Global {
-                xpubs: patch.global.xpubs,
-                proprietaries: patch.global.proprietaries,
-                ..self.0.global.clone()
+            global: {
+                let mut global = self.0.global.clone();
+                global.xpubs = patch.global.xpubs;
+                global.proprietaries = patch.global.proprietaries;
+                global
             },
             inputs: self
                 .0
                 .inputs
                 .iter()
                 .zip(patch.inputs)
-                .map(|(input, update)| Input {
-                    sequence: update.sequence,
-                    non_witness_utxo: update.non_witness_utxo,
-                    witness_utxo: update.witness_utxo,
-                    sighash_type: update.sighash_type,
-                    redeem_script: update.redeem_script,
-                    witness_script: update.witness_script,
-                    bip32_derivations: update.bip32_derivations,
-                    ripemd160_preimages: update.ripemd160_preimages,
-                    sha256_preimages: update.sha256_preimages,
-                    hash160_preimages: update.hash160_preimages,
-                    hash256_preimages: update.hash256_preimages,
-                    tap_scripts: update.tap_scripts,
-                    tap_key_origins: update.tap_key_origins,
-                    tap_internal_key: update.tap_internal_key,
-                    tap_merkle_root: update.tap_merkle_root,
-                    proprietaries: update.proprietaries,
-                    ..input.clone()
+                .map(|(input, update)| {
+                    let mut input = input.clone();
+                    input.sequence = update.sequence;
+                    input.non_witness_utxo = update.non_witness_utxo;
+                    input.witness_utxo = update.witness_utxo;
+                    input.sighash_type = update.sighash_type;
+                    input.redeem_script = update.redeem_script;
+                    input.witness_script = update.witness_script;
+                    input.bip32_derivations = update.bip32_derivations;
+                    input.ripemd160_preimages = update.ripemd160_preimages;
+                    input.sha256_preimages = update.sha256_preimages;
+                    input.hash160_preimages = update.hash160_preimages;
+                    input.hash256_preimages = update.hash256_preimages;
+                    input.tap_scripts = update.tap_scripts;
+                    input.tap_key_origins = update.tap_key_origins;
+                    input.tap_internal_key = update.tap_internal_key;
+                    input.tap_merkle_root = update.tap_merkle_root;
+                    input.proprietaries = update.proprietaries;
+                    input
                 })
                 .collect(),
             outputs: self

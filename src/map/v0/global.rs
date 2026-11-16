@@ -296,29 +296,25 @@ impl Decoder for GlobalMapDecoder {
                             }
                         }
 
-                        self.stage = Stage::Done((
-                            crate::Global {
-                                tx_version,
-                                fallback_lock_time: (lock_time != absolute::LockTime::ZERO)
-                                    .then_some(lock_time),
-                                input_count: Count::from(tx_inputs.len()),
-                                output_count: Count::from(tx_outputs.len()),
-                                // v0 has no PSBT_GLOBAL_TX_MODIFIABLE key, but we are assuming
-                                // construction is over and setting all to unmodifiable.
-                                tx_modifiable_flags: TxModifiableFlags::new(),
-                                // The PSBT is now in v2 form.
-                                version: V2,
-                                xpubs: core::mem::take(&mut self.xpubs),
-                                #[cfg(feature = "silent-payments")]
-                                sp_ecdh_shares: core::mem::take(&mut self.sp_ecdh_shares),
-                                #[cfg(feature = "silent-payments")]
-                                sp_dleq_proofs: core::mem::take(&mut self.sp_dleq_proofs),
-                                proprietaries: core::mem::take(&mut self.proprietaries),
-                                unknowns: core::mem::take(&mut self.unknowns),
-                            },
-                            tx_inputs,
-                            tx_outputs,
-                        ));
+                        let mut global = crate::Global::default();
+                        // Collapse an explicit-zero fallback to None: v0 cannot
+                        // distinguish the two, and BIP-370 treats both as zero anyway.
+                        if lock_time != absolute::LockTime::ZERO {
+                            global = global.with_fallback_lock_time(lock_time);
+                        }
+                        global.tx_version = tx_version;
+                        global.input_count = Count::from(tx_inputs.len());
+                        global.output_count = Count::from(tx_outputs.len());
+                        global.tx_modifiable_flags = TxModifiableFlags::new();
+                        global.xpubs = core::mem::take(&mut self.xpubs);
+                        #[cfg(feature = "silent-payments")]
+                        {
+                            global.sp_ecdh_shares = core::mem::take(&mut self.sp_ecdh_shares);
+                            global.sp_dleq_proofs = core::mem::take(&mut self.sp_dleq_proofs);
+                        }
+                        global.proprietaries = core::mem::take(&mut self.proprietaries);
+                        global.unknowns = core::mem::take(&mut self.unknowns);
+                        self.stage = Stage::Done((global, tx_inputs, tx_outputs));
                         return Ok(DecoderStatus::Ready);
                     }
                     Some((_, _)) => {

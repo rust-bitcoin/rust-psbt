@@ -19,8 +19,7 @@ use psbt_v2::bitcoin::{
     Amount, Network, OutPoint, PrivateKey, PublicKey, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
 };
 use psbt_v2::{
-    CombineError, Creator, Input, Output, ProprietaryKey, Psbt, PsbtSighashType,
-    RequiredHeightLockTime, Updater,
+    CombineError, Creator, Input, Output, ProprietaryKey, Psbt, PsbtSighashType, Updater,
 };
 
 /// A funded P2WPKH input worth 10,000 sats.
@@ -529,15 +528,38 @@ fn update_rejects_mismatched_draft_shape() {
 /// `Psbt::try_resolve` rejects a PSBT with conflicting lock-time requirements.
 #[test]
 fn try_resolve_rejects_indeterminate_lock_time() {
-    use psbt_v2::bitcoin::absolute;
+    use psbt_v2::bitcoin::{absolute, Amount, OutPoint, ScriptBuf, TxOut};
+    use psbt_v2::{Count, Global, InputBuilder, Output, Psbt, RequiredHeightLockTime};
 
-    let mut psbt = two_party_psbt(funded_input(1, 0), funded_input(2, 0));
+    let op0 = OutPoint { txid: funding_tx(1).compute_txid(), vout: 0 };
+    let op1 = OutPoint { txid: funding_tx(2).compute_txid(), vout: 0 };
+
     // Input 0 requires time-based lock time (min_time only).
-    psbt.inputs[0].min_time = Some(absolute::Time::from_consensus(500_000_000).unwrap());
-    psbt.inputs[0].min_height = None;
+    let input0 = InputBuilder::new(&op0)
+        .segwit_fund(funding_tx(1).output[0].clone())
+        .minimum_required_time_based_lock_time(absolute::Time::from_consensus(500_000_000).unwrap())
+        .build();
     // Input 1 requires height-based lock time (min_height only).
-    psbt.inputs[1].min_height = Some(RequiredHeightLockTime::from_consensus(800_000).unwrap());
-    psbt.inputs[1].min_time = None;
+    let input1 = InputBuilder::new(&op1)
+        .segwit_fund(funding_tx(2).output[0].clone())
+        .minimum_required_height_based_lock_time(
+            RequiredHeightLockTime::from_consensus(800_000).unwrap(),
+        )
+        .build();
+
+    let psbt = Psbt {
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
+        },
+        inputs: vec![input0, input1],
+        outputs: vec![Output::new(TxOut {
+            value: Amount::from_sat(1),
+            script_pubkey: ScriptBuf::new(),
+        })],
+    };
 
     let result = psbt.try_resolve();
     assert!(result.is_err());

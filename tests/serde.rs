@@ -13,7 +13,7 @@ use psbt_v2::bitcoin::locktime::absolute;
 use psbt_v2::bitcoin::taproot::TapNodeHash;
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
 use psbt_v2::{
-    Count, Global, Input, Key, Output, ProprietaryKey, Psbt, PsbtSighashType,
+    Count, Global, InputBuilder, Key, Output, ProprietaryKey, Psbt, PsbtSighashType,
     RequiredHeightLockTime,
 };
 
@@ -34,11 +34,18 @@ fn round_trip_json() {
         vout: 0,
     };
 
-    let mut input = Input::new(&outpoint);
-    input.witness_utxo = Some(utxo);
+    let input = InputBuilder::new(&outpoint)
+        .segwit_fund(utxo)
+        .minimum_required_time_based_lock_time(
+            absolute::Time::from_consensus(1_700_000_000).unwrap(),
+        )
+        .minimum_required_height_based_lock_time(
+            RequiredHeightLockTime::from_consensus(700_000).unwrap(),
+        )
+        .build();
+    // Set additional fields that InputBuilder doesn't cover.
+    let mut input = input;
     input.sequence = Some(Sequence::MAX);
-    input.min_time = Some(absolute::Time::from_consensus(1_700_000_000).unwrap());
-    input.min_height = Some(RequiredHeightLockTime::from_consensus(700_000).unwrap());
     input.sighash_type = Some(PsbtSighashType::ALL);
     input.redeem_script = Some(script.clone());
     input.witness_script = Some(script.clone());
@@ -66,16 +73,18 @@ fn round_trip_json() {
         vec![0xff; 3],
     )]);
 
-    let global = Global {
-        version: psbt_v2::V2,
-        input_count: Count::from(1),
-        output_count: Count::from(1),
-        unknowns: BTreeMap::from([(Key { type_value: 0xfb, key: vec![0x03; 2] }, vec![0xaa; 4])]),
-        proprietaries: BTreeMap::from([(
+    let global = {
+        let mut g = Global::default();
+        g.version = psbt_v2::V2;
+        g.input_count = Count::from(1);
+        g.output_count = Count::from(1);
+        g.unknowns =
+            BTreeMap::from([(Key { type_value: 0xfb, key: vec![0x03; 2] }, vec![0xaa; 4])]);
+        g.proprietaries = BTreeMap::from([(
             ProprietaryKey { prefix: b"rust".to_vec(), subtype: 0x02u64, key: vec![0x04; 1] },
             vec![0xbb; 3],
-        )]),
-        ..Global::default()
+        )]);
+        g
     };
 
     let psbt = Psbt { global, inputs: vec![input], outputs: vec![output] };

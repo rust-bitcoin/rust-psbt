@@ -11,8 +11,8 @@ use psbt_v2::bitcoin::absolute::{Height, LockTime};
 use psbt_v2::bitcoin::hex::{DisplayHex, FromHex};
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
 use psbt_v2::{
-    Constructor, Count, Creator, Input, Modifiable, Output, Psbt, PsbtV0, RequiredHeightLockTime,
-    Signer, TxModifiableFlags,
+    Constructor, Count, Creator, Input, InputBuilder, Modifiable, Output, Psbt, PsbtV0,
+    RequiredHeightLockTime, Signer, TxModifiableFlags,
 };
 
 const PUBKEY_HEX: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -50,7 +50,7 @@ fn deserialize_v0_redistributes_unsigned_tx_fields() {
 
     assert_eq!(psbt.global.version, psbt_v2::V2);
     assert_eq!(psbt.global.tx_version, psbt_v2::bitcoin::transaction::Version::TWO);
-    assert_eq!(psbt.global.fallback_lock_time, None); // lock time is zero
+    assert_eq!(psbt.global.fallback_lock_time(), None); // lock time is zero
     assert_eq!(psbt.global.input_count, Count::from(2));
     assert_eq!(psbt.global.output_count, Count::from(2));
     assert_eq!(psbt.inputs.len(), 2);
@@ -87,7 +87,7 @@ fn deserialize_v0_preserves_nonzero_lock_time() {
     let psbt = PsbtV0::deserialize(&bytes).expect("v0").into_psbt();
 
     assert_eq!(
-        psbt.global.fallback_lock_time,
+        psbt.global.fallback_lock_time(),
         Some(LockTime::from(Height::from_consensus(1_257_139).expect("valid height")))
     );
 }
@@ -212,8 +212,10 @@ fn v2_only_input_fields_surface_in_v0_unsigned_tx() {
     use psbt_v2::bitcoin::absolute;
 
     let height = absolute::Height::from_consensus(800_000).unwrap();
-    let mut input = Input::new(&OutPoint::null());
-    input.min_height = Some(RequiredHeightLockTime::try_from(height).unwrap());
+    let input = InputBuilder::new(&OutPoint::null())
+        .minimum_required_height_based_lock_time(RequiredHeightLockTime::try_from(height).unwrap())
+        .build();
+    let mut input = input;
     input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
 
     let psbt = Creator::new()
@@ -226,9 +228,9 @@ fn v2_only_input_fields_surface_in_v0_unsigned_tx() {
 
     let parsed = round_trip_v0(&psbt);
 
-    assert_eq!(parsed.global.fallback_lock_time, Some(LockTime::Blocks(height)));
+    assert_eq!(parsed.global.fallback_lock_time(), Some(LockTime::Blocks(height)));
     assert_eq!(parsed.inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
-    assert!(parsed.inputs[0].min_height.is_none()); // dropped as a field
+    assert!(parsed.inputs[0].min_height().is_none()); // dropped as a field
 }
 
 /// Signing a PSBT and then converting to v0 preserves the signatures.
