@@ -23,6 +23,7 @@
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 //! [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
 
+use alloc::borrow::Borrow;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -82,6 +83,22 @@ impl PsbtEncode for Psbt {
             crate::encoding::SliceEncoder::without_length_prefix(&self.outputs),
         ))
     }
+}
+
+/// Encodes a `ResolvedPsbt` to the PSBT wire format. The encoding is identical to that of the
+/// inner [`Psbt`], locktime is not part of the wire format.
+///
+/// A corresponding [`PsbtDecode`] impl is intentionally absent: deserializing into a
+/// `ResolvedPsbt` requires lock-time resolution, which can fail in ways the [`DecodeError`]
+/// type does not carry. Use [`Psbt::deserialize`] instead, which resolves the lock time and
+/// returns a `Result<ResolvedPsbt, DeserializeError>`.
+///
+/// [`PsbtDecode`]: crate::PsbtDecode
+/// [`DecodeError`]: bitcoin_consensus_encoding::DecodeError
+impl PsbtEncode for ResolvedPsbt {
+    type Encoder<'e> = <Psbt as PsbtEncode>::Encoder<'e>;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { self.inner.psbt_encoder() }
 }
 
 /// Decoder for PSBT v2.
@@ -571,6 +588,12 @@ mod display_from_str {
         }
     }
 
+    impl fmt::Display for ResolvedPsbt {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
     impl FromStr for Psbt {
         type Err = ParsePsbtError;
 
@@ -731,6 +754,10 @@ impl AsRef<Psbt> for ResolvedPsbt {
     fn as_ref(&self) -> &Psbt { &self.inner }
 }
 
+impl Borrow<Psbt> for ResolvedPsbt {
+    fn borrow(&self) -> &Psbt { &self.inner }
+}
+
 impl ResolvedPsbt {
     /// Creates a `ResolvedPsbt` from a PSBT and its pre-computed locktime.
     ///
@@ -779,6 +806,10 @@ impl ResolvedPsbt {
             output: self.outputs.iter().map(Output::tx_out).collect(),
         }
     }
+}
+
+impl From<ResolvedPsbt> for Psbt {
+    fn from(resolved: ResolvedPsbt) -> Self { resolved.into_psbt() }
 }
 
 #[cfg(test)]

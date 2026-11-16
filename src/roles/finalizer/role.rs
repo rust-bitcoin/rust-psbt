@@ -4,6 +4,7 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+use alloc::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -408,6 +409,32 @@ impl core::ops::Deref for FinalizedPsbt {
 
 impl AsRef<Psbt> for FinalizedPsbt {
     fn as_ref(&self) -> &Psbt { &self.0 }
+}
+
+impl Borrow<Psbt> for FinalizedPsbt {
+    fn borrow(&self) -> &Psbt { &self.0 }
+}
+
+impl From<FinalizedPsbt> for Psbt {
+    fn from(finalized: FinalizedPsbt) -> Self { finalized.psbt() }
+}
+
+/// Encodes a [`FinalizedPsbt`] to the PSBT wire format. The encoding is identical to that
+/// of the underlying [`Psbt`].
+///
+/// A corresponding [`PsbtDecode`](crate::PsbtDecode) impl is intentionally absent:
+/// deserializing into a `FinalizedPsbt` requires both lock-time resolution and finalization
+/// checks, neither of which fit the [`DecodeError`](bitcoin_consensus_encoding::DecodeError)
+/// type. Deserialize into a [`Psbt`](crate::Psbt) and proceed through the roles instead.
+impl crate::encoding::PsbtEncode for FinalizedPsbt {
+    type Encoder<'e> = <Psbt as crate::encoding::PsbtEncode>::Encoder<'e>;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { self.0.psbt_encoder() }
+}
+
+#[cfg(feature = "base64")]
+impl fmt::Display for FinalizedPsbt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::Display::fmt(&**self, f) }
 }
 
 /// A PSBT input provably ready for finalization
