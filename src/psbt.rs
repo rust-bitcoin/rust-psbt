@@ -769,7 +769,7 @@ mod tests {
     use crate::map::por_commitment::PorCommitment;
     #[cfg(feature = "silent-payments")]
     use crate::roles::ConstructError;
-    use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable, Signer};
+    use crate::roles::{Constructor, Creator, Modifiable, OutputsOnlyModifiable};
     use crate::{Count, PsbtSighashType};
 
     fn single_input_psbt() -> Psbt {
@@ -1221,15 +1221,13 @@ mod tests {
     }
 
     #[test]
-    fn ecdsa_clear_tx_modifiable_updates_flags() {
+    fn clear_tx_modifiable_updates_flags() {
         let mut psbt = single_input_psbt();
         psbt.global.tx_modifiable_flags.set_inputs_modifiable();
         psbt.global.tx_modifiable_flags.set_outputs_modifiable();
 
-        let mut signer = Signer::new(psbt.try_resolve().expect("lock time must be determinable"));
-        signer.ecdsa_clear_tx_modifiable(EcdsaSighashType::All);
+        psbt.clear_tx_modifiable(PsbtSighashType::from(EcdsaSighashType::All));
 
-        let psbt = signer.psbt();
         assert!(!psbt.global.tx_modifiable_flags.is_inputs_modifiable());
         assert!(!psbt.global.tx_modifiable_flags.is_outputs_modifiable());
         assert!(!psbt.global.tx_modifiable_flags.has_sighash_single());
