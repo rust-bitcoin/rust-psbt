@@ -161,8 +161,11 @@ impl Signer {
 
             // BIP-370: a signer must update PSBT_GLOBAL_TX_MODIFIABLE after signing inputs.
             {
-                let psbt_input =
-                    self.psbt.inner.checked_input_mut(index).expect("index validated in first pass");
+                let psbt_input = self
+                    .psbt
+                    .inner
+                    .checked_input_mut(index)
+                    .expect("index validated in first pass");
                 match signatures {
                     TypedSigs::Ecdsa(sigs) =>
                         for (pk, sig) in sigs {
