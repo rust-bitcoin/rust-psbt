@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
+#[cfg(feature = "miniscript")]
+use bitcoin::bip32::DerivationPath;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
@@ -218,7 +220,7 @@ impl Input {
         #[derive(Clone)]
         struct KeyOrigin {
             key: DefiniteDescriptorKey,
-            key_source: Option<KeySource>,
+            key_source: KeySource,
         }
 
         enum SpendType {
@@ -232,6 +234,15 @@ impl Input {
             control_block: Option<ControlBlock>,
             spend_type: Option<SpendType>,
             key_origins: BTreeMap<XOnlyPublicKey, KeySource>,
+        }
+
+        // The origin of `key` as a (fingerprint, path) pair. Raw keys have no derivation
+        // paths; they record the zero fingerprint with the master path so the key is
+        // still written to the derivation maps and the signer can fall back to a pubkey
+        // lookup.
+        fn key_origin(key: &DefiniteDescriptorKey) -> KeySource {
+            let path = key.full_derivation_paths().pop().unwrap_or_else(DerivationPath::master);
+            (key.master_fingerprint(), path)
         }
 
         let mut input = Self::new(previous_output);
@@ -257,9 +268,7 @@ impl Input {
         let mut hash_to_keys = BTreeMap::new();
 
         for key in plan.descriptor.iter_pk() {
-            let key_source =
-                key.full_derivation_paths().pop().map(|path| (key.master_fingerprint(), path));
-            let origin = KeyOrigin { key: key.clone(), key_source };
+            let origin = KeyOrigin { key: key.clone(), key_source: key_origin(&key) };
             hash_to_keys.insert(key.to_pubkeyhash(SigType::Ecdsa), origin.clone());
             hash_to_keys.insert(key.to_pubkeyhash(SigType::Schnorr), origin);
         }
@@ -279,28 +288,19 @@ impl Input {
                     // The first placeholder selects the spend type; every placeholder
                     // records its key origin.
                     data.spend_type.get_or_insert(spend_type);
-                    for path in pk.full_derivation_paths() {
-                        data.key_origins
-                            .insert(pk.to_x_only_pubkey(), (pk.master_fingerprint(), path));
-                    }
+                    data.key_origins.insert(pk.to_x_only_pubkey(), key_origin(pk));
                 }
                 Placeholder::SchnorrSigPkHash(pkh, tap_leaf_hash, _) => {
                     data.spend_type = Some(SpendType::ScriptSpend { leaf_hash: *tap_leaf_hash });
                     // Resolve the hashed key back to a key and record its origin so the
                     // signer discovers it.
                     if let Some(origin) = hash_to_keys.get(pkh) {
-                        if let Some(key_source) = origin.key_source.clone() {
-                            data.key_origins.insert(origin.key.to_x_only_pubkey(), key_source);
-                        }
+                        data.key_origins
+                            .insert(origin.key.to_x_only_pubkey(), origin.key_source.clone());
                     }
                 }
                 Placeholder::EcdsaSigPk(pk) => {
-                    let public_key = pk.to_public_key();
-                    for derivation_path in pk.full_derivation_paths() {
-                        input
-                            .bip32_derivations
-                            .insert(public_key, (pk.master_fingerprint(), derivation_path));
-                    }
+                    input.bip32_derivations.insert(pk.to_public_key(), key_origin(pk));
                 }
                 // Raw taproot `pk_h` templates also contain this placeholder (pairing with
                 // `SchnorrSigPkHash`), where the hash resolves to a Schnorr key: it must not
@@ -311,9 +311,9 @@ impl Input {
                     // Resolve the hashed key back to a key and record its origin so the
                     // signer discovers it.
                     if let Some(origin) = hash_to_keys.get(pkh) {
-                        if let Some(key_source) = origin.key_source.clone() {
-                            input.bip32_derivations.insert(origin.key.to_public_key(), key_source);
-                        }
+                        input
+                            .bip32_derivations
+                            .insert(origin.key.to_public_key(), origin.key_source.clone());
                     }
                 }
                 _ => {}
@@ -3265,6 +3265,33 @@ mod test {
         }
 
         #[test]
+        fn input_wpkh_raw_key_records_master_path() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let raw_pk = PublicKey::new(
+                xpriv
+                    .derive_priv(&secp, &DerivationPath::from_str("m/0").unwrap())
+                    .unwrap()
+                    .to_keypair(&secp)
+                    .public_key(),
+            );
+            // A raw key: hex only, no origin info.
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("wpkh({})", raw_pk))
+                    .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let descriptor_key = descriptor.iter_pk().next().unwrap();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // Raw keys have no derivation path: the master path is recorded so the
+            // signer can fall back to a pubkey lookup.
+            let expected =
+                KeySource::from((descriptor_key.master_fingerprint(), DerivationPath::master()));
+            assert_eq!(input.bip32_derivations.get(&raw_pk), Some(&expected));
+        }
+
+        #[test]
         fn input_tr_key_spend() {
             let secp = Secp256k1::new();
             let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
@@ -3286,6 +3313,28 @@ mod test {
             assert!(input.tap_scripts.is_empty());
             // A key-spend plan records no leaf hashes.
             assert_eq!(input.tap_key_origins.get(&xonly), Some(&(Vec::new(), key_source)));
+        }
+
+        #[test]
+        fn input_tr_raw_key_records_master_path() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            // A raw key: hex only, no origin info.
+            let xonly = XOnlyPublicKey::from(xpub.public_key);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("tr({})", xonly)).unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let descriptor_key = descriptor.iter_pk().next().unwrap();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // Raw keys have no derivation path: the master path is recorded (with no
+            // leaf hashes, key spend) so the signer can fall back to a pubkey lookup.
+            let expected =
+                KeySource::from((descriptor_key.master_fingerprint(), DerivationPath::master()));
+            assert_eq!(input.tap_key_origins.get(&xonly), Some(&(Vec::new(), expected)));
+            assert_eq!(input.tap_internal_key, Some(xonly));
         }
 
         #[test]
