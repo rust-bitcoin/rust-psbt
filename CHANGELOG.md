@@ -2,48 +2,53 @@
 
 ## [Unreleased]
 
-- Fix the Finalizer checking `after()` against the input's own required lock time instead of the transaction's
-  lock time, which BIP-370 determines from all inputs, and satisfying `after()` on an input whose sequence is final.
+## 0.4.0 - Unreleased
 
-- Fix v0 decoding rejecting an unsigned transaction whose version is not 0 or 2, which BIP-174 allows.
+The 0.4.0 release is a near-complete rewrite of the crate. The role-based
+v2 API is now the primary interface, the v0 module has been reduced to
+serialization-only, and the old serialization module is replaced by the new
+sans-I/O encoding.
 
-- Fix `Psbt::deserialize` rejecting PSBTv2 outputs whose `PSBT_OUT_SCRIPT` value is empty (BIP-370 requires the key's
-  presence, not a non-empty scriptPubKey). Remove `output::ValidationError::MissingScriptPubkey`; missing
-  `PSBT_OUT_SCRIPT` is now detected during decoding via `output::DecodeError::MissingScriptPubkey`.
+The MSRV remains at 1.74.0, but the main `bitcoin` and `miniscript` dependencies
+have been upgraded. `bitcoin` went from `0.32.8` to `0.32.102` and enabled the
+new `encoding` feature. `miniscript` went from `12.3.5` to `13.2.0`.
 
-- Handle multi-byte `keytype`s [#94](https://github.com/rust-bitcoin/rust-psbt/pull/94).
-- Bump miniscript to `v13.0.0`.
-- Insource psbt related changes from `miniscript@13.0.0` [#163](https://git.rust-bitcoin.org/rust-bitcoin/rust-psbt/pulls/163): 
-    - Fix: skip re-finalizing PSBT inputs that already have `final_script_sig` or `final_script_witness` which could
-    cause a failure if re-finalized [rust-miniscript#960](https://github.com/rust-bitcoin/rust-miniscript/pull/960).
-    - Replace `descriptor::ConversionError` by `descriptor::NonDefiniteKeyError`. The `Error` variant in the return
-    type of the `update_with_descriptor_unchecked` methods from `PsbtInputExt` and `PsbtOutputExt` is
-    `descriptor::NonDefiniteKeyError` from now on.
-    - Remove `PartialOrd, Ord, Hash, Clone, Copy` derivations from `OutputUpdateError` and `UtxoUpdateError`.
-    - `PsbtInputSatisfier` no longer exposes the `psbt` and `index` fields publicly. Now the accessors are the methods
-    `psbt` for the inner PSBT and `psbt_input` for the input the `PsbtInputSatisfier` is applied on.
-    - Update `miniscript::Satisfier.lookup_tap_key_spend_sig` impl for `v0::miniscript::PsbtInputSatisfier` and
-    `v2::miniscript::InputSatisfier`. Now `lookup_tap_key_spend_sig` takes a public key as parameter.
-    - Make `Translator.pk` impl for `KeySourceLookUp` infallible. The output is still wrapped in a `Result`, unwrapping
-    it will always return the successful variant. 
-- Bump miniscript to `v13.1.0`.
-- Insource psbt related changes from `miniscript@13.1.0` [#180](https://git.rust-bitcoin.org/rust-bitcoin/rust-psbt/pulls/180): 
-    - Create `PlanExt` public trait and implement `update_psbt_input` copying the code from `miniscript::plan::Plan.update_psbt_input`.
-- `Psbt.signer_checks` related changes [#186](https://git.rust-bitcoin.org/rust-bitcoin/rust-psbt/pulls/186):
-    - Fix malformed `P2SH-P2WSH` checks.
-    - Remove `SignerChecksError`.
-    - Add new `SignError` variants:
-        - `NonWitnessSig`.
-        - `NonWitnessUtxoTxidMismatch`.
-        - `WitnessAndNonWitnessUtxo`.
-        - `RedeemScriptMismatch`.
-        - `MissingTxOut`.
-        - `WitnessScriptMismatchWsh`.
-        - `WitnessScriptMismatchShWsh`.
-        - `SigHashMismatch`.
-    - Added `index: usize` parameter to `signer_checks` method. Now it can be executed on individual inputs.
-    - Change `signer_checks` error return type from `SignerChecksError` to `SignError`.
-    - Execute `Psbt.signer_checks` before any `Psbt.sign` operation. The `Psbt.sign` call can now fail with the new `SignError` variants.
+### V2 Roles are the Primary API
+
+The `Psbt` type at the crate root is now a v2 PSBT. The v0 module is private and
+reduced to codec-only: deserialize v0 bytes with `PsbtV0Decoder`, manipulate as
+v2, and serialize back to v0 with `PsbtV0Encoder` (with a `Degraded` marker for
+the lossy v2 to v0 direction). See the [deprecation ADR] for rationale.
+
+The roles are now the primary interface to build a PSBT. There are five
+always-available roles: `Creator` starts a blank PSBT, `Constructor` fills
+in the inputs and outputs, `Updater` can changes some data in the inputs and
+outputs, `Signer` produces and adds signatures (see the [signer ADR]), and
+`Extractor` pulls out the final signed transaction. A sixth role, `Finalizer`,
+completes the signature data into final scripts and is available under the
+`miniscript` feature.
+
+[deprecation ADR]: docs/adr/0001_deprecate_v0_api.md
+[signer ADR]: docs/adr/0002_signer_design.md
+
+### Encoding
+
+A new sans-I/O, `no_std` compatible encoding system replaces the
+old serialization via the `bitcoin_consensus_encoding` crate. The
+`PsbtEncode`/`PsbtDecode` traits produce and consume the canonical PSBT wire
+format.
+
+`Psbt` exposes inherent convenience methods, `deserialize(bytes)` and
+`serialize()`, for the common cases. For callers who need to drive I/O
+themselves (synchronous, asynchronous, or embedded) the `PsbtV2Decoder`
+and `PsbtV2Encoder` types implement the `bitcoin_consensus_encoding` sans-I/O
+`Decoder`/`Encoder` interfaces.
+
+### Release Candidates
+
+#### [0.4.0-rc.1] - 2026-11-20
+
+- The initial release candidate for 0.4.0.
 
 ## [0.3.0] - 2026-03-24
 
@@ -82,14 +87,15 @@ Includes some fixes required to enable porting `bdk` to use the `v0` module.
 - Add initial basic integration testing against Bitcoin Core [#21](https://github.com/tcharding/rust-psbt/pull/21)
   and [#22](https://github.com/tcharding/rust-psbt/pull/22)
 
-## [0.1.0-beta.0]- 2024-02-02
+## [0.1.0-beta.0] - 2024-02-02
 
 The initial beta release. The aim of this release is to make the new PSBT v2 API available for beta
 testing. Currently we expose the v0 API pretty much as it is in `rust-bitcoin` and `rust-miniscript`.
 
 Enjoy!
 
-[Unreleased]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.3.0...HEAD
+[Unreleased]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.4.0-rc.1...HEAD
+[0.4.0-rc.1]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.3.0...psbt-v2-0.4.0-rc.1
 [0.3.0]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.2.0...psbt-v2-0.3.0
 [0.2.0]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.1.1...psbt-v2-0.2.0
 [0.1.1]: https://github.com/rust-bitcoin/rust-psbt/compare/psbt-v2-0.1.0...psbt-v2-0.1.1
