@@ -406,6 +406,10 @@ impl core::ops::Deref for FinalizedPsbt {
     fn deref(&self) -> &Psbt { &self.0 }
 }
 
+impl AsRef<Psbt> for FinalizedPsbt {
+    fn as_ref(&self) -> &Psbt { &self.0 }
+}
+
 /// A PSBT input provably ready for finalization
 ///
 /// Only constructible via [`Finalizer::finalizable_input`], so its existence witnesses that the

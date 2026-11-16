@@ -714,6 +714,10 @@ impl core::ops::Deref for ResolvedPsbt {
     fn deref(&self) -> &Psbt { &self.inner }
 }
 
+impl AsRef<Psbt> for ResolvedPsbt {
+    fn as_ref(&self) -> &Psbt { &self.inner }
+}
+
 impl ResolvedPsbt {
     /// Creates a `ResolvedPsbt` from a PSBT and its pre-computed locktime.
     ///
