@@ -324,7 +324,7 @@ impl Psbt {
     /// [`Extractor::new`](crate::Extractor::new). If you need to inspect or
     /// modify the PSBT before resolving the locktime, use
     /// [`deserialize_unresolved`](Self::deserialize_unresolved) followed by
-    /// [`resolve`](Self::try_resolve).
+    /// [`try_resolve`](Self::try_resolve).
     ///
     /// Returns an error if the input contains trailing bytes after the PSBT.
     ///
@@ -700,14 +700,27 @@ impl std::error::Error for CombineError {
 
 /// A PSBT whose lock time has been resolved.
 ///
-/// Created via [`Psbt::try_resolve`], a `ResolvedPsbt` caches the lock time so that downstream
-/// roles can assert determinability at construction time rather than deferring the check.
+/// Created via [`Psbt::try_resolve`] or [`Psbt::deserialize`], a `ResolvedPsbt` caches the
+/// lock time so that downstream roles can assert determinability at construction time rather
+/// than deferring the check.
+///
+/// A `ResolvedPsbt` [`Deref`](core::ops::Deref)s to [`Psbt`], so all `&self` methods on [`Psbt`],
+/// like serialization and the raw field accessors, are available directly on `ResolvedPsbt`.
+///
+/// # Lifecycle
+///
+/// Created from a [`Psbt`] via [`Psbt::try_resolve`] or from bytes via [`Psbt::deserialize`]. From
+/// there it moves into a role or back to a raw [`Psbt`] via [`into_psbt`](Self::into_psbt).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedPsbt {
     pub(crate) inner: Psbt,
     lock_time: absolute::LockTime,
 }
 
+/// Makes the inner [`Psbt`] accessible through `Deref` coercion and auto-deref.
+///
+/// All `&self` methods on [`Psbt`] can be called directly on a `ResolvedPsbt`,
+/// and `&ResolvedPsbt` coerces to `&Psbt` at function call sites.
 impl core::ops::Deref for ResolvedPsbt {
     type Target = Psbt;
 
@@ -733,10 +746,16 @@ impl ResolvedPsbt {
     /// Returns the resolved lock time.
     pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
 
-    /// Consumes the proof and returns the underlying [`Psbt`].
+    /// Consumes the `ResolvedPsbt` and returns the underlying [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.inner }
 
     /// Returns this PSBT's unique identification.
+    ///
+    /// Per [BIP-370], the PSBT identifier is the txid of the unsigned transaction with all
+    /// input sequences zeroed and silent-payment output scripts replaced by their
+    /// `sp_v0_info` (scan key + spend key).
+    ///
+    /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#unique-identification>
     pub fn id(&self) -> Txid {
         let mut tx = self.unsigned_tx();
         tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
@@ -746,10 +765,12 @@ impl ResolvedPsbt {
 
     /// Creates an unsigned transaction from the inner [`Psbt`].
     ///
-    /// Quidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
-    /// use [`Self::id`] instead. `id` zeroes the input sequences and uses the identification
-    /// form of the outputs, so `unsigned_tx().compute_txid()` differs from [`Self::id`] in
-    /// general.
+    /// Cuidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
+    /// use [`Self::id`] instead. Per [BIP-370], `id` zeroes the input sequences and uses the
+    /// identification form of the outputs, so `unsigned_tx().compute_txid()` differs from
+    /// [`Self::id`] in general.
+    ///
+    /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#unique-identification>
     pub fn unsigned_tx(&self) -> Transaction {
         Transaction {
             version: self.global.tx_version,
