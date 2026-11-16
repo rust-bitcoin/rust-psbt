@@ -1448,4 +1448,21 @@ mod tests {
 
         assert_eq!(psbt.inputs[0].sighash_mismatch(), None);
     }
+
+    #[test]
+    fn resolved_lock_time() {
+        let resolved = single_input_psbt().try_resolve().unwrap();
+        assert_eq!(resolved.lock_time(), absolute::LockTime::ZERO);
+    }
+
+    #[cfg(feature = "base64")]
+    #[test]
+    fn resolved_display_base64() {
+        use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
+        let resolved = single_input_psbt().try_resolve().unwrap();
+        let displayed = alloc::format!("{}", resolved);
+        assert!(!displayed.is_empty());
+        let decoded = BASE64_STANDARD.decode(&displayed).expect("valid base64");
+        assert_eq!(decoded, encode_to_vec(&resolved));
+    }
 }

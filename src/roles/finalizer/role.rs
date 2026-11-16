@@ -625,3 +625,44 @@ impl fmt::Display for InputError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::{format, vec};
+
+    use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut};
+
+    use super::*;
+    use crate::map::Count;
+    use crate::psbt::{Psbt, ResolvedPsbt};
+    use crate::{Global, Input, Output};
+
+    #[cfg(feature = "base64")]
+    #[test]
+    fn display_produces_non_empty_base64() {
+        use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
+
+        use crate::encoding::encode_to_vec;
+
+        let psbt = Psbt {
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
+            },
+            inputs: vec![Input::new(&OutPoint::null())],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        };
+        let lock_time = psbt.determine_lock_time().unwrap();
+        let resolved = ResolvedPsbt::from_parts(psbt, lock_time);
+        let finalized = FinalizedPsbt(resolved);
+        let displayed = format!("{}", finalized);
+        assert!(!displayed.is_empty());
+        let decoded = BASE64_STANDARD.decode(&displayed).expect("valid base64");
+        assert_eq!(decoded, encode_to_vec(&finalized));
+    }
+}
