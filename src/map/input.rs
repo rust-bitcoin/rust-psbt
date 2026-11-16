@@ -269,20 +269,16 @@ impl Input {
             match item {
                 Placeholder::TapScript(script) => data.tap_script = Some(script.clone()),
                 Placeholder::TapControlBlock(cb) => data.control_block = Some(cb.clone()),
-                Placeholder::SchnorrSigPk(pk, SchnorrSigType::KeySpend { .. }, _)
-                    if data.spend_type.is_none() =>
-                {
-                    data.spend_type =
-                        Some(SpendType::KeySpend { internal_key: pk.to_x_only_pubkey() });
-                    for path in pk.full_derivation_paths() {
-                        data.key_origins
-                            .insert(pk.to_x_only_pubkey(), (pk.master_fingerprint(), path));
-                    }
-                }
-                Placeholder::SchnorrSigPk(pk, SchnorrSigType::ScriptSpend { leaf_hash }, _)
-                    if data.spend_type.is_none() =>
-                {
-                    data.spend_type = Some(SpendType::ScriptSpend { leaf_hash: *leaf_hash });
+                Placeholder::SchnorrSigPk(pk, schnorr_sig_type, _) => {
+                    let spend_type = match schnorr_sig_type {
+                        SchnorrSigType::KeySpend { .. } =>
+                            SpendType::KeySpend { internal_key: pk.to_x_only_pubkey() },
+                        SchnorrSigType::ScriptSpend { leaf_hash } =>
+                            SpendType::ScriptSpend { leaf_hash: *leaf_hash },
+                    };
+                    // The first placeholder selects the spend type; every placeholder
+                    // records its key origin.
+                    data.spend_type.get_or_insert(spend_type);
                     for path in pk.full_derivation_paths() {
                         data.key_origins
                             .insert(pk.to_x_only_pubkey(), (pk.master_fingerprint(), path));
@@ -3342,6 +3338,49 @@ mod test {
             assert_eq!(leaf_hashes, &Vec::from([leaf_hash]));
             assert_eq!(source.1, DerivationPath::from_str("m/0/2").unwrap());
             assert_eq!(input.tap_scripts.len(), 1);
+        }
+
+        #[test]
+        fn input_multi_a_records_all_key_origins() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "tr({}/0/0,multi_a(2,{}/0/1,{}/0/2))",
+                xpub, xpub, xpub
+            ))
+            .unwrap();
+
+            // Script-spend-only assets force the plan onto the `multi_a` leaf.
+            let script_spend_only = CanSign {
+                ecdsa: false,
+                taproot: TaprootCanSign {
+                    key_spend: false,
+                    script_spend: TaprootAvailableLeaves::Any,
+                    sighash_default: true,
+                },
+            };
+            let mut assets = Assets::new();
+            for path in ["m/0/1", "m/0/2"] {
+                let source = KeySource::from((
+                    xpriv.fingerprint(&secp),
+                    DerivationPath::from_str(path).unwrap(),
+                ));
+                assets.keys.insert((source, script_spend_only.clone()));
+            }
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // The signer only signs keys listed in `tap_key_origins`, so every key
+            // of the planned `multi_a` leaf needs an entry.
+            assert_eq!(input.tap_key_origins.len(), 2);
+            for path in ["m/0/1", "m/0/2"] {
+                let source = KeySource::from((
+                    xpriv.fingerprint(&secp),
+                    DerivationPath::from_str(path).unwrap(),
+                ));
+                assert!(input.tap_key_origins.values().any(|(_, s)| s == &source));
+            }
         }
 
         #[test]
