@@ -247,6 +247,9 @@ impl Input {
         }
         if let Some(lock_time) = plan.relative_timelock {
             input.sequence = Some(lock_time.to_sequence());
+        } else if plan.absolute_timelock.is_some() {
+            // CLTV requires a non-final sequence for the input; enable lock time without RBF.
+            input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
         }
 
         // Map from both the ECDSA and the Schnorr hash of every descriptor key to the key and
@@ -3361,8 +3364,8 @@ mod test {
                 Some(RequiredHeightLockTime::from_consensus(100).unwrap())
             );
             assert_eq!(input.min_time, None);
-            // An absolute timelock alone does not enable a relative lock time.
-            assert_eq!(input.sequence, None);
+            // The finalizer's `check_after` requires a non-final sequence.
+            assert_eq!(input.sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
             assert!(input.witness_script.is_some());
         }
 
@@ -3538,7 +3541,8 @@ mod test {
 
             assert_eq!(input.min_time, Some(time));
             assert_eq!(input.min_height, None);
-            assert_eq!(input.sequence, None);
+            // The finalizer's `check_after` requires a non-final sequence.
+            assert_eq!(input.sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
             assert!(input.witness_script.is_some());
         }
 
