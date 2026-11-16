@@ -22,6 +22,8 @@ use bitcoin_consensus_encoding::{
     ArrayEncoder, ByteVecDecoder, CompactSizeEncoder, Decode, Decoder, DecoderStatus, Encoder,
     Encoder2, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
+#[cfg(feature = "miniscript")]
+use miniscript::{BareCtx, Descriptor, Legacy, Miniscript, Segwitv0};
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::por_commitment::PorCommitment;
@@ -57,6 +59,8 @@ use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
 use crate::tap_key_origin::TapKeyOriginDecoder;
+#[cfg(feature = "miniscript")]
+use crate::InputError;
 use crate::SignError;
 
 /// A key-value map for an input of the corresponding index in the unsigned
@@ -425,13 +429,24 @@ impl Input {
 
     /// Returns true if this input has been finalized.
     ///
+    /// From BIP 174's Input Finalizer section:
+    /// > If scriptSig is empty for an input, 0x07 should remain unset rather than assigned an empty
+    /// > array.
+    /// > Likewise, if no scriptWitness exists for an input, 0x08 should remain unset rather than
+    /// > assigned an empty array.
+    ///
+    /// From BIP 174's Extractor section:
     /// > It checks whether all inputs have complete scriptSigs and scriptWitnesses by checking for
     /// > the presence of 0x07 Finalized scriptSig and 0x08 Finalized scriptWitness typed records.
     ///
     /// Only one of the two records is required. An input spending a legacy output has no final
     /// script witness, and an input with a final script witness may have no final script sig.
+    ///
+    /// An explicitly empty record, which BIP-174 forbids, does not count, matching Bitcoin
+    /// Core's `PSBTInputSigned`.
     pub fn is_finalized(&self) -> bool {
-        self.final_script_sig.is_some() || self.final_script_witness.is_some()
+        self.final_script_sig.as_ref().is_some_and(|s| !s.is_empty())
+            || self.final_script_witness.as_ref().is_some_and(|w| !w.is_empty())
     }
 
     /// Returns true if this input carries any signature data.
@@ -472,6 +487,8 @@ impl Input {
     /// The required type is `PSBT_IN_SIGHASH_TYPE` when set. Otherwise signatures must use
     /// `SIGHASH_DEFAULT` or `SIGHASH_ALL`, so a type that does not commit to every output, such as
     /// `SIGHASH_NONE`, needs an explicit `PSBT_IN_SIGHASH_TYPE`.
+    /// `SIGHASH_ALL|ANYONECANPAY` also requires an explicit `PSBT_IN_SIGHASH_TYPE`, even though it
+    /// commits to every output.
     #[cfg(feature = "miniscript")]
     pub(crate) fn sighash_mismatch(&self) -> Option<(SignatureSource, PsbtSighashType)> {
         let ecdsa = self.partial_sigs.iter().map(|(pubkey, sig)| {
@@ -492,6 +509,10 @@ impl Input {
     }
 
     /// Combines this [`Input`] with `other`.
+    ///
+    /// A finalized `self` is terminal: only unknown and proprietary fields merge into it.
+    /// Combining fails if `other` is finalized and `self` is not; see
+    /// [`CombineError::OtherFinalized`] for how to recover.
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         if self.previous_txid != other.previous_txid {
             return Err(CombineError::PreviousTxidMismatch {
@@ -553,6 +574,19 @@ impl Input {
             }
         }
 
+        // Adopting foreign final scripts without validation is unsound: the finalizer must
+        // produce final scripts from the merged signing material instead.
+        if other.is_finalized() && !self.is_finalized() {
+            return Err(CombineError::OtherFinalized);
+        }
+
+        v2_combine_map!(proprietaries, self, other);
+        v2_combine_map!(unknowns, self, other);
+
+        if self.is_finalized() {
+            return Ok(());
+        }
+
         // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
         // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
         // when combining, an explicit Sequence::MAX is viewed as a decision by the user, and
@@ -584,10 +618,152 @@ impl Input {
         v2_combine_map!(sp_ecdh_shares, self, other);
         #[cfg(feature = "silent-payments")]
         v2_combine_map!(sp_dleq_proofs, self, other);
-        v2_combine_map!(proprietaries, self, other);
-        v2_combine_map!(unknowns, self, other);
 
         Ok(())
+    }
+
+    /// Creates a descriptor from an unfinalized PSBT input.
+    ///
+    /// Also sanity checks that the witness script and redeem script are consistent with the script
+    /// pubkey.
+    /// Does *not* check signatures.
+    /// Scripts failing the miniscript sanity checks, like uncompressed keys in a segwit context,
+    /// cannot be finalized even though they are consensus-valid.
+    #[cfg(feature = "miniscript")]
+    pub(crate) fn get_descriptor(&self) -> Result<Descriptor<bitcoin::PublicKey>, InputError> {
+        // Use BIP32 Derivation to get set of all possible keys.
+        let map: BTreeMap<hash160::Hash, bitcoin::PublicKey> = self
+            .bip32_derivations
+            .keys()
+            .map(|key| (key.pubkey_hash().to_raw_hash(), *key))
+            .collect();
+
+        // Figure out Scriptpubkey
+        let script_pubkey = &self.funding_utxo().expect("guaranteed by Finalizer").script_pubkey;
+
+        // 1. `PK`: creates a `Pk` descriptor(does not check if partial sig is given)
+        if script_pubkey.is_p2pk() {
+            let script_pubkey_len = script_pubkey.len();
+            let pk_bytes = &script_pubkey.to_bytes();
+            match bitcoin::PublicKey::from_slice(&pk_bytes[1..script_pubkey_len - 1]) {
+                Ok(pk) => Ok(Descriptor::new_pk(pk)),
+                Err(e) => Err(InputError::KeyErr(e)),
+            }
+        } else if script_pubkey.is_p2pkh() {
+            // 2. `Pkh`: creates a `PkH` descriptor if partial_sigs has the corresponding pk
+            let (pk, _) = self
+                .partial_sigs
+                .iter()
+                .find(|&(pk, _sig)| script_pubkey.as_bytes()[3..23] == pk.pubkey_hash()[..])
+                .ok_or(InputError::MissingPubkey)?;
+            Descriptor::new_pkh(*pk).map_err(InputError::MiniscriptError)
+        } else if script_pubkey.is_p2wpkh() {
+            // 3. `Wpkh`: creates a `wpkh` descriptor if the partial sig has corresponding pk.
+            let (pk, _) = self
+                .partial_sigs
+                .iter()
+                .find(|&(pk, _)| {
+                    bitcoin::key::CompressedPublicKey::try_from(*pk)
+                        .map(|compressed| {
+                            compressed.pubkey_hash()[..] == script_pubkey.as_bytes()[2..22]
+                        })
+                        .unwrap_or(false)
+                })
+                .ok_or(InputError::MissingPubkey)?;
+            Descriptor::new_wpkh(*pk).map_err(InputError::MiniscriptError)
+        } else if script_pubkey.is_p2wsh() {
+            // 4. `Wsh`: creates a `Wsh` descriptor
+            if self.redeem_script.is_some() {
+                return Err(InputError::NonEmptyRedeemScript);
+            }
+            if let Some(ref witness_script) = self.witness_script {
+                if witness_script.to_p2wsh() != *script_pubkey {
+                    return Err(InputError::InvalidWitnessScript {
+                        witness_script: witness_script.clone(),
+                        p2wsh_expected: script_pubkey.clone(),
+                    });
+                }
+                let ms =
+                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)
+                        .map_err(InputError::MiniscriptError)?;
+                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))
+                    .map_err(InputError::MiniscriptError)?)
+            } else {
+                Err(InputError::MissingWitnessScript)
+            }
+        } else if script_pubkey.is_p2sh() {
+            match self.redeem_script {
+                None => Err(InputError::MissingRedeemScript),
+                Some(ref redeem_script) => {
+                    if redeem_script.to_p2sh() != *script_pubkey {
+                        return Err(InputError::InvalidRedeemScript {
+                            redeem: redeem_script.clone(),
+                            p2sh_expected: script_pubkey.clone(),
+                        });
+                    }
+                    if redeem_script.is_p2wsh() {
+                        // 5. `ShWsh` case
+                        if let Some(ref witness_script) = self.witness_script {
+                            if witness_script.to_p2wsh() != *redeem_script {
+                                return Err(InputError::InvalidWitnessScript {
+                                    witness_script: witness_script.clone(),
+                                    p2wsh_expected: redeem_script.clone(),
+                                });
+                            }
+                            let ms = Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(
+                                witness_script,
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))
+                                .map_err(InputError::MiniscriptError)?)
+                        } else {
+                            Err(InputError::MissingWitnessScript)
+                        }
+                    } else if redeem_script.is_p2wpkh() {
+                        // 6. `ShWpkh` case
+                        let (pk, _) = self
+                            .partial_sigs
+                            .iter()
+                            .find(|&(&pk, _sig)| {
+                                bitcoin::key::CompressedPublicKey::try_from(pk)
+                                    .map(|compressed| {
+                                        compressed.pubkey_hash()[..]
+                                            == redeem_script.as_bytes()[2..22]
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .ok_or(InputError::MissingPubkey)?;
+                        Ok(Descriptor::new_sh_wpkh(*pk).map_err(InputError::MiniscriptError)?)
+                    } else {
+                        //7. regular p2sh
+                        if self.witness_script.is_some() {
+                            return Err(InputError::NonEmptyWitnessScript);
+                        }
+                        if let Some(ref redeem_script) = self.redeem_script {
+                            let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_consensus(
+                                redeem_script,
+                            )
+                            .map_err(InputError::MiniscriptError)?;
+                            Ok(Descriptor::new_sh(ms).map_err(InputError::MiniscriptError)?)
+                        } else {
+                            Err(InputError::MissingWitnessScript)
+                        }
+                    }
+                }
+            }
+        } else {
+            // 8. Bare case
+            if self.witness_script.is_some() {
+                return Err(InputError::NonEmptyWitnessScript);
+            }
+            if self.redeem_script.is_some() {
+                return Err(InputError::NonEmptyRedeemScript);
+            }
+            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)
+                .map_err(InputError::MiniscriptError)?;
+            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))
+                .map_err(InputError::MiniscriptError)?)
+        }
     }
 }
 
@@ -2015,6 +2191,14 @@ pub enum CombineError {
         /// The output at the spent output index of the `non_witness_utxo` transaction.
         non_witness: TxOut,
     },
+    /// `other` is finalized while `self` is not.
+    ///
+    /// Adopting foreign final scripts without validation is unsound. Validate `other`'s
+    /// finalized inputs with the Finalizer's interpreter check
+    /// (`Finalizer::check_finalized_inputs`), then retry the combine in the opposite
+    /// direction, where the finalized inputs are terminal and kept as-is. The offending
+    /// inputs can be found with [`Input::is_finalized`].
+    OtherFinalized,
 }
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2039,6 +2223,8 @@ impl fmt::Display for CombineError {
                 "combine two PSBTs with conflicting witness and non-witness UTXOs: {:?} {:?}",
                 witness, non_witness
             ),
+            Self::OtherFinalized =>
+                write!(f, "cannot merge a finalized input into an unfinalized input"),
         }
     }
 }
@@ -2051,7 +2237,8 @@ impl std::error::Error for CombineError {
             | Self::SpentOutputIndexMismatch { .. }
             | Self::WitnessUtxoMismatch { .. }
             | Self::NonWitnessUtxoMismatch { .. }
-            | Self::UtxoMismatch { .. } => None,
+            | Self::UtxoMismatch { .. }
+            | Self::OtherFinalized => None,
         }
     }
 }
@@ -2268,6 +2455,51 @@ mod test {
     }
 
     #[test]
+    fn combine_keeps_finalized_input_terminal() {
+        let mut a = Input::new(&out_point());
+        a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+
+        let mut b = Input::new(&out_point());
+        b.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
+        b.sequence = Some(Sequence::from_consensus(10));
+        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+
+        a.combine(b).expect("combining into a finalized input keeps self");
+
+        assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
+        assert!(a.final_script_sig.is_none(), "final scripts of self must be kept");
+        assert!(a.sequence.is_none(), "nothing but unknowns and proprietaries may merge");
+        assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
+    }
+
+    #[test]
+    fn combine_rejects_finalized_other() {
+        let mut a = Input::new(&out_point());
+        a.sequence = Some(Sequence::from_consensus(10));
+        let before = a.clone();
+
+        let mut b = Input::new(&out_point());
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+
+        assert!(matches!(a.combine(b), Err(CombineError::OtherFinalized)));
+        assert_eq!(a, before, "the error must leave self untouched");
+    }
+
+    #[test]
+    fn combine_two_finalized_inputs_keeps_self() {
+        let mut a = Input::new(&out_point());
+        a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+
+        let mut b = Input::new(&out_point());
+        b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
+
+        a.combine(b).expect("both finalized: self is kept");
+        assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
+    }
+
+    #[test]
     fn decode_non_witness_utxo_mismatched_txid() {
         // A non-witness UTXO whose txid does not match the previous txid is invalid.
         let funding_tx = Transaction {
@@ -2389,6 +2621,26 @@ mod test {
         assert_eq!(finalized.unknowns, input.unknowns);
     }
 
+    #[test]
+    fn is_finalized_requires_a_non_empty_final_record() {
+        let mut input = Input::new(&out_point());
+        assert!(!input.is_finalized());
+
+        // An explicitly empty witness record, which BIP-174 forbids, does not count.
+        input.final_script_witness = Some(Witness::new());
+        assert!(!input.is_finalized());
+
+        input.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        assert!(input.is_finalized());
+
+        let mut legacy = Input::new(&out_point());
+        legacy.final_script_sig = Some(ScriptBuf::new());
+        assert!(!legacy.is_finalized(), "an empty script sig record must not count as finalized");
+
+        legacy.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
+        assert!(legacy.is_finalized());
+    }
+
     #[cfg(feature = "miniscript")]
     #[cfg(feature = "silent-payments")]
     #[test]
@@ -2432,6 +2684,58 @@ mod test {
         assert!(finalized.partial_sigs.is_empty());
         assert!(finalized.sighash_type.is_none());
         assert!(finalized.bip32_derivations.is_empty());
+    }
+
+    #[cfg(feature = "miniscript")]
+    fn dummy_sig() -> ecdsa::Signature {
+        ecdsa::Signature {
+            signature: bitcoin::secp256k1::ecdsa::Signature::from_compact(&[1u8; 64]).unwrap(),
+            sighash_type: EcdsaSighashType::All,
+        }
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn get_descriptor_p2pk() {
+        let pk = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let mut input = Input::new(&out_point());
+        input.witness_utxo =
+            Some(TxOut { value: Amount::from_sat(1_000), script_pubkey: ScriptBuf::new_p2pk(&pk) });
+
+        let desc = input.get_descriptor().expect("p2pk input must yield a pk descriptor");
+        assert_eq!(desc, Descriptor::new_pk(pk));
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn get_descriptor_p2pkh_matches_sig_key() {
+        let pk = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(TxOut {
+            value: Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new_p2pkh(&pk.pubkey_hash()),
+        });
+        input.partial_sigs.insert(pk, dummy_sig());
+
+        let desc =
+            input.get_descriptor().expect("matching partial sig must yield a pkh descriptor");
+        assert_eq!(desc, Descriptor::new_pkh(pk).unwrap());
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn get_descriptor_sh_wpkh_matches_sig_key() {
+        let pk = PublicKey::from_slice(&[2u8; 33]).unwrap();
+        let redeem_script = ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap());
+        let mut input = Input::new(&out_point());
+        input.witness_utxo =
+            Some(TxOut { value: Amount::from_sat(1_000), script_pubkey: redeem_script.to_p2sh() });
+        input.redeem_script = Some(redeem_script);
+        input.partial_sigs.insert(pk, dummy_sig());
+
+        let desc =
+            input.get_descriptor().expect("matching partial sig must yield an sh-wpkh descriptor");
+        assert_eq!(desc, Descriptor::new_sh_wpkh(pk).unwrap());
     }
 
     #[test]

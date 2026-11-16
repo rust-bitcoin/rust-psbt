@@ -13,22 +13,20 @@ use bitcoin::hashes::hash160;
 use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::sighash::Prevouts;
 use bitcoin::taproot::LeafVersion;
-use bitcoin::{
-    Address, Network, Script, ScriptBuf, Sequence, TxOut, Txid, Witness, XOnlyPublicKey,
-};
-use miniscript::{
-    interpreter, BareCtx, Descriptor, Interpreter, Legacy, Miniscript, Satisfier, Segwitv0,
-    SigType, Tap, ToPublicKey,
-};
+use bitcoin::{ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, XOnlyPublicKey};
+use miniscript::{interpreter, Interpreter, Miniscript, SigType, Tap, ToPublicKey};
 
 use super::satisfy::InputSatisfier;
 use crate::error::{write_err, FundingUtxoError};
 use crate::map::input::{FinalScripts, Input};
 use crate::psbt::{OutputType, Psbt, ResolvedPsbt};
 use crate::roles::{ExtractError, Extractor};
-use crate::SignatureSighashTypeError;
+use crate::{IndexOutOfBoundsError, SignatureSighashTypeError};
 
 /// Implements the BIP-370 Finalized role.
+///
+/// Only miniscript-expressible spending conditions can be finalized; consensus-valid scripts
+/// outside miniscript, like bare OP_TRUE, are rejected with [`InputError::MiniscriptError`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Finalizer(ResolvedPsbt);
 
@@ -58,32 +56,137 @@ impl Finalizer {
 
     /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
     ///
+    /// Inputs not already finalized are satisfied non-malleably; already-finalized inputs pass
+    /// through unchanged, whatever their malleability.
+    ///
+    /// Use [`Finalizer::finalize_inputs`] to set malleability per input.
+    ///
+    /// The whole PSBT is always validated with the interpreter check. On interpreter-check
+    /// failure the returned vec holds the single interpreter error.
+    ///
     /// Use [`FinalizedPsbt::psbt`] to extract the finalized [`Psbt`] for serialization, or
     /// [`FinalizedPsbt::extractor`] to transition to the [`Extractor`](crate::Extractor) role.
     pub fn finalize<C: Verification>(
         self,
         secp: &Secp256k1<C>,
-    ) -> Result<FinalizedPsbt, FinalizeError> {
-        let mut inputs = vec![];
-        for (input_index, input) in self.0.inputs.iter().enumerate() {
-            // Already-finalized inputs are passed through unchanged.
-            if input.is_finalized() {
-                inputs.push(input.clone());
-                continue;
+    ) -> Result<FinalizedPsbt, Vec<FinalizeError>> {
+        self.finalize_inputs(
+            (0..self.0.inputs.len())
+                .map(|index| FinalizableInput {
+                    finalizer: &self,
+                    input_index: index,
+                    malleable: false,
+                })
+                .collect(),
+            secp,
+        )
+        .and_then(|inputs| {
+            let lock_time = self.0.lock_time();
+            let mut psbt = self.0.into_psbt();
+            psbt.inputs = inputs;
+            let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
+
+            if let Err(err) = Self::interpreter_check(&finalized, secp) {
+                Err(vec![err])
+            } else {
+                Ok(FinalizedPsbt(finalized))
             }
-            match self.finalize_input(input) {
-                Ok(input) => inputs.push(input),
-                // TODO: Do we want to continue loop and return a vector of errors?
-                Err(error) => return Err(FinalizeError::Input { input_index, error }),
+        })
+    }
+
+    /// Finalizes the given inputs, each with its own malleability setting.
+    ///
+    /// Inputs not present in `inputs` are passed through unchanged, as are already-finalized
+    /// inputs. If the same index appears twice the last entry wins.
+    ///
+    /// Newly finalized inputs are validated with the interpreter check; pass-through inputs are
+    /// not.
+    ///
+    /// The PSBT may not be fully finalized after this call.
+    ///
+    /// # Returns
+    ///
+    /// Returns all inputs, the selected ones finalized, without modifying the original.
+    #[must_use = "returns the finalized inputs without modifying the original"]
+    pub fn finalize_inputs<'a, C: Verification>(
+        &'a self,
+        inputs: Vec<FinalizableInput<'a>>,
+        secp: &Secp256k1<C>,
+    ) -> Result<Vec<Input>, Vec<FinalizeError>> {
+        let selected: BTreeMap<usize, bool> =
+            inputs.into_iter().map(|input| (input.input_index, input.malleable)).collect();
+
+        let unsigned_tx = self.0.unsigned_tx();
+        let utxos: Vec<&TxOut> = self
+            .0
+            .iter_funding_utxos()
+            .map(|res| res.expect("Finalizer guarantees funding utxos"))
+            .collect();
+        let utxos = &Prevouts::All(&utxos);
+
+        let mut inputs = vec![];
+        let mut errors: Vec<FinalizeError> = vec![];
+        for (input_index, input) in self.0.inputs.iter().enumerate() {
+            // Already-finalized and unselected inputs are passed through unchanged.
+            let malleable = match (input.is_finalized(), selected.get(&input_index)) {
+                (false, Some(&malleable)) => malleable,
+                _ => {
+                    inputs.push(input.clone());
+                    continue;
+                }
+            };
+            match self.finalize_input(FinalizableInput { finalizer: self, input_index, malleable })
+            {
+                Ok(input) => {
+                    if let Err(error) = Self::interpreter_check_input(
+                        &unsigned_tx,
+                        utxos,
+                        input_index,
+                        &input,
+                        secp,
+                    ) {
+                        errors.push(error);
+                    } else {
+                        inputs.push(input);
+                    }
+                }
+                Err(error) => errors.push(error),
             }
         }
 
-        let lock_time = self.0.lock_time();
-        let mut psbt = self.0.into_psbt();
-        psbt.inputs = inputs;
-        let finalized = ResolvedPsbt::from_parts(psbt, lock_time);
-        Self::interpreter_check(&finalized, secp)?;
-        Ok(FinalizedPsbt(finalized))
+        if errors.is_empty() {
+            return Ok(inputs);
+        }
+
+        Err(errors)
+    }
+
+    /// Validates every finalized input of this PSBT with the interpreter check.
+    ///
+    /// Unfinalized inputs are skipped, so this validates a PSBT that has only been partially
+    /// finalized, e.g. one assembled from finalized inputs contributed by several parties. Use
+    /// [`Finalizer::finalize`] to validate a PSBT where every input is expected to be finalized.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error for the first finalized input that fails to interpret.
+    pub fn check_finalized_inputs<C: Verification>(
+        &self,
+        secp: &Secp256k1<C>,
+    ) -> Result<(), FinalizeError> {
+        let unsigned_tx = self.0.unsigned_tx();
+        let utxos: Vec<&TxOut> = self
+            .0
+            .iter_funding_utxos()
+            .map(|res| res.expect("Finalizer guarantees funding utxos"))
+            .collect();
+        let utxos = &Prevouts::All(&utxos);
+        for (index, input) in self.0.inputs.iter().enumerate() {
+            if input.is_finalized() {
+                Self::interpreter_check_input(&unsigned_tx, utxos, index, input, secp)?;
+            }
+        }
+        Ok(())
     }
 
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
@@ -96,50 +199,77 @@ impl Finalizer {
         secp: &Secp256k1<C>,
     ) -> Result<(), FinalizeError> {
         let unsigned_tx = psbt.unsigned_tx();
-
         let utxos: Vec<&TxOut> = psbt
             .iter_funding_utxos()
             .map(|res| res.expect("finalized PSBT has funding utxos"))
             .collect();
         let utxos = &Prevouts::All(&utxos);
-        let empty_witness = Witness::default();
-        let empty_script = ScriptBuf::new();
         for (index, input) in psbt.inputs.iter().enumerate() {
-            let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
-
-            // Use the resolved lock time from the unsigned transaction rather
-            // than per-input min_height/min_time fields, which may be None
-            // after a v0 roundtrip (the v0 format collapses them into the
-            // single nLockTime).
-            let cltv = unsigned_tx.lock_time;
-            // Assumed MAX if omitted.
-            let csv = input.sequence.unwrap_or(Sequence::MAX);
-
-            let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
-            let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
-
-            let interpreter =
-                Interpreter::from_txdata(spk, script_sig, witness, csv, cltv).map_err(|error| {
-                    FinalizeError::InterpreterConstructor { input_index: index, error }
-                })?;
-
-            let iter = interpreter.iter(secp, &unsigned_tx, index, utxos);
-            if let Some(error) = iter.filter_map(Result::err).next() {
-                return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
-            };
+            Self::interpreter_check_input(&unsigned_tx, utxos, index, input, secp)?;
         }
         Ok(())
     }
 
-    // `index` must be the input index of `input` which references an input in `self` - this gets rid of out-of-bounds error path.
-    fn finalize_input(&self, input: &Input) -> Result<Input, InputError> {
-        let allow_mall = true; // TODO: Add mall and no-mall versions.
-        let fields = self.final_script_sig_and_witness(input, allow_mall)?;
-        Ok(input.finalize(fields))
+    /// Interprets a single input and checks whether the script is correctly interpreted according
+    /// to the context.
+    fn interpreter_check_input<C: Verification>(
+        unsigned_tx: &Transaction,
+        utxos: &Prevouts<'_, &TxOut>,
+        index: usize,
+        input: &Input,
+        secp: &Secp256k1<C>,
+    ) -> Result<(), FinalizeError> {
+        let spk = &input.funding_utxo().expect("have funding utxo").script_pubkey;
+
+        // Use the resolved lock time from the unsigned transaction rather
+        // than per-input min_height/min_time fields, which may be None
+        // after a v0 roundtrip (the v0 format collapses them into the
+        // single nLockTime).
+        let cltv = unsigned_tx.lock_time;
+        // Assumed MAX if omitted.
+        let csv = input.sequence.unwrap_or(Sequence::MAX);
+
+        let empty_witness = Witness::default();
+        let empty_script = ScriptBuf::new();
+        let witness = input.final_script_witness.as_ref().unwrap_or(&empty_witness);
+        let script_sig = input.final_script_sig.as_deref().unwrap_or(empty_script.as_script());
+
+        let interpreter = Interpreter::from_txdata(spk, script_sig, witness, csv, cltv)
+            .map_err(|error| FinalizeError::InterpreterConstructor { input_index: index, error })?;
+
+        let iter = interpreter.iter(secp, unsigned_tx, index, utxos);
+        if let Some(error) = iter.filter_map(Result::err).next() {
+            return Err(FinalizeError::InterpreterSatisfaction { input_index: index, error });
+        }
+        Ok(())
+    }
+
+    /// Returns the input at `index` as a [`FinalizableInput`] (non-malleable by default, see
+    /// [`FinalizableInput::malleable`]).
+    ///
+    /// # Errors
+    ///
+    /// [`FinalizeError::AlreadyFinalized`] if the input is already finalized.
+    /// [`FinalizeError::OutOfBounds`] if index is not within input bounds.
+    pub fn finalizable_input(&self, index: usize) -> Result<FinalizableInput<'_>, FinalizeError> {
+        let input = self.0.checked_input(index).map_err(FinalizeError::OutOfBounds)?;
+        if input.is_finalized() {
+            return Err(FinalizeError::AlreadyFinalized { input_index: index });
+        }
+        Ok(FinalizableInput { finalizer: self, input_index: index, malleable: false })
+    }
+
+    // In-bounds by construction: `finalizable_input` checked the index.
+    fn finalize_input(&self, input: FinalizableInput<'_>) -> Result<Input, FinalizeError> {
+        let input_ref =
+            self.0.checked_input(input.input_index).expect("index checked by `finalizable_input`");
+        let fields = self
+            .final_scripts(input_ref, input.malleable)
+            .map_err(|e| FinalizeError::Input { input_index: input.input_index, error: e })?;
+        Ok(input_ref.finalize(fields))
     }
 
     /// Returns the final script_sig and final witness for this input.
-    // TODO: Think harder about this.
     //
     // Input finalizer should only set script sig and witness iff one is required
     //
@@ -156,216 +286,106 @@ impl Finalizer {
     // > the presence of 0x07 Finalized scriptSig and 0x08 Finalized scriptWitness typed records. If
     // > they do, the Transaction Extractor should ...
     //
-    // TODO: Check that we are doing the right thing at the right time between finalization and extraction.
-    fn final_script_sig_and_witness(
-        &self,
-        input: &Input,
-        allow_mall: bool,
-    ) -> Result<FinalScripts, InputError> {
-        let (witness, script_sig) = {
-            let spk =
-                &input.funding_utxo().expect("guaranteed by Finalizer invariant").script_pubkey;
-            let lock_time = self.0.lock_time();
-            let sat = InputSatisfier { input, lock_time };
-
-            if spk.is_p2tr() {
-                // Deal with taproot case separately, we cannot infer the full descriptor for taproot.
-                let wit = construct_tap_witness(spk, sat, allow_mall)?;
-                (wit, ScriptBuf::new())
-            } else {
-                // Get a descriptor for this input.
-                let desc = self.get_descriptor(input)?;
-
-                // Generate the satisfaction witness and scriptsig.
-                if !allow_mall {
-                    desc.get_satisfaction(sat).map_err(InputError::MiniscriptError)?
-                } else {
-                    desc.get_satisfaction_mall(sat).map_err(InputError::MiniscriptError)?
-                }
-            }
-        };
-
-        let witness = Witness::from_slice(&witness);
+    // The fields the Extractor rebuilds the transaction from survive finalization, so the extracted
+    // transaction is the one the signatures committed to.
+    fn final_scripts(&self, input: &Input, malleable: bool) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
+        let lock_time =
+            self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
+        let sat = InputSatisfier { input, lock_time };
 
         Ok(match output_type {
-            OutputType::Wpkh | OutputType::Wsh | OutputType::Tr => FinalScripts::Segwit { witness },
-            OutputType::ShWpkh | OutputType::ShWsh => FinalScripts::Wrapped { script_sig, witness },
-            OutputType::Bare | OutputType::Sh => FinalScripts::Legacy { script_sig },
-        })
-    }
+            OutputType::Wpkh | OutputType::Wsh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(wit, _)| Witness::from_slice(&wit))
+                    .map(|witness| FinalScripts::Segwit { witness })?
+            }
+            OutputType::ShWpkh | OutputType::ShWsh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(wit, script_sig)| (Witness::from_slice(&wit), script_sig))
+                    .map(|(witness, script_sig)| FinalScripts::Wrapped { script_sig, witness })?
+            }
+            OutputType::Bare | OutputType::Sh => {
+                let desc = input.get_descriptor()?;
+                let satisfaction = if malleable {
+                    desc.get_satisfaction_mall(sat)
+                } else {
+                    desc.get_satisfaction(sat)
+                };
+                satisfaction
+                    .map_err(InputError::MiniscriptError)
+                    .map(|(_, script_sig)| FinalScripts::Legacy { script_sig })?
+            }
+            // Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
+            // because the information about all the scripts might not be present. Also, currently the spec does
+            // not support hidden branches, so inferring a descriptor is not possible.
+            OutputType::Tr => {
+                // Try the key spend path first. The internal key is not required: BIP-371 makes
+                // PSBT_IN_TAP_INTERNAL_KEY optional, and the interpreter check validates the
+                // signature against the output key of the funding UTXO.
+                let key_spend = sat.input.tap_key_sig;
+                let wit = match key_spend {
+                    Some(sig) => vec![sig.to_vec()],
+                    None => {
+                        // Script spend. Miniscript decodes the raw leaf script without the
+                        // descriptor's pkh() fragments, producing expr_raw_pkh nodes;
+                        // tap_key_origins holds every descriptor key, so use it to substitute.
+                        let map: BTreeMap<hash160::Hash, XOnlyPublicKey> = sat
+                            .input
+                            .tap_key_origins
+                            .keys()
+                            .map(|key| (key.to_pubkeyhash(SigType::Schnorr), *key))
+                            .collect();
 
-    /// Creates a descriptor from an unfinalized PSBT input.
-    ///
-    /// Panics on out of bound input index for psbt Also sanity checks that the witness script and
-    /// redeem script are consistent with the script pubkey. Does *not* check signatures We parse
-    /// the insane version while satisfying because we want to move the script is probably already
-    /// created and we want to satisfy it in any way possible.
-    fn get_descriptor(&self, input: &Input) -> Result<Descriptor<bitcoin::PublicKey>, InputError> {
-        let mut map: BTreeMap<hash160::Hash, bitcoin::PublicKey> = BTreeMap::new();
-
-        // TODO(Tobin): Understand why we use keys from all inputs?
-        let psbt_inputs = &self.0.inputs;
-        for psbt_input in psbt_inputs {
-            // Use BIP32 Derviation to get set of all possible keys.
-            let public_keys = psbt_input.bip32_derivations.keys();
-            for key in public_keys {
-                let bitcoin_key = *key;
-                let hash = bitcoin_key.pubkey_hash().to_raw_hash();
-                map.insert(hash, bitcoin_key);
-            }
-        }
-
-        // Figure out Scriptpubkey
-        let script_pubkey = &input.funding_utxo().expect("guaranteed by Finalizer").script_pubkey;
-        // 1. `PK`: creates a `Pk` descriptor(does not check if partial sig is given)
-        if script_pubkey.is_p2pk() {
-            let script_pubkey_len = script_pubkey.len();
-            let pk_bytes = &script_pubkey.to_bytes();
-            match bitcoin::PublicKey::from_slice(&pk_bytes[1..script_pubkey_len - 1]) {
-                Ok(pk) => Ok(Descriptor::new_pk(pk)),
-                Err(e) => Err(InputError::KeyErr(e)),
-            }
-        } else if script_pubkey.is_p2pkh() {
-            // 2. `Pkh`: creates a `PkH` descriptor if partial_sigs has the corresponding pk
-            let partial_sig_contains_pk = input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                // Indirect way to check the equivalence of pubkey-hashes.
-                // Create a pubkey hash and check if they are the same.
-                // THIS IS A BUG AND *WILL* PRODUCE WRONG SATISFACTIONS FOR UNCOMPRESSED KEYS
-                // Partial sigs loses the compressed flag that is necessary
-                // TODO: See https://github.com/rust-bitcoin/rust-bitcoin/pull/836
-                // The type checker will fail again after we update to 0.28 and this can be removed
-                let addr = Address::p2pkh(pk, Network::Bitcoin);
-                *script_pubkey == addr.script_pubkey()
-            });
-            match partial_sig_contains_pk {
-                Some((pk, _sig)) => Descriptor::new_pkh(*pk).map_err(InputError::MiniscriptError),
-                None => Err(InputError::MissingPubkey),
-            }
-        } else if script_pubkey.is_p2wpkh() {
-            // 3. `Wpkh`: creates a `wpkh` descriptor if the partial sig has corresponding pk.
-            let partial_sig_contains_pk = input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                match bitcoin::key::CompressedPublicKey::try_from(pk) {
-                    Ok(compressed) => {
-                        // Indirect way to check the equivalence of pubkey-hashes.
-                        // Create a pubkey hash and check if they are the same.
-                        let addr = bitcoin::Address::p2wpkh(&compressed, bitcoin::Network::Bitcoin);
-                        *script_pubkey == addr.script_pubkey()
-                    }
-                    Err(_) => false,
-                }
-            });
-            match partial_sig_contains_pk {
-                Some((pk, _sig)) =>
-                    Ok(Descriptor::new_wpkh(*pk).map_err(InputError::MiniscriptError)?),
-                None => Err(InputError::MissingPubkey),
-            }
-        } else if script_pubkey.is_p2wsh() {
-            // 4. `Wsh`: creates a `Wsh` descriptor
-            if input.redeem_script.is_some() {
-                return Err(InputError::NonEmptyRedeemScript);
-            }
-            if let Some(ref witness_script) = input.witness_script {
-                if witness_script.to_p2wsh() != *script_pubkey {
-                    return Err(InputError::InvalidWitnessScript {
-                        witness_script: witness_script.clone(),
-                        p2wsh_expected: script_pubkey.clone(),
-                    });
-                }
-                let ms =
-                    Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(witness_script)
-                        .map_err(InputError::MiniscriptError)?;
-                Ok(Descriptor::new_wsh(ms.substitute_raw_pkh(&map))
-                    .map_err(InputError::MiniscriptError)?)
-            } else {
-                Err(InputError::MissingWitnessScript)
-            }
-        } else if script_pubkey.is_p2sh() {
-            match input.redeem_script {
-                None => Err(InputError::MissingRedeemScript),
-                Some(ref redeem_script) => {
-                    if redeem_script.to_p2sh() != *script_pubkey {
-                        return Err(InputError::InvalidRedeemScript {
-                            redeem: redeem_script.clone(),
-                            p2sh_expected: script_pubkey.clone(),
-                        });
-                    }
-                    if redeem_script.is_p2wsh() {
-                        // 5. `ShWsh` case
-                        if let Some(ref witness_script) = input.witness_script {
-                            if witness_script.to_p2wsh() != *redeem_script {
-                                return Err(InputError::InvalidWitnessScript {
-                                    witness_script: witness_script.clone(),
-                                    p2wsh_expected: redeem_script.clone(),
-                                });
-                            }
-                            let ms = Miniscript::<bitcoin::PublicKey, Segwitv0>::decode_consensus(
-                                witness_script,
-                            )
-                            .map_err(InputError::MiniscriptError)?;
-                            Ok(Descriptor::new_sh_wsh(ms.substitute_raw_pkh(&map))
-                                .map_err(InputError::MiniscriptError)?)
-                        } else {
-                            Err(InputError::MissingWitnessScript)
-                        }
-                    } else if redeem_script.is_p2wpkh() {
-                        // 6. `ShWpkh` case
-                        let partial_sig_contains_pk =
-                            input.partial_sigs.iter().find(|&(&pk, _sig)| {
-                                match bitcoin::key::CompressedPublicKey::try_from(pk) {
-                                    Ok(compressed) => {
-                                        let addr = bitcoin::Address::p2wpkh(
-                                            &compressed,
-                                            bitcoin::Network::Bitcoin,
-                                        );
-                                        *redeem_script == addr.script_pubkey()
-                                    }
-                                    Err(_) => false,
+                        sat.input
+                            .tap_scripts
+                            .iter()
+                            .filter_map(|(control_block, (script, ver))| {
+                                if *ver != LeafVersion::TapScript {
+                                    return None; // Non-default leaf versions unsupported.
                                 }
-                            });
-                        match partial_sig_contains_pk {
-                            Some((pk, _sig)) => Ok(Descriptor::new_sh_wpkh(*pk)
-                                .map_err(InputError::MiniscriptError)?),
-                            None => Err(InputError::MissingPubkey),
-                        }
-                    } else {
-                        //7. regular p2sh
-                        if input.witness_script.is_some() {
-                            return Err(InputError::NonEmptyWitnessScript);
-                        }
-                        if let Some(ref redeem_script) = input.redeem_script {
-                            let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_consensus(
-                                redeem_script,
-                            )
-                            .map_err(InputError::MiniscriptError)?;
-                            Ok(Descriptor::new_sh(ms).map_err(InputError::MiniscriptError)?)
-                        } else {
-                            Err(InputError::MissingWitnessScript)
-                        }
+                                let ms =
+                                    Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script)
+                                        .ok()?
+                                        .substitute_raw_pkh(&map);
+                                let mut wit = if malleable {
+                                    ms.satisfy_malleable(&sat)
+                                } else {
+                                    ms.satisfy(&sat)
+                                }
+                                .ok()?;
+                                wit.push(ms.encode().into_bytes());
+                                wit.push(control_block.serialize());
+                                Some(wit)
+                            })
+                            .min_by_key(|wit| super::witness_size(wit))
+                            .ok_or(InputError::CouldNotSatisfyTr)?
                     }
-                }
+                };
+                FinalScripts::Segwit { witness: Witness::from_slice(&wit) }
             }
-        } else {
-            // 8. Bare case
-            if input.witness_script.is_some() {
-                return Err(InputError::NonEmptyWitnessScript);
-            }
-            if input.redeem_script.is_some() {
-                return Err(InputError::NonEmptyRedeemScript);
-            }
-            let ms = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_consensus(script_pubkey)
-                .map_err(InputError::MiniscriptError)?;
-            Ok(Descriptor::new_bare(ms.substitute_raw_pkh(&map))
-                .map_err(InputError::MiniscriptError)?)
-        }
+        })
     }
 }
 
 /// A PSBT that has been finalized by [`Finalizer::finalize`].
 ///
-/// This proof of finalization is the only way to reach the [`Psbt`] serialization point or
-/// transition to the [`Extractor`](crate::Extractor) role, so neither can be reached with an
-/// unfinalized PSBT.
+/// An all-finalized PSBT can still reach the Extractor without that check via `Extractor::new`;
+/// this type is the checked path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FinalizedPsbt(ResolvedPsbt);
 
@@ -386,81 +406,32 @@ impl core::ops::Deref for FinalizedPsbt {
     fn deref(&self) -> &Psbt { &self.0 }
 }
 
-// Satisfy the taproot descriptor. It is not possible to infer the complete descriptor from psbt
-// because the information about all the scripts might not be present. Also, currently the spec does
-// not support hidden branches, so inferring a descriptor is not possible.
-fn construct_tap_witness(
-    spk: &Script,
-    sat: InputSatisfier,
-    allow_mall: bool,
-) -> Result<Vec<Vec<u8>>, InputError> {
-    assert!(spk.is_p2tr());
-    // When miniscript tries to finalize the PSBT, it doesn't have the full descriptor (which
-    // contained a pkh() fragment) and instead resorts to parsing the raw script sig, which is
-    // translated into a "expr_raw_pkh" internally.
-    let mut map: BTreeMap<hash160::Hash, XOnlyPublicKey> = BTreeMap::new();
+/// A PSBT input provably ready for finalization
+///
+/// Only constructible via [`Finalizer::finalizable_input`], so its existence witnesses that the
+/// PSBT passed [`Finalizer::new`] (funding UTXOs, lock time, sighash types).
+#[derive(Debug)]
+pub struct FinalizableInput<'f> {
+    finalizer: &'f Finalizer,
+    input_index: usize,
+    malleable: bool,
+}
 
-    // We need to satisfy or dissatisfy any given key. `tap_key_origin` is the only field of PSBT
-    // Input which consist of all the keys added on a descriptor and thus we get keys from it.
-    let public_keys = sat.input.tap_key_origins.keys();
-    for key in public_keys {
-        // TODO: How is this key converting to a miniscript::interpreter::BitcoinKey?
-        // let hash = key.to_pubkeyhash(SigType::Schnorr);
-        let bitcoin_key = *key;
-        let hash = bitcoin_key.to_pubkeyhash(SigType::Schnorr);
-
-        map.insert(hash, *key);
+impl FinalizableInput<'_> {
+    /// Sets whether this input may be finalized with a malleable satisfaction.
+    ///
+    /// Default: `false` (non-malleable).
+    pub fn malleable(mut self, malleable: bool) -> Self {
+        self.malleable = malleable;
+        self
     }
 
-    // try the key spend path first
-    if let Some(ref key) = sat.input.tap_internal_key {
-        if let Some(sig) =
-            <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_key_spend_sig(&sat, key)
-        {
-            return Ok(vec![sig.to_vec()]);
-        }
-    }
-    // Next script spends
-    let (mut min_wit, mut min_wit_len) = (None, None);
-    if let Some(block_map) =
-        <InputSatisfier as Satisfier<XOnlyPublicKey>>::lookup_tap_control_block_map(&sat)
-    {
-        for (control_block, (script, ver)) in block_map {
-            if *ver != LeafVersion::TapScript {
-                // We don't know how to satisfy non default version scripts yet
-                continue;
-            }
-            let ms = match Miniscript::<XOnlyPublicKey, Tap>::decode_consensus(script) {
-                Ok(ms) => ms.substitute_raw_pkh(&map),
-                Err(..) => continue, // try another script
-            };
-            let mut wit = if allow_mall {
-                match ms.satisfy_malleable(&sat) {
-                    Ok(ms) => ms,
-                    Err(..) => continue,
-                }
-            } else {
-                match ms.satisfy(&sat) {
-                    Ok(ms) => ms,
-                    Err(..) => continue,
-                }
-            };
-            wit.push(ms.encode().into_bytes());
-            wit.push(control_block.serialize());
-            let wit_len = Some(super::witness_size(&wit));
-            if min_wit_len.is_some() && wit_len > min_wit_len {
-                continue;
-            } else {
-                // store the minimum
-                min_wit = Some(wit);
-                min_wit_len = wit_len;
-            }
-        }
-        min_wit.ok_or(InputError::CouldNotSatisfyTr)
-    } else {
-        // No control blocks found
-        Err(InputError::CouldNotSatisfyTr)
-    }
+    /// Consumes the `FinalizableInput`, producing the finalization it is set for.
+    ///
+    /// Does not run the interpreter check: the result is a single input, not a PSBT. Use
+    /// [`Finalizer::finalize_inputs`] for a validated result, or
+    /// [`Finalizer::check_finalized_inputs`] to validate the assembled PSBT afterwards.
+    pub fn finalize(self) -> Result<Input, FinalizeError> { self.finalizer.finalize_input(self) }
 }
 
 /// Error constructing a [`Finalizer`] or finalizing a PSBT.
@@ -471,6 +442,13 @@ pub enum FinalizeError {
     FundingUtxo(FundingUtxoError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
+    /// The input is already finalized.
+    AlreadyFinalized {
+        /// The index of the finalized input.
+        input_index: usize,
+    },
+    /// Attempt to access an out of bounds PSBT element.
+    OutOfBounds(IndexOutOfBoundsError),
     /// Failed to finalize an input.
     Input {
         /// The associated input index for `error`.
@@ -498,7 +476,10 @@ impl fmt::Display for FinalizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
+            Self::OutOfBounds(ref e) => write_err!(f, "finalizer out of bounds access"; e),
             Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
+            Self::AlreadyFinalized { input_index } =>
+                write!(f, "input {} is already finalized", input_index),
             Self::Input { input_index, ref error } =>
                 write_err!(f, "failed to finalize input at index {}", input_index; error),
             Self::InterpreterConstructor { input_index, ref error } =>
@@ -514,7 +495,9 @@ impl std::error::Error for FinalizeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FundingUtxo(ref e) => Some(e),
+            Self::OutOfBounds(ref e) => Some(e),
             Self::SignatureSighashType(ref e) => Some(e),
+            Self::AlreadyFinalized { .. } => None,
             Self::Input { input_index: _, ref error } => Some(error),
             Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
             Self::InterpreterSatisfaction { input_index: _, ref error } => Some(error),

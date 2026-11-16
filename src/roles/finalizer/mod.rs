@@ -28,7 +28,7 @@ use miniscript::miniscript::satisfy::Placeholder;
 use miniscript::MiniscriptKey;
 
 #[rustfmt::skip]                // Keep public exports separate.
-pub use self::role::{InputError, FinalizeError, FinalizedPsbt, Finalizer};
+pub use self::role::{FinalizableInput, FinalizeError, FinalizedPsbt, Finalizer, InputError};
 
 pub(crate) trait ItemSize {
     fn size(&self) -> usize;

@@ -29,6 +29,12 @@ impl Extractor {
     ///
     /// An extractor can only accept a PSBT that has been finalized.
     ///
+    /// Finalization here means the presence of final scripts only: no script or signature
+    /// verification is performed. A PSBT assembled from finalized inputs contributed by other
+    /// parties should be validated with the Finalizer's interpreter check
+    /// ([`crate::Finalizer::check_finalized_inputs`] or [`crate::Finalizer::finalize`]) before
+    /// extraction.
+    ///
     /// # Silent payments
     ///
     /// BIP-375 has the extractor derive every silent payment output script and verify it against
