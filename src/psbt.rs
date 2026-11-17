@@ -792,7 +792,7 @@ impl ResolvedPsbt {
 
     /// Creates an unsigned transaction from the inner [`Psbt`].
     ///
-    /// Cuidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
+    /// **Warning:** This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
     /// use [`Self::id`] instead. Per [BIP-370], `id` zeroes the input sequences and uses the
     /// identification form of the outputs, so `unsigned_tx().compute_txid()` differs from
     /// [`Self::id`] in general.
