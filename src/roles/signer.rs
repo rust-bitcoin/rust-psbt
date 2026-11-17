@@ -58,12 +58,6 @@ impl Signer {
     /// Returns this PSBT's unique identification.
     pub fn id(&self) -> Txid { self.psbt.id() }
 
-    /// Creates an unsigned transaction from the inner [`Psbt`].
-    pub fn unsigned_tx(&self) -> Transaction { self.psbt.unsigned_tx() }
-
-    /// Returns a reference to the inner [`Psbt`].
-    pub fn as_psbt(&self) -> &Psbt { &self.psbt }
-
     /// Lends the [`Psbt`] and sighash cache to a [`SigningSession`] for the frozen signing window.
     ///
     /// The session creates [`SignableInput`]s that are bound to it: a signable input can only be
@@ -197,14 +191,6 @@ impl Signer {
     /// otherwise the [`Finalizer`] may reject the PSBT for missing signatures or sighash mismatches.
     #[cfg(feature = "miniscript")]
     pub fn finalizer(self) -> Result<Finalizer, FinalizeError> { Finalizer::new(self.psbt) }
-
-    /// Sets the PSBT_GLOBAL_TX_MODIFIABLE as required after signing an ECDSA input.
-    ///
-    /// > For PSBTv2s, a signer must update the PSBT_GLOBAL_TX_MODIFIABLE field after signing
-    /// > inputs so that it accurately reflects the state of the PSBT.
-    pub fn ecdsa_clear_tx_modifiable(&mut self, ty: EcdsaSighashType) {
-        self.psbt.inner.clear_tx_modifiable(PsbtSighashType::from(ty))
-    }
 
     /// Returns the inner [`Psbt`].
     pub fn psbt(self) -> Psbt { self.psbt.into_psbt() }
@@ -1739,9 +1725,9 @@ mod test {
         });
 
         // Recompute independently from the input's (validated) funding UTXO.
-        let tx = signer.unsigned_tx();
+        let tx = signer.psbt.unsigned_tx();
         let mut cache = SighashCache::new(&tx);
-        let utxo = signer.as_psbt().inputs[0].funding_utxo().unwrap();
+        let utxo = signer.psbt.inputs[0].funding_utxo().unwrap();
         let expected = cache
             .p2wpkh_signature_hash(0, &utxo.script_pubkey, utxo.value, EcdsaSighashType::All)
             .unwrap();
@@ -1787,7 +1773,7 @@ mod test {
         });
 
         // Recompute independently: key-path spend over the single prevout.
-        let tx = signer.unsigned_tx();
+        let tx = signer.psbt.unsigned_tx();
         let mut cache = SighashCache::new(&tx);
         let expected = cache
             .taproot_key_spend_signature_hash(0, &Prevouts::All(&[tx_out]), TapSighashType::Default)
@@ -1904,7 +1890,7 @@ mod test {
         // Recompute the sighash independently and verify the signature against the tweaked output
         // key committed to by the prevout scriptPubKey.
         let spk = tx_out.script_pubkey.clone();
-        let tx = signer.unsigned_tx();
+        let tx = signer.psbt.unsigned_tx();
         let mut cache = SighashCache::new(&tx);
         let sighash = cache
             .taproot_key_spend_signature_hash(0, &Prevouts::All(&[tx_out]), TapSighashType::Default)

@@ -598,7 +598,7 @@ fn signer_preserves_updates() {
         .unwrap()
         .signer();
 
-    assert_eq!(signer.as_psbt().inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
+    assert_eq!(signer.psbt().inputs[0].sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
 }
 
 /// The silent-payment output label is updatable (BIP-375 assigns it to the Updater for change
