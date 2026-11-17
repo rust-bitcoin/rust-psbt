@@ -874,6 +874,17 @@ mod tests {
     }
 
     #[test]
+    fn decode_tap_tree_script_len_exceeds_value() {
+        // Leaf declares a 2-byte script but only 1 byte follows.
+        let bytes: [u8; 5] = [0x04, 0x00, 0xc0, 0x02, 0x51];
+        let err = decode_from_slice::<TapTree>(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            bitcoin_consensus_encoding::DecodeError::Parse(TapTreeDecodeError::InvalidTree)
+        ));
+    }
+
+    #[test]
     fn read_limit_lifecycle_compressed_public_key() {
         let mut decoder = CompressedPublicKeyDecoder::default();
         assert_eq!(decoder.read_limit(), 33);
