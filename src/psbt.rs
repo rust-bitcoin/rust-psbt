@@ -23,6 +23,7 @@
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 //! [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki>
 
+use alloc::borrow::Borrow;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -82,6 +83,22 @@ impl PsbtEncode for Psbt {
             crate::encoding::SliceEncoder::without_length_prefix(&self.outputs),
         ))
     }
+}
+
+/// Encodes a `ResolvedPsbt` to the PSBT wire format. The encoding is identical to that of the
+/// inner [`Psbt`], locktime is not part of the wire format.
+///
+/// A corresponding [`PsbtDecode`] impl is intentionally absent: deserializing into a
+/// `ResolvedPsbt` requires lock-time resolution, which can fail in ways the [`DecodeError`]
+/// type does not carry. Use [`Psbt::deserialize`] instead, which resolves the lock time and
+/// returns a `Result<ResolvedPsbt, DeserializeError>`.
+///
+/// [`PsbtDecode`]: crate::PsbtDecode
+/// [`DecodeError`]: bitcoin_consensus_encoding::DecodeError
+impl PsbtEncode for ResolvedPsbt {
+    type Encoder<'e> = <Psbt as PsbtEncode>::Encoder<'e>;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { self.inner.psbt_encoder() }
 }
 
 /// Decoder for PSBT v2.
@@ -324,7 +341,7 @@ impl Psbt {
     /// [`Extractor::new`](crate::Extractor::new). If you need to inspect or
     /// modify the PSBT before resolving the locktime, use
     /// [`deserialize_unresolved`](Self::deserialize_unresolved) followed by
-    /// [`resolve`](Self::try_resolve).
+    /// [`try_resolve`](Self::try_resolve).
     ///
     /// Returns an error if the input contains trailing bytes after the PSBT.
     ///
@@ -571,6 +588,12 @@ mod display_from_str {
         }
     }
 
+    impl fmt::Display for ResolvedPsbt {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.inner, f)
+        }
+    }
+
     impl FromStr for Psbt {
         type Err = ParsePsbtError;
 
@@ -700,18 +723,39 @@ impl std::error::Error for CombineError {
 
 /// A PSBT whose lock time has been resolved.
 ///
-/// Created via [`Psbt::try_resolve`], a `ResolvedPsbt` caches the lock time so that downstream
-/// roles can assert determinability at construction time rather than deferring the check.
+/// Created via [`Psbt::try_resolve`] or [`Psbt::deserialize`], a `ResolvedPsbt` caches the
+/// lock time so that downstream roles can assert determinability at construction time rather
+/// than deferring the check.
+///
+/// A `ResolvedPsbt` [`Deref`](core::ops::Deref)s to [`Psbt`], so all `&self` methods on [`Psbt`],
+/// like serialization and the raw field accessors, are available directly on `ResolvedPsbt`.
+///
+/// # Lifecycle
+///
+/// Created from a [`Psbt`] via [`Psbt::try_resolve`] or from bytes via [`Psbt::deserialize`]. From
+/// there it moves into a role or back to a raw [`Psbt`] via [`into_psbt`](Self::into_psbt).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedPsbt {
     pub(crate) inner: Psbt,
     lock_time: absolute::LockTime,
 }
 
+/// Makes the inner [`Psbt`] accessible through `Deref` coercion and auto-deref.
+///
+/// All `&self` methods on [`Psbt`] can be called directly on a `ResolvedPsbt`,
+/// and `&ResolvedPsbt` coerces to `&Psbt` at function call sites.
 impl core::ops::Deref for ResolvedPsbt {
     type Target = Psbt;
 
     fn deref(&self) -> &Psbt { &self.inner }
+}
+
+impl AsRef<Psbt> for ResolvedPsbt {
+    fn as_ref(&self) -> &Psbt { &self.inner }
+}
+
+impl Borrow<Psbt> for ResolvedPsbt {
+    fn borrow(&self) -> &Psbt { &self.inner }
 }
 
 impl ResolvedPsbt {
@@ -729,10 +773,16 @@ impl ResolvedPsbt {
     /// Returns the resolved lock time.
     pub fn lock_time(&self) -> absolute::LockTime { self.lock_time }
 
-    /// Consumes the proof and returns the underlying [`Psbt`].
+    /// Consumes the `ResolvedPsbt` and returns the underlying [`Psbt`].
     pub fn into_psbt(self) -> Psbt { self.inner }
 
     /// Returns this PSBT's unique identification.
+    ///
+    /// Per [BIP-370], the PSBT identifier is the txid of the unsigned transaction with all
+    /// input sequences zeroed and silent-payment output scripts replaced by their
+    /// `sp_v0_info` (scan key + spend key).
+    ///
+    /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#unique-identification>
     pub fn id(&self) -> Txid {
         let mut tx = self.unsigned_tx();
         tx.input.iter_mut().for_each(|input| input.sequence = Sequence::ZERO);
@@ -742,10 +792,12 @@ impl ResolvedPsbt {
 
     /// Creates an unsigned transaction from the inner [`Psbt`].
     ///
-    /// Quidado! This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
-    /// use [`Self::id`] instead. `id` zeroes the input sequences and uses the identification
-    /// form of the outputs, so `unsigned_tx().compute_txid()` differs from [`Self::id`] in
-    /// general.
+    /// **Warning:** This transaction should not be used to determine the ID of the [`ResolvedPsbt`];
+    /// use [`Self::id`] instead. Per [BIP-370], `id` zeroes the input sequences and uses the
+    /// identification form of the outputs, so `unsigned_tx().compute_txid()` differs from
+    /// [`Self::id`] in general.
+    ///
+    /// [BIP-370]: <https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki#unique-identification>
     pub fn unsigned_tx(&self) -> Transaction {
         Transaction {
             version: self.global.tx_version,
@@ -754,6 +806,10 @@ impl ResolvedPsbt {
             output: self.outputs.iter().map(Output::tx_out).collect(),
         }
     }
+}
+
+impl From<ResolvedPsbt> for Psbt {
+    fn from(resolved: ResolvedPsbt) -> Self { resolved.into_psbt() }
 }
 
 #[cfg(test)]
@@ -1389,5 +1445,22 @@ mod tests {
         );
 
         assert_eq!(psbt.inputs[0].sighash_mismatch(), None);
+    }
+
+    #[test]
+    fn resolved_lock_time() {
+        let resolved = single_input_psbt().try_resolve().unwrap();
+        assert_eq!(resolved.lock_time(), absolute::LockTime::ZERO);
+    }
+
+    #[cfg(feature = "base64")]
+    #[test]
+    fn resolved_display_base64() {
+        use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
+        let resolved = single_input_psbt().try_resolve().unwrap();
+        let displayed = alloc::format!("{}", resolved);
+        assert!(!displayed.is_empty());
+        let decoded = BASE64_STANDARD.decode(&displayed).expect("valid base64");
+        assert_eq!(decoded, encode_to_vec(&resolved));
     }
 }

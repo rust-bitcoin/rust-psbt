@@ -4,6 +4,7 @@
 //!
 //! [BIP-174]: <https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>
 
+use alloc::borrow::Borrow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -406,6 +407,36 @@ impl core::ops::Deref for FinalizedPsbt {
     fn deref(&self) -> &Psbt { &self.0 }
 }
 
+impl AsRef<Psbt> for FinalizedPsbt {
+    fn as_ref(&self) -> &Psbt { &self.0 }
+}
+
+impl Borrow<Psbt> for FinalizedPsbt {
+    fn borrow(&self) -> &Psbt { &self.0 }
+}
+
+impl From<FinalizedPsbt> for Psbt {
+    fn from(finalized: FinalizedPsbt) -> Self { finalized.psbt() }
+}
+
+/// Encodes a [`FinalizedPsbt`] to the PSBT wire format. The encoding is identical to that
+/// of the underlying [`Psbt`].
+///
+/// A corresponding [`PsbtDecode`](crate::PsbtDecode) impl is intentionally absent:
+/// deserializing into a `FinalizedPsbt` requires both lock-time resolution and finalization
+/// checks, neither of which fit the [`DecodeError`](bitcoin_consensus_encoding::DecodeError)
+/// type. Deserialize into a [`Psbt`](crate::Psbt) and proceed through the roles instead.
+impl crate::encoding::PsbtEncode for FinalizedPsbt {
+    type Encoder<'e> = <Psbt as crate::encoding::PsbtEncode>::Encoder<'e>;
+
+    fn psbt_encoder(&self) -> Self::Encoder<'_> { self.0.psbt_encoder() }
+}
+
+#[cfg(feature = "base64")]
+impl fmt::Display for FinalizedPsbt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::Display::fmt(&**self, f) }
+}
+
 /// A PSBT input provably ready for finalization
 ///
 /// Only constructible via [`Finalizer::finalizable_input`], so its existence witnesses that the
@@ -592,5 +623,46 @@ impl fmt::Display for InputError {
             Self::CouldNotSatisfyTr => write!(f, "Could not satisfy Tr descriptor"),
             Self::UnknownOutputType => write!(f, "unable to determine the output type"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{format, vec};
+
+    use bitcoin::{Amount, OutPoint, ScriptBuf, TxOut};
+
+    use super::*;
+    use crate::map::Count;
+    use crate::psbt::{Psbt, ResolvedPsbt};
+    use crate::{Global, Input, Output};
+
+    #[cfg(feature = "base64")]
+    #[test]
+    fn display_produces_non_empty_base64() {
+        use bitcoin::base64::prelude::{Engine as _, BASE64_STANDARD};
+
+        use crate::encoding::encode_to_vec;
+
+        let psbt = Psbt {
+            global: {
+                let mut g = Global::default();
+                g.input_count = Count::from(1);
+                g.output_count = Count::from(1);
+                g
+            },
+            inputs: vec![Input::new(&OutPoint::null())],
+            outputs: vec![Output::new(TxOut {
+                value: Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            })],
+        };
+        let lock_time = psbt.determine_lock_time().unwrap();
+        let resolved = ResolvedPsbt::from_parts(psbt, lock_time);
+        let finalized = FinalizedPsbt(resolved);
+        let displayed = format!("{}", finalized);
+        assert!(!displayed.is_empty());
+        let decoded = BASE64_STANDARD.decode(&displayed).expect("valid base64");
+        assert_eq!(decoded, encode_to_vec(&finalized));
     }
 }
