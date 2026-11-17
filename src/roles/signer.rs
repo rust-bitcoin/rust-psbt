@@ -652,9 +652,52 @@ impl<'a, 'id> SigningSession<'a, 'id> {
 ///
 /// Binds `keys` and `secp` now, runs inside a [`Signer::session`] closure later:
 ///
-/// ```ignore
+/// ```rust
+/// # use psbt_v2::{sign_input, Count, Global, Input, Output, Psbt, SignError, Signer};
+/// # use psbt_v2::bitcoin::{absolute, transaction, Amount, Network, OutPoint, PrivateKey, ScriptBuf, Transaction, TxIn, TxOut};
+/// # use psbt_v2::bitcoin::secp256k1::{Secp256k1, SecretKey};
+/// # use std::collections::BTreeMap;
+/// #
+/// # fn create_psbt() -> Psbt {
+/// #     let secp = Secp256k1::new();
+/// #     let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+/// #     let pk = key.public_key(&secp);
+/// #     let prevout = TxOut {
+/// #         value: Amount::from_sat(1_000),
+/// #         script_pubkey: ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().unwrap()),
+/// #     };
+/// #     let funding = Transaction {
+/// #         version: transaction::Version::TWO,
+/// #         lock_time: absolute::LockTime::ZERO,
+/// #         input: vec![TxIn::default()],
+/// #         output: vec![prevout.clone()],
+/// #     };
+/// #     let mut input = Input::new(&OutPoint { txid: funding.compute_txid(), vout: 0 });
+/// #     input.witness_utxo = Some(prevout.clone());
+/// #     input.non_witness_utxo = Some(funding);
+/// #     input.bip32_derivations.insert(pk, Default::default());
+/// #     Psbt {
+/// #         global: { let mut g = Global::default(); g.input_count = Count::from(1); g.output_count = Count::from(1); g },
+/// #         inputs: vec![input],
+/// #         outputs: vec![Output::new(TxOut {
+/// #             value: Amount::from_sat(900),
+/// #             script_pubkey: ScriptBuf::new(),
+/// #         })],
+/// #     }
+/// # }
+/// #
+/// # fn main() -> Result<(), SignError> {
+/// #     let psbt = create_psbt();
+/// #     let secp = Secp256k1::new();
+/// #     let key = PrivateKey::new(SecretKey::from_slice(&[1u8; 32]).unwrap(), Network::Bitcoin);
+/// #     let keys = BTreeMap::from([(key.public_key(&secp), key)]);
+/// #     let mut signer = Signer::new(psbt.try_resolve().unwrap());
 /// let sigs = signer.session(sign_input(0, &keys, &secp))?;
-/// let psbt = signer.apply([sigs?])?.psbt();
+/// let psbt = signer.apply([sigs])?.psbt();
+/// # assert_eq!(psbt.inputs[0].partial_sigs.len(), 1);
+/// #
+/// #     Ok(())
+/// # }
 /// ```
 ///
 /// The input is strictly verified first; see [`SignableInput`] for the checks. For the
