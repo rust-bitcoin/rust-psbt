@@ -594,7 +594,9 @@ impl Decoder for TapTreeDecoder {
             let mut remaining = rest;
             cs.push_bytes(&mut remaining).map_err(|_| TapTreeDecodeError::InvalidTree)?;
             let script_len = cs.end().map_err(|_| TapTreeDecodeError::InvalidTree)?;
-            let script = ScriptBuf::from_bytes(remaining[..script_len].to_vec());
+            let script_bytes =
+                remaining.get(..script_len).ok_or(TapTreeDecodeError::InvalidTree)?;
+            let script = ScriptBuf::from_bytes(script_bytes.to_vec());
             let leaf_version = LeafVersion::from_consensus(version)
                 .map_err(|_| TapTreeDecodeError::InvalidTree)?;
             builder = builder
@@ -869,6 +871,17 @@ mod tests {
         let status = decoder.push_bytes(&mut bytes).unwrap();
         assert!(status.is_ready());
         assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn decode_tap_tree_script_len_exceeds_value() {
+        // Leaf declares a 2-byte script but only 1 byte follows.
+        let bytes: [u8; 5] = [0x04, 0x00, 0xc0, 0x02, 0x51];
+        let err = decode_from_slice::<TapTree>(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            bitcoin_consensus_encoding::DecodeError::Parse(TapTreeDecodeError::InvalidTree)
+        ));
     }
 
     #[test]
