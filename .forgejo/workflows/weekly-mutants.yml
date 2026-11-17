@@ -16,6 +16,8 @@ jobs:
       - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
       - name: Run cargo mutants
         id: mutants
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0" # Cut generating Debug profile artifacts.
         run: |
           set +e
           cargo ,mutants --in-place -- -- -Z unstable-options --fail-fast
