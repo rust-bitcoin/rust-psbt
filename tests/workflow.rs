@@ -6,9 +6,8 @@
 
 use std::str::FromStr;
 
-use bitcoin::bip32::{DerivationPath, KeySource};
 use miniscript::plan::{CanSign, TaprootAvailableLeaves, TaprootCanSign};
-use psbt_v2::bitcoin::bip32::{IntoDerivationPath, Xpriv, Xpub};
+use psbt_v2::bitcoin::bip32::{DerivationPath, IntoDerivationPath, KeySource, Xpriv, Xpub};
 use psbt_v2::bitcoin::hashes::Hash as _;
 use psbt_v2::bitcoin::secp256k1::Secp256k1;
 use psbt_v2::bitcoin::{absolute, Amount, OutPoint, PublicKey, ScriptBuf, TxOut, Txid};
