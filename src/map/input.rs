@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
 
+#[cfg(feature = "miniscript")]
+use bitcoin::bip32::DerivationPath;
 use bitcoin::bip32::KeySource;
 use bitcoin::hashes::{hash160, ripemd160, sha256, sha256d, Hash};
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
@@ -12,6 +14,8 @@ use bitcoin::locktime::absolute;
 use bitcoin::sighash::{
     EcdsaSighashType, InvalidSighashTypeError, NonStandardSighashTypeError, TapSighashType,
 };
+#[cfg(feature = "miniscript")]
+use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::{ControlBlock, TapLeafHash, TapNodeHash};
 #[cfg(feature = "silent-payments")]
 use bitcoin::CompressedPublicKey;
@@ -23,7 +27,13 @@ use bitcoin_consensus_encoding::{
     Encoder2, EncoderStatus, ExactVecDecoderWith, IterEncoder,
 };
 #[cfg(feature = "miniscript")]
-use miniscript::{BareCtx, Descriptor, Legacy, Miniscript, Segwitv0};
+use miniscript::descriptor::ShInner;
+#[cfg(feature = "miniscript")]
+use miniscript::miniscript::satisfy::{Placeholder, SchnorrSigType};
+#[cfg(feature = "miniscript")]
+use miniscript::plan::Plan;
+#[cfg(feature = "miniscript")]
+use miniscript::{BareCtx, Descriptor, Legacy, Miniscript, Segwitv0, SigType, ToPublicKey};
 
 use super::framing::{BytesKeyValueIter, KeyValueEncoder, KeyValueIter, ValueDecoder};
 use super::por_commitment::PorCommitment;
@@ -193,6 +203,159 @@ impl Input {
             proprietaries: BTreeMap::new(),
             unknowns: BTreeMap::new(),
         }
+    }
+
+    /// Creates an `Input` spending `previous_output` with metadata to complete `plan`.
+    ///
+    /// Only writes the keys, scripts, and timelocks required by `plan`'s witness template: keys and
+    /// scripts of other spending paths are not added. Placeholders whose key cannot be resolved are
+    /// skipped.
+    ///
+    /// The absolute and relative timelock of the plan are written to the input since the
+    /// finalizer's satisfier reads these per-input fields.
+    #[cfg(feature = "miniscript")]
+    pub fn from_plan(previous_output: &OutPoint, plan: &Plan) -> Self {
+        use miniscript::DefiniteDescriptorKey;
+
+        #[derive(Clone)]
+        struct KeyOrigin {
+            key: DefiniteDescriptorKey,
+            key_source: KeySource,
+        }
+
+        enum SpendType {
+            KeySpend { internal_key: XOnlyPublicKey },
+            ScriptSpend { leaf_hash: TapLeafHash },
+        }
+
+        #[derive(Default)]
+        struct TrDescriptorData {
+            tap_script: Option<ScriptBuf>,
+            control_block: Option<ControlBlock>,
+            spend_type: Option<SpendType>,
+            key_origins: BTreeMap<XOnlyPublicKey, KeySource>,
+        }
+
+        // The origin of `key` as a (fingerprint, path) pair. Raw keys have no derivation
+        // paths; they record the zero fingerprint with the master path so the key is
+        // still written to the derivation maps and the signer can fall back to a pubkey
+        // lookup.
+        fn key_origin(key: &DefiniteDescriptorKey) -> KeySource {
+            let path = key.full_derivation_paths().pop().unwrap_or_else(DerivationPath::master);
+            (key.master_fingerprint(), path)
+        }
+
+        let mut input = Self::new(previous_output);
+
+        // Write the plan's timelocks so the finalizer's satisfier can check them.
+        if let Some(lock_time) = plan.absolute_timelock {
+            match lock_time {
+                absolute::LockTime::Blocks(height) =>
+                // BIP-370 cannot encode height 0 so unset field if found.
+                    input.min_height = RequiredHeightLockTime::try_from(height).ok(),
+                absolute::LockTime::Seconds(time) => input.min_time = Some(time),
+            }
+        }
+        if let Some(lock_time) = plan.relative_timelock {
+            input.sequence = Some(lock_time.to_sequence());
+        } else if plan.absolute_timelock.is_some() {
+            // CLTV requires a non-final sequence for the input; enable lock time without RBF.
+            input.sequence = Some(Sequence::ENABLE_LOCKTIME_NO_RBF);
+        }
+
+        // Map from both the ECDSA and the Schnorr hash of every descriptor key to the key and
+        // its derivation source, so hash placeholders can be resolved back to keys.
+        let mut hash_to_keys = BTreeMap::new();
+
+        for key in plan.descriptor.iter_pk() {
+            let origin = KeyOrigin { key: key.clone(), key_source: key_origin(&key) };
+            hash_to_keys.insert(key.to_pubkeyhash(SigType::Ecdsa), origin.clone());
+            hash_to_keys.insert(key.to_pubkeyhash(SigType::Schnorr), origin);
+        }
+
+        let mut data = TrDescriptorData::default();
+        for item in plan.witness_template().iter() {
+            match item {
+                Placeholder::TapScript(script) => data.tap_script = Some(script.clone()),
+                Placeholder::TapControlBlock(cb) => data.control_block = Some(cb.clone()),
+                Placeholder::SchnorrSigPk(pk, schnorr_sig_type, _) => {
+                    let spend_type = match schnorr_sig_type {
+                        SchnorrSigType::KeySpend { .. } =>
+                            SpendType::KeySpend { internal_key: pk.to_x_only_pubkey() },
+                        SchnorrSigType::ScriptSpend { leaf_hash } =>
+                            SpendType::ScriptSpend { leaf_hash: *leaf_hash },
+                    };
+                    // The first placeholder selects the spend type; every placeholder
+                    // records its key origin.
+                    data.spend_type.get_or_insert(spend_type);
+                    data.key_origins.insert(pk.to_x_only_pubkey(), key_origin(pk));
+                }
+                Placeholder::SchnorrSigPkHash(pkh, tap_leaf_hash, _) => {
+                    data.spend_type = Some(SpendType::ScriptSpend { leaf_hash: *tap_leaf_hash });
+                    // Resolve the hashed key back to a key and record its origin so the
+                    // signer discovers it.
+                    if let Some(origin) = hash_to_keys.get(pkh) {
+                        data.key_origins
+                            .insert(origin.key.to_x_only_pubkey(), origin.key_source.clone());
+                    }
+                }
+                Placeholder::EcdsaSigPk(pk) => {
+                    input.bip32_derivations.insert(pk.to_public_key(), key_origin(pk));
+                }
+                // Raw taproot `pk_h` templates also contain this placeholder (pairing with
+                // `SchnorrSigPkHash`), where the hash resolves to a Schnorr key: it must not
+                // write an ECDSA derivation.
+                Placeholder::PubkeyHash(pkh, _)
+                    if !matches!(&plan.descriptor, Descriptor::Tr(_)) =>
+                {
+                    // Resolve the hashed key back to a key and record its origin so the
+                    // signer discovers it.
+                    if let Some(origin) = hash_to_keys.get(pkh) {
+                        input
+                            .bip32_derivations
+                            .insert(origin.key.to_public_key(), origin.key_source.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        match &plan.descriptor {
+            Descriptor::Bare(_) | Descriptor::Pkh(_) | Descriptor::Wpkh(_) => {}
+            Descriptor::Sh(sh) => match sh.as_inner() {
+                ShInner::Wsh(wsh) => {
+                    input.witness_script = Some(wsh.inner_script());
+                    input.redeem_script = Some(wsh.inner_script().to_p2wsh());
+                }
+                ShInner::Wpkh(..) => input.redeem_script = Some(sh.inner_script()),
+                ShInner::SortedMulti(_) | ShInner::Ms(_) =>
+                    input.redeem_script = Some(sh.inner_script()),
+            },
+            Descriptor::Wsh(wsh) => input.witness_script = Some(wsh.inner_script()),
+            Descriptor::Tr(tr) => {
+                input.tap_merkle_root = tr.spend_info().merkle_root();
+                let leaf_hash = match data.spend_type {
+                    Some(SpendType::KeySpend { internal_key }) => {
+                        input.tap_internal_key = Some(internal_key);
+                        None
+                    }
+                    Some(SpendType::ScriptSpend { leaf_hash }) => Some(leaf_hash),
+                    None => None,
+                };
+                for (pk, key_source) in data.key_origins {
+                    // Include the planned leaf hash so the signer discovers which leaves to
+                    // sign for.
+                    input.tap_key_origins.insert(pk, (leaf_hash.into_iter().collect(), key_source));
+                }
+                if let (Some(tap_script), Some(control_block)) =
+                    (data.tap_script, data.control_block)
+                {
+                    input.tap_scripts.insert(control_block, (tap_script, LeafVersion::TapScript));
+                }
+            }
+        }
+
+        input
     }
 
     /// Returns the [`OutputType`] of the spend utxo for this PSBT's input.
@@ -3059,6 +3222,499 @@ mod test {
                     "type {type_value:#04x} should route to a specific stage"
                 );
             }
+        }
+    }
+
+    #[cfg(feature = "miniscript")]
+    mod plan {
+        use alloc::format;
+        use alloc::string::ToString;
+        use core::str::FromStr;
+
+        use bitcoin::bip32::{DerivationPath, Xpriv, Xpub};
+        use bitcoin::secp256k1::Secp256k1;
+        use bitcoin::{relative, Network};
+        use miniscript::descriptor::{DefiniteDescriptorKey, DescriptorPublicKey, TapTree, Tr};
+        use miniscript::plan::{
+            AssetProvider, Assets, CanSign, TaprootAvailableLeaves, TaprootCanSign,
+        };
+        use miniscript::{ExtParams, Miniscript, Tap};
+
+        use super::*;
+
+        #[test]
+        fn input_wpkh_writes_bip32_derivation() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("wpkh({}/0/0)", xpub))
+                    .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let descriptor_key = descriptor.iter_pk().next().unwrap();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            let (pk, source) = input.bip32_derivations.iter().next().unwrap();
+            assert_eq!(pk, &descriptor_key.to_public_key());
+            assert_eq!(source.0, xpriv.fingerprint(&secp));
+            assert_eq!(source.1, DerivationPath::from_str("m/0/0").unwrap());
+            assert!(input.witness_script.is_none());
+            assert!(input.redeem_script.is_none());
+            assert!(input.sequence.is_none());
+        }
+
+        #[test]
+        fn input_wpkh_raw_key_records_master_path() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let raw_pk = PublicKey::new(
+                xpriv
+                    .derive_priv(&secp, &DerivationPath::from_str("m/0").unwrap())
+                    .unwrap()
+                    .to_keypair(&secp)
+                    .public_key(),
+            );
+            // A raw key: hex only, no origin info.
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("wpkh({})", raw_pk))
+                    .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let descriptor_key = descriptor.iter_pk().next().unwrap();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // Raw keys have no derivation path: the master path is recorded so the
+            // signer can fall back to a pubkey lookup.
+            let expected =
+                KeySource::from((descriptor_key.master_fingerprint(), DerivationPath::master()));
+            assert_eq!(input.bip32_derivations.get(&raw_pk), Some(&expected));
+        }
+
+        #[test]
+        fn input_tr_key_spend() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("tr({}/0/0)", xpub))
+                    .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let xonly = descriptor.iter_pk().next().unwrap().to_x_only_pubkey();
+            let key_source = KeySource::from((
+                xpriv.fingerprint(&secp),
+                DerivationPath::from_str("m/0/0").unwrap(),
+            ));
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.tap_internal_key, Some(xonly));
+            assert_eq!(input.tap_merkle_root, None);
+            assert!(input.tap_scripts.is_empty());
+            // A key-spend plan records no leaf hashes.
+            assert_eq!(input.tap_key_origins.get(&xonly), Some(&(Vec::new(), key_source)));
+        }
+
+        #[test]
+        fn input_tr_raw_key_records_master_path() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            // A raw key: hex only, no origin info.
+            let xonly = XOnlyPublicKey::from(xpub.public_key);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("tr({})", xonly)).unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let descriptor_key = descriptor.iter_pk().next().unwrap();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // Raw keys have no derivation path: the master path is recorded (with no
+            // leaf hashes, key spend) so the signer can fall back to a pubkey lookup.
+            let expected =
+                KeySource::from((descriptor_key.master_fingerprint(), DerivationPath::master()));
+            assert_eq!(input.tap_key_origins.get(&xonly), Some(&(Vec::new(), expected)));
+            assert_eq!(input.tap_internal_key, Some(xonly));
+        }
+
+        #[test]
+        fn input_tr_script_spend_includes_leaf_hash() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "tr({}/0/1,pkh({}/0/2))",
+                xpub, xpub
+            ))
+            .unwrap();
+
+            // Script-spend-only assets force the plan onto the `pkh` leaf.
+            let script_spend_only = CanSign {
+                ecdsa: false,
+                taproot: TaprootCanSign {
+                    key_spend: false,
+                    script_spend: TaprootAvailableLeaves::Any,
+                    sighash_default: true,
+                },
+            };
+            let mut assets = Assets::new();
+            for path in ["m/0/1", "m/0/2"] {
+                let source = KeySource::from((
+                    xpriv.fingerprint(&secp),
+                    DerivationPath::from_str(path).unwrap(),
+                ));
+                assets.keys.insert((source, script_spend_only.clone()));
+            }
+
+            let plan = descriptor.plan(&assets).unwrap();
+            // The planned leaf hash, as recorded by the plan's witness template.
+            let leaf_hash = plan
+                .witness_template()
+                .iter()
+                .find_map(|item| match item {
+                    Placeholder::SchnorrSigPk(_, SchnorrSigType::ScriptSpend { leaf_hash }, _) =>
+                        Some(*leaf_hash),
+                    _ => None,
+                })
+                .expect("script-spend plan must have a schnorr sig placeholder");
+
+            let input = Input::from_plan(&out_point(), &plan);
+
+            assert!(input.tap_internal_key.is_none());
+            assert!(input.tap_merkle_root.is_some());
+            // The planned leaf hash is included so the signer discovers which leaf to sign for.
+            let (leaf_hashes, source) = input.tap_key_origins.values().next().unwrap();
+            assert_eq!(leaf_hashes, &Vec::from([leaf_hash]));
+            assert_eq!(source.1, DerivationPath::from_str("m/0/2").unwrap());
+            assert_eq!(input.tap_scripts.len(), 1);
+        }
+
+        #[test]
+        fn input_multi_a_records_all_key_origins() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "tr({}/0/0,multi_a(2,{}/0/1,{}/0/2))",
+                xpub, xpub, xpub
+            ))
+            .unwrap();
+
+            // Script-spend-only assets force the plan onto the `multi_a` leaf.
+            let script_spend_only = CanSign {
+                ecdsa: false,
+                taproot: TaprootCanSign {
+                    key_spend: false,
+                    script_spend: TaprootAvailableLeaves::Any,
+                    sighash_default: true,
+                },
+            };
+            let mut assets = Assets::new();
+            for path in ["m/0/1", "m/0/2"] {
+                let source = KeySource::from((
+                    xpriv.fingerprint(&secp),
+                    DerivationPath::from_str(path).unwrap(),
+                ));
+                assets.keys.insert((source, script_spend_only.clone()));
+            }
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            // The signer only signs keys listed in `tap_key_origins`, so every key
+            // of the planned `multi_a` leaf needs an entry.
+            assert_eq!(input.tap_key_origins.len(), 2);
+            for path in ["m/0/1", "m/0/2"] {
+                let source = KeySource::from((
+                    xpriv.fingerprint(&secp),
+                    DerivationPath::from_str(path).unwrap(),
+                ));
+                assert!(input.tap_key_origins.values().any(|(_, s)| s == &source));
+            }
+        }
+
+        #[test]
+        fn input_writes_absolute_timelock() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "wsh(and_v(v:pk({}/0/0),after(100)))",
+                xpub
+            ))
+            .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let assets = assets.after(absolute::LockTime::from_height(100).unwrap());
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(
+                input.min_height,
+                Some(RequiredHeightLockTime::from_consensus(100).unwrap())
+            );
+            assert_eq!(input.min_time, None);
+            // The finalizer's `check_after` requires a non-final sequence.
+            assert_eq!(input.sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
+            assert!(input.witness_script.is_some());
+        }
+
+        #[test]
+        fn input_writes_relative_timelock() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "wsh(and_v(v:pk({}/0/0),older(10)))",
+                xpub
+            ))
+            .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let assets = assets.older(relative::LockTime::from_consensus(10).unwrap());
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.sequence, Some(Sequence::from_consensus(10)));
+            assert_eq!(input.min_height, None);
+            assert_eq!(input.min_time, None);
+            assert!(input.witness_script.is_some());
+        }
+
+        mod raw_pkh {
+            // raw_pkh seems to be outside of the "sane" miniscript fragments:
+            // https://git.rust-bitcoin.org/rust-bitcoin/rust-miniscript/issues/1056, but they are a
+            // valid expression anyway. Scoping the test module for easy discoverability of the
+            // related tests.
+            use super::*;
+
+            /// An asset provider that resolves raw `pk_h` fragments by hash lookup only; every other
+            /// lookup is unavailable, forcing plans onto the raw-pkh spending path.
+            #[derive(Default)]
+            struct RawPkhProvider {
+                ecdsa: BTreeMap<hash160::Hash, PublicKey>,
+                tap: BTreeMap<(hash160::Hash, TapLeafHash), XOnlyPublicKey>,
+            }
+
+            impl AssetProvider<DefiniteDescriptorKey> for RawPkhProvider {
+                fn provider_lookup_raw_pkh_ecdsa_sig(
+                    &self,
+                    pkh: &hash160::Hash,
+                ) -> Option<bitcoin::PublicKey> {
+                    self.ecdsa.get(pkh).copied()
+                }
+
+                fn provider_lookup_raw_pkh_tap_leaf_script_sig(
+                    &self,
+                    pkh: &(hash160::Hash, TapLeafHash),
+                ) -> Option<(XOnlyPublicKey, usize)> {
+                    self.tap.get(pkh).map(|pk| (*pk, 64))
+                }
+            }
+
+            #[test]
+            fn input_ecdsa_pkh_hash_resolves_origin() {
+                let secp = Secp256k1::new();
+                let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+                let xpub = Xpub::from_priv(&secp, &xpriv);
+                let key = DefiniteDescriptorKey::from_str(&format!("{}/0/2", xpub)).unwrap();
+                let hash = key.to_pubkeyhash(SigType::Ecdsa);
+                let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                    "wsh(or_i(pk({}),c:expr_raw_pkh({})))",
+                    key, hash
+                ))
+                .unwrap();
+                // The `pk` branch is unavailable and the raw-pkh branch resolvable, so the plan's
+                // template contains only hash placeholders: any derivation written must come from
+                // resolving the hash placeholder back to `key`.
+                let provider = RawPkhProvider {
+                    ecdsa: BTreeMap::from([(hash, key.to_public_key())]),
+                    tap: BTreeMap::new(),
+                };
+
+                let input = Input::from_plan(&out_point(), &descriptor.plan(&provider).unwrap());
+
+                assert_eq!(
+                    input.bip32_derivations.get(&key.to_public_key()),
+                    Some(&(key.master_fingerprint(), DerivationPath::from_str("m/0/2").unwrap()))
+                );
+                assert!(input.witness_script.is_some());
+            }
+
+            #[test]
+            fn input_unresolvable_pkh_hash_is_skipped() {
+                let hash = hash160::Hash::from_byte_array([1u8; 20]);
+                // The descriptor contains no keys, so the hash cannot resolve to any of them.
+                let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                    "wsh(c:expr_raw_pkh({}))",
+                    hash
+                ))
+                .unwrap();
+                let provider = RawPkhProvider {
+                    ecdsa: BTreeMap::from([(hash, PublicKey::from_slice(&[2u8; 33]).unwrap())]),
+                    tap: BTreeMap::new(),
+                };
+
+                let input = Input::from_plan(&out_point(), &descriptor.plan(&provider).unwrap());
+
+                assert!(input.bip32_derivations.is_empty());
+                assert!(input.witness_script.is_some());
+            }
+
+            #[test]
+            fn input_tr_pkh_hash_resolves_tap_origin() {
+                let secp = Secp256k1::new();
+                let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+                let xpub = Xpub::from_priv(&secp, &xpriv);
+                let internal_key =
+                    DefiniteDescriptorKey::from_str(&format!("{}/0/1", xpub)).unwrap();
+                let key = DefiniteDescriptorKey::from_str(&format!("{}/0/2", xpub)).unwrap();
+                let hash = key.to_pubkeyhash(SigType::Schnorr);
+
+                let pk_leaf =
+                    Miniscript::<DefiniteDescriptorKey, Tap>::from_str(&format!("pk({})", key))
+                        .unwrap();
+                let raw_leaf = Miniscript::<DefiniteDescriptorKey, Tap>::from_str_ext(
+                    &format!("c:expr_raw_pkh({})", hash),
+                    &ExtParams::allow_all(),
+                )
+                .unwrap();
+                let tree =
+                    TapTree::combine(TapTree::leaf(pk_leaf), TapTree::leaf(raw_leaf)).unwrap();
+                let descriptor = Descriptor::Tr(Tr::new(internal_key, Some(tree)).unwrap());
+
+                // The raw-pkh leaf's hash, as the planner will look it up.
+                let Descriptor::Tr(tr) = &descriptor else { unreachable!("taproot descriptor") };
+                let leaf_hash = tr
+                    .spend_info()
+                    .leaves()
+                    .find(|leaf| leaf.miniscript().to_string().contains("expr_raw_pkh"))
+                    .expect("raw pkh leaf must exist")
+                    .leaf_hash();
+
+                let mut provider = RawPkhProvider::default();
+                provider.tap.insert((hash, leaf_hash), key.to_x_only_pubkey());
+
+                let input = Input::from_plan(&out_point(), &descriptor.plan(&provider).unwrap());
+
+                assert!(input.tap_internal_key.is_none());
+                assert!(input.tap_merkle_root.is_some());
+                // The planned leaf hash is included so the signer discovers which leaf to sign for.
+                assert_eq!(
+                    input.tap_key_origins.get(&key.to_x_only_pubkey()),
+                    Some(&(
+                        Vec::from([leaf_hash]),
+                        (key.master_fingerprint(), DerivationPath::from_str("m/0/2").unwrap())
+                    ))
+                );
+                assert_eq!(input.tap_scripts.len(), 1);
+                // Raw taproot pkh templates also contain a `PubkeyHash` placeholder, which must not
+                // produce an ECDSA derivation.
+                assert!(input.bip32_derivations.is_empty());
+            }
+        }
+
+        #[test]
+        fn input_writes_time_based_timelock() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "wsh(and_v(v:pk({}/0/0),after(500000001)))",
+                xpub
+            ))
+            .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let time = absolute::Time::from_consensus(500_000_001).unwrap();
+            let assets = assets.after(absolute::LockTime::from(time));
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.min_time, Some(time));
+            assert_eq!(input.min_height, None);
+            // The finalizer's `check_after` requires a non-final sequence.
+            assert_eq!(input.sequence, Some(Sequence::ENABLE_LOCKTIME_NO_RBF));
+            assert!(input.witness_script.is_some());
+        }
+
+        #[test]
+        fn input_height_zero_lock_time_is_dropped() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("wpkh({}/0/0)", xpub))
+                    .unwrap();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+            let mut plan = descriptor.plan(&assets).unwrap();
+            // Height 0 is a valid consensus lock time but is not representable in BIP-370;
+            // descriptor planning never produces it, but the field is public.
+            plan.absolute_timelock = Some(absolute::LockTime::ZERO);
+
+            let input = Input::from_plan(&out_point(), &plan);
+
+            assert_eq!(input.min_height, None);
+            assert_eq!(input.min_time, None);
+        }
+
+        #[test]
+        fn input_sh_wsh_writes_both_scripts() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "sh(wsh(pk({}/0/0)))",
+                xpub
+            ))
+            .unwrap();
+            let Descriptor::Sh(sh) = &descriptor else { unreachable!("sh descriptor") };
+            let ShInner::Wsh(wsh) = sh.as_inner() else { unreachable!("wsh inner") };
+            let expected_witness = wsh.inner_script();
+            let expected_redeem = expected_witness.to_p2wsh();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.witness_script, Some(expected_witness));
+            assert_eq!(input.redeem_script, Some(expected_redeem));
+            assert_eq!(input.bip32_derivations.len(), 1);
+        }
+
+        #[test]
+        fn input_sh_wpkh_writes_redeem_script() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor =
+                Descriptor::<DefiniteDescriptorKey>::from_str(&format!("sh(wpkh({}/0/0))", xpub))
+                    .unwrap();
+            let Descriptor::Sh(sh) = &descriptor else { unreachable!("sh descriptor") };
+            let expected_redeem = sh.inner_script();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.redeem_script, Some(expected_redeem));
+            assert!(input.redeem_script.as_ref().unwrap().is_p2wpkh());
+            assert_eq!(input.witness_script, None);
+            assert_eq!(input.bip32_derivations.len(), 1);
+        }
+
+        #[test]
+        fn input_sh_sortedmulti_writes_redeem_script() {
+            let secp = Secp256k1::new();
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[9u8; 32]).unwrap();
+            let xpub = Xpub::from_priv(&secp, &xpriv);
+            let descriptor = Descriptor::<DefiniteDescriptorKey>::from_str(&format!(
+                "sh(sortedmulti(1,{}/0/1,{}/0/2))",
+                xpub, xpub
+            ))
+            .unwrap();
+            let Descriptor::Sh(sh) = &descriptor else { unreachable!("sh descriptor") };
+            let expected_redeem = sh.inner_script();
+            let assets: Assets = descriptor.iter_pk().map(DescriptorPublicKey::from).collect();
+
+            let input = Input::from_plan(&out_point(), &descriptor.plan(&assets).unwrap());
+
+            assert_eq!(input.redeem_script, Some(expected_redeem));
+            assert_eq!(input.witness_script, None);
         }
     }
 }
