@@ -10,7 +10,7 @@ keywords = [ "psbt", "bip-174", "bip174", "bip-370", "bip370"]
 readme = "README.md"
 edition = "2021"
 rust-version = "1.74.0"
-exclude = ["api", "tests", "contrib"]
+exclude = ["api", "tests"]
 
 [package.metadata]
 rbmt.version = "0.5.5"
