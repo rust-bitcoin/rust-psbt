@@ -341,6 +341,25 @@ mod tests {
     }
 
     #[test]
+    fn value_too_short_for_its_fields() {
+        let cases: [&[u8]; 4] = [
+            // Value length 0: the count byte is past the value.
+            &[0x00, 0x00],
+            // Value length 1 (count 0): no room for the fingerprint.
+            &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
+            // Value length 1 (count 1): no room for the 32-byte leaf hash.
+            &[[0x01, 0x01].as_slice(), &[0x00; 32]].concat(),
+            // Value length 7 (count 0, fingerprint): 2 bytes left for a 4-byte path step.
+            &[0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ];
+        for case in cases {
+            let mut decoder = TapKeyOriginDecoder::default();
+            let mut bytes: &[u8] = case;
+            assert_eq!(decoder.push_bytes(&mut bytes), Err(TapKeyOriginDecodeError::TooShort));
+        }
+    }
+
+    #[test]
     fn count_exhausts_input() {
         let mut decoder = TapKeyOriginDecoder::default();
         // Framing prefix (1 byte) + count byte (1 byte) with no trailing data.
