@@ -126,7 +126,9 @@ impl Decoder for TapKeyOriginDecoder {
                             let status = decoder
                                 .push_bytes(bytes)
                                 .map_err(TapKeyOriginDecodeError::Count)?;
-                            let remaining = remaining - (count_before - bytes.len());
+                            let remaining = remaining
+                                .checked_sub(count_before - bytes.len())
+                                .ok_or(TapKeyOriginDecodeError::TooShort)?;
 
                             if status.needs_more() {
                                 Stage::ReadingValue { remaining, inner: ValueStage::Count(decoder) }
@@ -160,7 +162,9 @@ impl Decoder for TapKeyOriginDecoder {
                                 let hash_bytes =
                                     decoder.end().map_err(TapKeyOriginDecodeError::LeafHash)?;
                                 self.leaf_hashes.push(TapLeafHash::from_byte_array(hash_bytes));
-                                let remaining = remaining - LEAF_HASH_LEN;
+                                let remaining = remaining
+                                    .checked_sub(LEAF_HASH_LEN)
+                                    .ok_or(TapKeyOriginDecodeError::TooShort)?;
                                 if self.leaf_hashes.len() == count {
                                     Stage::ReadingValue {
                                         remaining,
@@ -188,7 +192,9 @@ impl Decoder for TapKeyOriginDecoder {
                                 let fingerprint =
                                     decoder.end().map_err(TapKeyOriginDecodeError::Fingerprint)?;
                                 self.fingerprint = Some(bip32::Fingerprint::from(fingerprint));
-                                let remaining = remaining - FINGERPRINT_LEN;
+                                let remaining = remaining
+                                    .checked_sub(FINGERPRINT_LEN)
+                                    .ok_or(TapKeyOriginDecodeError::TooShort)?;
                                 if remaining == 0 {
                                     Stage::Done
                                 } else {
@@ -214,7 +220,9 @@ impl Decoder for TapKeyOriginDecoder {
                                     decoder.end().map_err(TapKeyOriginDecodeError::PathStep)?;
                                 self.path_steps
                                     .push(ChildNumber::from(u32::from_le_bytes(step_bytes)));
-                                let remaining = remaining - PATH_STEP_LEN;
+                                let remaining = remaining
+                                    .checked_sub(PATH_STEP_LEN)
+                                    .ok_or(TapKeyOriginDecodeError::TooShort)?;
                                 if remaining == 0 {
                                     Stage::Done
                                 } else {
@@ -281,6 +289,8 @@ pub enum TapKeyOriginDecodeError {
     PathStep(UnexpectedEofError),
     /// The value did not contain a fingerprint.
     MissingFingerprint,
+    /// The value length is too short for the fields it declares.
+    TooShort,
     /// Called [`Decoder::end`] before [`Decoder::push_bytes`] returned [`DecoderStatus::Ready`].
     EarlyEnd,
 }
@@ -294,6 +304,7 @@ impl fmt::Display for TapKeyOriginDecodeError {
             Self::Fingerprint(e) => write!(f, "error decoding master fingerprint: {e}"),
             Self::PathStep(e) => write!(f, "error decoding derivation path step: {e}"),
             Self::MissingFingerprint => write!(f, "tap key origin missing fingerprint"),
+            Self::TooShort => write!(f, "tap key origin value too short for its fields"),
             Self::EarlyEnd => write!(f, "end called before push_bytes returned Ready"),
         }
     }
@@ -308,7 +319,7 @@ impl std::error::Error for TapKeyOriginDecodeError {
             Self::LeafHash(e) => Some(e),
             Self::Fingerprint(e) => Some(e),
             Self::PathStep(e) => Some(e),
-            Self::MissingFingerprint | Self::EarlyEnd => None,
+            Self::MissingFingerprint | Self::TooShort | Self::EarlyEnd => None,
         }
     }
 }
@@ -327,6 +338,25 @@ mod tests {
         let mut bytes: &[u8] = &[0x05, 0x00, 0x00, 0x00, 0x00, 0x00];
         assert!(decoder.push_bytes(&mut bytes).unwrap().is_ready());
         assert_eq!(decoder.read_limit(), 0);
+    }
+
+    #[test]
+    fn value_too_short_for_its_fields() {
+        let cases: [&[u8]; 4] = [
+            // Value length 0: the count byte is past the value.
+            &[0x00, 0x00],
+            // Value length 1 (count 0): no room for the fingerprint.
+            &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
+            // Value length 1 (count 1): no room for the 32-byte leaf hash.
+            &[[0x01, 0x01].as_slice(), &[0x00; 32]].concat(),
+            // Value length 7 (count 0, fingerprint): 2 bytes left for a 4-byte path step.
+            &[0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ];
+        for case in cases {
+            let mut decoder = TapKeyOriginDecoder::default();
+            let mut bytes: &[u8] = case;
+            assert_eq!(decoder.push_bytes(&mut bytes), Err(TapKeyOriginDecodeError::TooShort));
+        }
     }
 
     #[test]
