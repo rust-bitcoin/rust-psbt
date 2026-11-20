@@ -16,20 +16,27 @@ use bitcoin_consensus_encoding::{
     ExactVecDecoderWith, IterEncoder,
 };
 
-use super::super::output::{OutBip32DerivationIter, OutTapKeyOriginIter, TapTreePair};
+use super::super::output::{
+    OutBip32DerivationIter, OutTapKeyOriginIter, OutputKeyType, OutputUnknownKey, TapTreePair,
+};
 #[cfg(feature = "silent-payments")]
 use super::super::output::{SpV0InfoPair, SpV0LabelPair};
 use super::super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
     TapInternalKeyPair, UnknownKeyValueIter,
 };
-use crate::consts::{
-    PSBT_OUT_BIP32_DERIVATION, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT,
-    PSBT_OUT_TAP_BIP32_DERIVATION, PSBT_OUT_TAP_INTERNAL_KEY, PSBT_OUT_TAP_TREE,
-    PSBT_OUT_WITNESS_SCRIPT, PSBT_SEPARATOR,
-};
+#[cfg(all(test, feature = "silent-payments"))]
+use crate::consts::PSBT_OUT_SP_V0_INFO;
 #[cfg(feature = "silent-payments")]
-use crate::consts::{PSBT_OUT_SP_V0_INFO, PSBT_OUT_SP_V0_LABEL};
+use crate::consts::PSBT_OUT_SP_V0_LABEL;
+// Re-exported for tests; from_key uses OutputKeyType enum.
+#[cfg(test)]
+use crate::consts::{
+    PSBT_OUT_AMOUNT, PSBT_OUT_PROPRIETARY, PSBT_OUT_REDEEM_SCRIPT, PSBT_OUT_SCRIPT,
+};
+use crate::consts::{
+    PSBT_OUT_TAP_INTERNAL_KEY, PSBT_OUT_TAP_TREE, PSBT_OUT_WITNESS_SCRIPT, PSBT_SEPARATOR,
+};
 use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::encoding::codecs::TapTreeDecoder;
 use crate::encoding::PsbtEncode;
@@ -52,7 +59,7 @@ enum State<'e> {
     TapTree(TapTreePair<'e>),
     TapKeyOrigins(IterEncoder<OutTapKeyOriginIter<'e>>),
     Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
-    Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
+    Unknowns(IterEncoder<UnknownKeyValueIter<'e, OutputUnknownKey>>),
     #[cfg(feature = "silent-payments")]
     SpV0Info(SpV0InfoPair<'e>),
     #[cfg(feature = "silent-payments")]
@@ -147,7 +154,7 @@ impl<'e> OutputMapEncoder<'e> {
 
     fn unknowns_or_next(o: &'e Output) -> State<'e> {
         if !o.unknowns.is_empty() {
-            return State::Unknowns(IterEncoder::new(UnknownKeyValueIter(o.unknowns.iter())));
+            return State::Unknowns(IterEncoder::new(UnknownKeyValueIter::new(&o.unknowns)));
         }
         Self::sp_v0_info_or_next(o)
     }
@@ -281,7 +288,7 @@ enum OutputStage {
         decoder: ByteVecDecoder,
     },
     DecodingUnknown {
-        key: Key,
+        key: OutputUnknownKey,
         decoder: ByteVecDecoder,
     },
     #[cfg(feature = "silent-payments")]
@@ -300,54 +307,62 @@ enum OutputStage {
 
 impl OutputStage {
     fn from_key(key: Key) -> Result<Self, OutputDecodeError> {
-        match key.type_value {
-            PSBT_OUT_REDEEM_SCRIPT => {
+        match OutputKeyType::from_u64(key.type_value) {
+            Some(OutputKeyType::RedeemScript) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingRedeemScript { key, decoder: Default::default() })
             }
-            PSBT_OUT_WITNESS_SCRIPT => {
+            Some(OutputKeyType::WitnessScript) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingWitnessScript { key, decoder: Default::default() })
             }
-            PSBT_OUT_TAP_INTERNAL_KEY => {
+            Some(OutputKeyType::TapInternalKey) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() })
             }
-            PSBT_OUT_TAP_TREE => {
+            Some(OutputKeyType::TapTree) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingTapTree { key, decoder: TapTreeDecoder::default() })
             }
-            PSBT_OUT_PROPRIETARY =>
+            Some(OutputKeyType::Proprietary) =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
-            PSBT_OUT_BIP32_DERIVATION =>
+            Some(OutputKeyType::Bip32Derivation) =>
                 Ok(Self::DecodingBip32Derivation { key, decoder: KeySourceDecoder::default() }),
-            PSBT_OUT_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
+            Some(OutputKeyType::TapBip32Derivation) => Ok(Self::DecodingTapBip32Derivation {
                 key,
                 decoder: TapKeyOriginDecoder::default(),
             }),
             #[cfg(feature = "silent-payments")]
-            PSBT_OUT_SP_V0_INFO => {
+            Some(OutputKeyType::SpV0Info) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingSpV0Info { key, decoder: ValueDecoder::default() })
             }
             #[cfg(feature = "silent-payments")]
-            PSBT_OUT_SP_V0_LABEL => {
+            Some(OutputKeyType::SpV0Label) => {
                 if !key.key.is_empty() {
                     return Err(OutputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingSpV0Label { key, decoder: ValueDecoder::default() })
             }
-            _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
+            Some(OutputKeyType::Amount) | Some(OutputKeyType::Script) =>
+                Err(OutputDecodeError::KeyDecode(KeyDecodeError::ExcludedKey {
+                    key_type_value: key.type_value,
+                })),
+            None => {
+                let key =
+                    OutputUnknownKey::new(key).map_err(OutputDecodeError::InvalidUnknownKey)?;
+                Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
+            }
         }
     }
 }
@@ -371,7 +386,7 @@ pub(crate) struct OutputV0 {
     #[cfg(feature = "silent-payments")]
     pub(crate) sp_v0_label: Option<u32>,
     pub(crate) proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
-    pub(crate) unknowns: BTreeMap<Key, Vec<u8>>,
+    pub(crate) unknowns: BTreeMap<OutputUnknownKey, Vec<u8>>,
 }
 
 impl OutputV0 {
@@ -419,7 +434,7 @@ pub(crate) struct OutputMapDecoder {
     #[cfg(feature = "silent-payments")]
     sp_v0_label: Option<u32>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<Key, Vec<u8>>,
+    unknowns: BTreeMap<OutputUnknownKey, Vec<u8>>,
 }
 
 impl Decoder for OutputMapDecoder {
@@ -575,7 +590,7 @@ impl Decoder for OutputMapDecoder {
                 OutputStage::DecodingUnknown { key, decoder } => {
                     let value = decoder.end().map_err(OutputDecodeError::UnknownValue)?;
                     if self.unknowns.contains_key(&key) {
-                        return Err(OutputDecodeError::DuplicateKey(key));
+                        return Err(OutputDecodeError::DuplicateKey(key.into_key()));
                     }
                     self.unknowns.insert(key, value);
                     self.stage = OutputStage::DecodingSeparator;
@@ -639,6 +654,18 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn v0_rejects_v2_only_output_keys() {
+        for &type_value in &[PSBT_OUT_AMOUNT, PSBT_OUT_SCRIPT] {
+            let key = Key { type_value, key: vec![] };
+            let err = OutputStage::from_key(key).unwrap_err();
+            assert!(
+                matches!(err, OutputDecodeError::KeyDecode(KeyDecodeError::ExcludedKey { .. })),
+                "type {type_value:#04x} should be rejected with ExcludedKey, got {err:?}"
+            );
+        }
+    }
 
     #[test]
     fn key_data_validation() {

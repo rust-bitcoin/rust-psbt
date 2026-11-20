@@ -97,11 +97,12 @@ pub use crate::{
     },
     map::{
         // We do not re-export any of the input/output/global error types, use form `input::DecodeError`.
-        global::{self, Global},
-        input::{self, Input, InputBuilder},
-        output::{self, Output, OutputBuilder},
+        global::{self, Global, GlobalUnknownKey},
+        input::{self, Input, InputBuilder, InputUnknownKey},
+        output::{self, Output, OutputBuilder, OutputUnknownKey},
         Count,
         InvalidProprietaryKeyError,
+        InvalidUnknownKeyError,
         Key,
         KeyDecoder,
         KeyEncoder,

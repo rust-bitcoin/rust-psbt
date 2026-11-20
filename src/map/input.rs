@@ -41,7 +41,7 @@ use super::required_height_lock_time::RequiredHeightLockTime;
 use super::vout::{Vout, VoutEncoder};
 use super::{
     Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter, ScriptPair, SeparatorEncoder,
-    TapInternalKeyPair, UnknownKeyValueIter,
+    TapInternalKeyPair, UnknownKey, UnknownKeyValueIter,
 };
 use crate::consts::{
     PSBT_IN_BIP32_DERIVATION, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
@@ -63,7 +63,7 @@ use crate::encoding::{ExactLenEncoder, PsbtDecode, PsbtEncode};
 use crate::error::FundingUtxoError;
 #[cfg(feature = "miniscript")]
 use crate::error::SignatureSource;
-use crate::map::error::{InputDecodeError, KeyDecodeError};
+use crate::map::error::{InputDecodeError, InvalidUnknownKeyError, KeyDecodeError};
 use crate::psbt::{OutputType, SigningAlgorithm};
 use crate::sighash_type::PsbtSighashType;
 #[cfg(feature = "silent-payments")]
@@ -72,6 +72,117 @@ use crate::tap_key_origin::TapKeyOriginDecoder;
 #[cfg(feature = "miniscript")]
 use crate::InputError;
 use crate::SignError;
+
+/// Recognized PSBT input key types (v2, BIP-370).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub(crate) enum InputKeyType {
+    NonWitnessUtxo = PSBT_IN_NON_WITNESS_UTXO,
+    WitnessUtxo = PSBT_IN_WITNESS_UTXO,
+    PartialSig = PSBT_IN_PARTIAL_SIG,
+    SighashType = PSBT_IN_SIGHASH_TYPE,
+    RedeemScript = PSBT_IN_REDEEM_SCRIPT,
+    WitnessScript = PSBT_IN_WITNESS_SCRIPT,
+    Bip32Derivation = PSBT_IN_BIP32_DERIVATION,
+    FinalScriptSig = PSBT_IN_FINAL_SCRIPTSIG,
+    FinalScriptWitness = PSBT_IN_FINAL_SCRIPTWITNESS,
+    PorCommitment = PSBT_IN_POR_COMMITMENT,
+    Ripemd160 = PSBT_IN_RIPEMD160,
+    Sha256 = PSBT_IN_SHA256,
+    Hash160 = PSBT_IN_HASH160,
+    Hash256 = PSBT_IN_HASH256,
+    PreviousTxid = PSBT_IN_PREVIOUS_TXID,
+    OutputIndex = PSBT_IN_OUTPUT_INDEX,
+    Sequence = PSBT_IN_SEQUENCE,
+    RequiredTimeLocktime = PSBT_IN_REQUIRED_TIME_LOCKTIME,
+    RequiredHeightLocktime = PSBT_IN_REQUIRED_HEIGHT_LOCKTIME,
+    TapKeySig = PSBT_IN_TAP_KEY_SIG,
+    TapScriptSig = PSBT_IN_TAP_SCRIPT_SIG,
+    TapLeafScript = PSBT_IN_TAP_LEAF_SCRIPT,
+    TapBip32Derivation = PSBT_IN_TAP_BIP32_DERIVATION,
+    TapInternalKey = PSBT_IN_TAP_INTERNAL_KEY,
+    TapMerkleRoot = PSBT_IN_TAP_MERKLE_ROOT,
+    #[cfg(feature = "silent-payments")]
+    SpEcdhShare = PSBT_IN_SP_ECDH_SHARE,
+    #[cfg(feature = "silent-payments")]
+    SpDleq = PSBT_IN_SP_DLEQ,
+    Proprietary = PSBT_IN_PROPRIETARY,
+}
+
+impl InputKeyType {
+    pub(crate) fn from_u64(v: u64) -> Option<Self> {
+        match v {
+            PSBT_IN_NON_WITNESS_UTXO => Some(Self::NonWitnessUtxo),
+            PSBT_IN_WITNESS_UTXO => Some(Self::WitnessUtxo),
+            PSBT_IN_PARTIAL_SIG => Some(Self::PartialSig),
+            PSBT_IN_SIGHASH_TYPE => Some(Self::SighashType),
+            PSBT_IN_REDEEM_SCRIPT => Some(Self::RedeemScript),
+            PSBT_IN_WITNESS_SCRIPT => Some(Self::WitnessScript),
+            PSBT_IN_BIP32_DERIVATION => Some(Self::Bip32Derivation),
+            PSBT_IN_FINAL_SCRIPTSIG => Some(Self::FinalScriptSig),
+            PSBT_IN_FINAL_SCRIPTWITNESS => Some(Self::FinalScriptWitness),
+            PSBT_IN_POR_COMMITMENT => Some(Self::PorCommitment),
+            PSBT_IN_RIPEMD160 => Some(Self::Ripemd160),
+            PSBT_IN_SHA256 => Some(Self::Sha256),
+            PSBT_IN_HASH160 => Some(Self::Hash160),
+            PSBT_IN_HASH256 => Some(Self::Hash256),
+            PSBT_IN_PREVIOUS_TXID => Some(Self::PreviousTxid),
+            PSBT_IN_OUTPUT_INDEX => Some(Self::OutputIndex),
+            PSBT_IN_SEQUENCE => Some(Self::Sequence),
+            PSBT_IN_REQUIRED_TIME_LOCKTIME => Some(Self::RequiredTimeLocktime),
+            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME => Some(Self::RequiredHeightLocktime),
+            PSBT_IN_TAP_KEY_SIG => Some(Self::TapKeySig),
+            PSBT_IN_TAP_SCRIPT_SIG => Some(Self::TapScriptSig),
+            PSBT_IN_TAP_LEAF_SCRIPT => Some(Self::TapLeafScript),
+            PSBT_IN_TAP_BIP32_DERIVATION => Some(Self::TapBip32Derivation),
+            PSBT_IN_TAP_INTERNAL_KEY => Some(Self::TapInternalKey),
+            PSBT_IN_TAP_MERKLE_ROOT => Some(Self::TapMerkleRoot),
+            #[cfg(feature = "silent-payments")]
+            PSBT_IN_SP_ECDH_SHARE => Some(Self::SpEcdhShare),
+            #[cfg(feature = "silent-payments")]
+            PSBT_IN_SP_DLEQ => Some(Self::SpDleq),
+            PSBT_IN_PROPRIETARY => Some(Self::Proprietary),
+            _ => None,
+        }
+    }
+}
+
+/// A key in an input map whose type value is not recognized.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "Key"))]
+pub struct InputUnknownKey(Key);
+
+impl TryFrom<Key> for InputUnknownKey {
+    type Error = InvalidUnknownKeyError;
+    fn try_from(key: Key) -> Result<Self, Self::Error> {
+        if InputKeyType::from_u64(key.type_value).is_some() {
+            return Err(InvalidUnknownKeyError(key.type_value));
+        }
+        Ok(Self(key))
+    }
+}
+
+impl InputUnknownKey {
+    /// Constructs a new unknown key, validating that `key.type_value` is
+    /// not a recognized PSBT type for this map and version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidUnknownKeyError`] if `key.type_value` is recognized.
+    pub fn new(key: Key) -> Result<Self, InvalidUnknownKeyError> { Self::try_from(key) }
+
+    /// Returns a reference to the underlying [`Key`].
+    pub fn as_key(&self) -> &Key { &self.0 }
+
+    /// Consumes `self`, returning the underlying [`Key`].
+    pub fn into_key(self) -> Key { self.0 }
+}
+
+impl UnknownKey for InputUnknownKey {
+    fn type_value(&self) -> u64 { self.0.type_value }
+    fn key_data(&self) -> &[u8] { &self.0.key }
+}
 
 /// A key-value map for an input of the corresponding index in the unsigned
 /// transaction.
@@ -164,7 +275,7 @@ pub struct Input {
     pub proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
     /// Unknown key-value pairs for this input.
     #[cfg_attr(feature = "serde", serde(with = "crate::map::serde::btreemap_as_seq_byte_values"))]
-    pub unknowns: BTreeMap<Key, Vec<u8>>,
+    pub unknowns: BTreeMap<InputUnknownKey, Vec<u8>>,
 }
 
 impl Input {
@@ -988,7 +1099,7 @@ pub struct InputDecoder {
     #[cfg(feature = "silent-payments")]
     sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<Key, Vec<u8>>,
+    unknowns: BTreeMap<InputUnknownKey, Vec<u8>>,
 }
 
 #[derive(Debug, Default)]
@@ -1129,7 +1240,7 @@ enum DecoderStage {
     },
     /// Decoding an unknown value.
     DecodingUnknown {
-        key: Key,
+        key: InputUnknownKey,
         decoder: ByteVecDecoder,
     },
     #[cfg(feature = "silent-payments")]
@@ -1153,129 +1264,135 @@ enum DecoderStage {
 impl DecoderStage {
     /// Select the appropriate value-decoding stage based on the decoded key.
     fn from_key(key: Key) -> Result<Self, InputDecodeError> {
-        match key.type_value {
-            PSBT_IN_PREVIOUS_TXID => {
+        match InputKeyType::from_u64(key.type_value) {
+            Some(InputKeyType::PreviousTxid) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingPreviousTxid { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_OUTPUT_INDEX => {
+            Some(InputKeyType::OutputIndex) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingOutputIndex { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_SEQUENCE => {
+            Some(InputKeyType::Sequence) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingSequence { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_REQUIRED_TIME_LOCKTIME => {
+            Some(InputKeyType::RequiredTimeLocktime) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingMinTime { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_REQUIRED_HEIGHT_LOCKTIME => {
+            Some(InputKeyType::RequiredHeightLocktime) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingMinHeight { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_NON_WITNESS_UTXO => {
+            Some(InputKeyType::NonWitnessUtxo) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingNonWitnessUtxo { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_WITNESS_UTXO => {
+            Some(InputKeyType::WitnessUtxo) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingWitnessUtxo { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_SIGHASH_TYPE => {
+            Some(InputKeyType::SighashType) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingSighashType { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_REDEEM_SCRIPT => {
+            Some(InputKeyType::RedeemScript) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingRedeemScript { key, decoder: Default::default() })
             }
-            PSBT_IN_WITNESS_SCRIPT => {
+            Some(InputKeyType::WitnessScript) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingWitnessScript { key, decoder: Default::default() })
             }
-            PSBT_IN_FINAL_SCRIPTSIG => {
+            Some(InputKeyType::FinalScriptSig) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingFinalScriptSig { key, decoder: Default::default() })
             }
-            PSBT_IN_FINAL_SCRIPTWITNESS => {
+            Some(InputKeyType::FinalScriptWitness) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingFinalScriptWitness { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_POR_COMMITMENT => {
+            Some(InputKeyType::PorCommitment) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingPorCommitment { key, decoder: Default::default() })
             }
-            PSBT_IN_TAP_KEY_SIG => {
+            Some(InputKeyType::TapKeySig) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingTapKeySig { key, decoder: TaprootSignatureDecoder::default() })
             }
-            PSBT_IN_TAP_INTERNAL_KEY => {
+            Some(InputKeyType::TapInternalKey) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingTapInternalKey { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_TAP_MERKLE_ROOT => {
+            Some(InputKeyType::TapMerkleRoot) => {
                 if !key.key.is_empty() {
                     return Err(InputDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingTapMerkleRoot { key, decoder: ValueDecoder::default() })
             }
-            PSBT_IN_PARTIAL_SIG =>
+            Some(InputKeyType::PartialSig) =>
                 Ok(Self::DecodingPartialSig { key, decoder: EcdsaSignatureDecoder::default() }),
-            PSBT_IN_BIP32_DERIVATION =>
+            Some(InputKeyType::Bip32Derivation) =>
                 Ok(Self::DecodingBip32Derivation { key, decoder: KeySourceDecoder::default() }),
-            PSBT_IN_RIPEMD160 =>
+            Some(InputKeyType::Ripemd160) =>
                 Ok(Self::DecodingRipemd160 { key, decoder: ByteVecDecoder::new() }),
-            PSBT_IN_SHA256 => Ok(Self::DecodingSha256 { key, decoder: ByteVecDecoder::new() }),
-            PSBT_IN_HASH160 => Ok(Self::DecodingHash160 { key, decoder: ByteVecDecoder::new() }),
-            PSBT_IN_HASH256 => Ok(Self::DecodingHash256 { key, decoder: ByteVecDecoder::new() }),
-            PSBT_IN_TAP_SCRIPT_SIG =>
+            Some(InputKeyType::Sha256) =>
+                Ok(Self::DecodingSha256 { key, decoder: ByteVecDecoder::new() }),
+            Some(InputKeyType::Hash160) =>
+                Ok(Self::DecodingHash160 { key, decoder: ByteVecDecoder::new() }),
+            Some(InputKeyType::Hash256) =>
+                Ok(Self::DecodingHash256 { key, decoder: ByteVecDecoder::new() }),
+            Some(InputKeyType::TapScriptSig) =>
                 Ok(Self::DecodingTapScriptSig { key, decoder: TaprootSignatureDecoder::default() }),
-            PSBT_IN_TAP_LEAF_SCRIPT =>
+            Some(InputKeyType::TapLeafScript) =>
                 Ok(Self::DecodingLeafScript { key, decoder: LeafScriptDecoder::default() }),
-            PSBT_IN_TAP_BIP32_DERIVATION => Ok(Self::DecodingTapBip32Derivation {
+            Some(InputKeyType::TapBip32Derivation) => Ok(Self::DecodingTapBip32Derivation {
                 key,
                 decoder: TapKeyOriginDecoder::default(),
             }),
-            PSBT_IN_PROPRIETARY =>
+            Some(InputKeyType::Proprietary) =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             #[cfg(feature = "silent-payments")]
-            PSBT_IN_SP_ECDH_SHARE =>
+            Some(InputKeyType::SpEcdhShare) =>
                 Ok(Self::DecodingSpEcdhShare { key, decoder: ValueDecoder::default() }),
             #[cfg(feature = "silent-payments")]
-            PSBT_IN_SP_DLEQ =>
+            Some(InputKeyType::SpDleq) =>
                 Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
-            _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
+            None => {
+                let key = InputUnknownKey::new(key).map_err(InputDecodeError::InvalidUnknownKey)?;
+                Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
+            }
         }
     }
 }
@@ -1709,13 +1826,10 @@ impl Decoder for InputDecoder {
                 }
                 DecoderStage::DecodingUnknown { key, decoder } => {
                     let value = decoder.end().map_err(InputDecodeError::UnknownValue)?;
-                    match self.unknowns.entry(key) {
-                        btree_map::Entry::Vacant(e) => {
-                            e.insert(value);
-                        }
-                        btree_map::Entry::Occupied(k) =>
-                            return Err(InputDecodeError::DuplicateKey(k.key().clone())),
+                    if self.unknowns.contains_key(&key) {
+                        return Err(InputDecodeError::DuplicateKey(key.into_key()));
                     }
+                    self.unknowns.insert(key, value);
                     self.stage = DecoderStage::DecodingSeparator;
                 }
                 #[cfg(feature = "silent-payments")]
@@ -1861,7 +1975,7 @@ enum EncoderState<'e> {
     #[cfg(feature = "silent-payments")]
     Dleq(IterEncoder<DleqPairIter<'e>>),
     Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
-    Unknowns(IterEncoder<UnknownKeyValueIter<'e>>),
+    Unknowns(IterEncoder<UnknownKeyValueIter<'e, InputUnknownKey>>),
     Separator(SeparatorEncoder),
 }
 
@@ -2156,7 +2270,7 @@ impl<'e> InputMapEncoder<'e> {
     }
 
     fn unknowns_state(&self) -> EncoderState<'e> {
-        EncoderState::Unknowns(IterEncoder::new(UnknownKeyValueIter(self.input.unknowns.iter())))
+        EncoderState::Unknowns(IterEncoder::new(UnknownKeyValueIter::new(&self.input.unknowns)))
     }
 }
 
@@ -2637,7 +2751,10 @@ mod test {
         b.final_script_sig = Some(ScriptBuf::from_bytes(vec![0x51]));
         b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
         b.sequence = Some(Sequence::from_consensus(10));
-        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+        b.unknowns.insert(
+            InputUnknownKey::new(Key { type_value: 0x7F, key: vec![0xaa] }).unwrap(),
+            vec![0xbb],
+        );
 
         a.combine(b).expect("combining into a finalized input fills missing fields");
 
@@ -2648,7 +2765,9 @@ mod test {
             "final_script_sig must be filled from other"
         );
         assert_eq!(a.sequence, Some(Sequence::from_consensus(10)));
-        assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
+        assert!(a.unknowns.contains_key(
+            &InputUnknownKey::new(Key { type_value: 0x7F, key: vec![0xaa] }).unwrap(),
+        ));
     }
 
     #[test]
@@ -2658,13 +2777,18 @@ mod test {
 
         let mut b = Input::new(&out_point());
         b.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
-        b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
+        b.unknowns.insert(
+            InputUnknownKey::new(Key { type_value: 0x7F, key: vec![0xaa] }).unwrap(),
+            vec![0xbb],
+        );
 
         a.combine(b).expect("finalized other merges into unfinalized self via fill-in");
 
         assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
         assert_eq!(a.sequence, Some(Sequence::from_consensus(10)));
-        assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
+        assert!(a.unknowns.contains_key(
+            &InputUnknownKey::new(Key { type_value: 0x7F, key: vec![0xaa] }).unwrap()
+        ));
     }
 
     #[test]
@@ -2792,7 +2916,10 @@ mod test {
             ProprietaryKey { prefix: b"test".to_vec(), subtype: 0, key: vec![0x01] },
             vec![0x02],
         );
-        input.unknowns.insert(Key { type_value: 0x7f, key: vec![0x03] }, vec![0x04]);
+        input.unknowns.insert(
+            InputUnknownKey::new(Key { type_value: 0x7f, key: vec![0x03] }).unwrap(),
+            vec![0x04],
+        );
 
         let finalized =
             input.finalize(FinalScripts::Segwit { witness: Witness::from_slice(&[vec![1u8]]) });
