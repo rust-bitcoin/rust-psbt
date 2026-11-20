@@ -1,2 +1,3 @@
 [alias]
 ",mutants" = "rbmt with --lockfile maximum --toolchain nightly -- cargo mutants"
+",fuzz" = "rbmt with --lockfile minimal --toolchain nightly -- cargo fuzz"
