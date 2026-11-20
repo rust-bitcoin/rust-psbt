@@ -646,3 +646,53 @@ fn combine_rejects_outputs_len_mismatch() {
         err
     );
 }
+
+#[test]
+fn combine_rejects_lock_time_switch_after_merge() {
+    let op0 = outpoint(b"input 0");
+    let op1 = outpoint(b"input 1");
+
+    let time = absolute::Time::from_consensus(1_700_000_000).unwrap();
+    let height = RequiredHeightLockTime::from_consensus(800_000).unwrap();
+
+    let psbt = |input0: Input, input1: Input| Psbt {
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(2);
+            g.output_count = Count::from(1);
+            g
+        },
+        inputs: vec![input0, input1],
+        outputs: vec![dummy_output()],
+    };
+
+    // Input 0 requires time only; input 1 permits both. Resolves to `time`.
+    let local = psbt(
+        InputBuilder::new(&op0).minimum_required_time_based_lock_time(time).build(),
+        InputBuilder::new(&op1)
+            .minimum_required_time_based_lock_time(time)
+            .minimum_required_height_based_lock_time(height)
+            .build(),
+    );
+    assert_eq!(local.determine_lock_time().unwrap(), absolute::LockTime::from(time));
+
+    // The complementary fields describe the same transaction and also resolve to `time`.
+    let peer = psbt(
+        InputBuilder::new(&op0)
+            .minimum_required_time_based_lock_time(time)
+            .minimum_required_height_based_lock_time(height)
+            .build(),
+        InputBuilder::new(&op1).minimum_required_time_based_lock_time(time).build(),
+    );
+    assert_eq!(peer.determine_lock_time().unwrap(), absolute::LockTime::from(time));
+
+    // Merging would independently fill in the absent min_time/min_height fields and flip the
+    // resolved locktime to `height`, invalidating any SIGHASH_ALL signature. Reject the merge.
+    let err = local.combine_with(peer).unwrap_err();
+    assert!(
+        matches!(err, CombineError::LockTimeChanged { expected, actual }
+            if expected == absolute::LockTime::from(time) && actual == absolute::LockTime::from(height)),
+        "expected LockTimeChanged, got {:?}",
+        err
+    );
+}
