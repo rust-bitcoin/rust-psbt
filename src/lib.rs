@@ -83,7 +83,7 @@ pub use crate::psbt::ParsePsbtError;
 pub use crate::roles::{FinalizableInput, FinalizeError, FinalizedPsbt, Finalizer, InputError};
 #[cfg(feature = "silent-payments")]
 #[doc(inline)]
-pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info};
+pub use crate::silent_payments::{DleqProof, InvalidLengthError, SpV0Info, SpV0InfoDecodeError};
 #[doc(inline)]
 pub use crate::{
     encoding::{
@@ -101,9 +101,12 @@ pub use crate::{
         input::{self, Input, InputBuilder},
         output::{self, Output, OutputBuilder},
         Count,
+        InvalidProprietaryKeyError,
         Key,
         KeyDecoder,
         KeyEncoder,
+        PorCommitment,
+        PorCommitmentDecodeError,
         ProprietaryKey,
         ProprietaryKeyEncoder,
         ProprietaryType,
@@ -120,10 +123,10 @@ pub use crate::{
         ConstructError, Constructor, Creator, ExtractError, Extractor, GetKey, GetKeyError,
         InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputPatch,
         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
-        Updater, UpdaterPatch,
+        TapKeyMaterial, TypedSigs, Updater, UpdaterPatch,
     },
     sighash_type::{ParseSighashTypeError, PsbtSighashType},
-    tx_modifiable_flags::TxModifiableFlags,
+    tx_modifiable_flags::{ParseTxModifiableFlagsError, TxModifiableFlags},
     v0::{Degraded, PsbtV0, PsbtV0Decoder, PsbtV0Encoder},
     version::{UnsupportedVersionError, Version},
 };
