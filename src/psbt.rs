@@ -477,6 +477,16 @@ impl Psbt {
             self_output.combine(other_output).map_err(CombineError::Output)?;
         }
 
+        // Signatures commit to the transaction locktime, so the merged PSBT
+        // must resolve to the same locktime as its operands did. Independently
+        // filling in absent `min_time`/`min_height` fields (and, for
+        // locktime-less PSBTs, the fallback locktime) can change the resolution
+        // even though both operands resolved identically.
+        let merged_lock = self.determine_lock_time().map_err(CombineError::LockTime)?;
+        if merged_lock != self_lock {
+            return Err(CombineError::LockTimeChanged { expected: self_lock, actual: merged_lock });
+        }
+
         Ok(self)
     }
 
@@ -667,6 +677,14 @@ pub enum CombineError {
         /// The lock time of the psbt with which the base psbt is combined.
         that: absolute::LockTime,
     },
+    /// The operands resolved to the same lock time, but merging changed the resolved lock time;
+    /// signatures in the base psbt would no longer be valid.
+    LockTimeChanged {
+        /// The lock time both operands resolved to before merging.
+        expected: absolute::LockTime,
+        /// The lock time the merged psbt resolves to.
+        actual: absolute::LockTime,
+    },
     /// Input sequences differ across PSBTs that carry signature data, cannot merge without risking
     /// signature invalidation.
     SequenceMismatch {
@@ -694,6 +712,13 @@ impl fmt::Display for CombineError {
             Self::LockTimeMismatch { ref this, ref that } => {
                 write!(f, "combine two PSBTs with different locktimes: {} {}", this, that)
             }
+            Self::LockTimeChanged { ref expected, ref actual } => {
+                write!(
+                    f,
+                    "combining the PSBTs changed the locktime from {} to {}",
+                    expected, actual
+                )
+            }
             Self::SequenceMismatch { ref input, ref this, ref that } => write!(
                 f,
                 "combine two PSBTs with different sequences for input {}: {} {}",
@@ -716,6 +741,7 @@ impl std::error::Error for CombineError {
             Self::InputsLenMismatch { .. }
             | Self::OutputsLenMismatch { .. }
             | Self::LockTimeMismatch { .. }
+            | Self::LockTimeChanged { .. }
             | Self::SequenceMismatch { .. } => None,
         }
     }
