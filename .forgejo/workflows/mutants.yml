@@ -1,7 +1,8 @@
 ---
-name: Weekly cargo-mutants
+# Run cargo-mutants over the whole crate and open an issue if any exist.
+name: Mutants
 
-on:   # yamllint disable-line rule:truthy
+on:
   schedule:
     - cron: "0 0 * * 0"  # Sunday 00:00 UTC.
   workflow_dispatch:     # Allow manual triggering.
@@ -11,7 +12,7 @@ env:
   RBMT_LOG_LEVEL: "progress"
 
 jobs:
-  cargo-mutants:
+  run:
     runs-on: heavy
     steps:
       - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6

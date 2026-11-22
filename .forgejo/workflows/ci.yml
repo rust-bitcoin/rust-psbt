@@ -1,16 +1,14 @@
 ---
-# rust-psbt CI
+# rust-psbt continuous integration. All checks must pass to merge a patch.
 #
-# CI job and task structure is optimized for developer debugging. Not runner
-# minutes or parallelism.
+# Job is optimized for developer debugging, not runner minutes.
+name: Continuous Integration
 
-on:   # yamllint disable-line rule:truthy
+on:
   push:
     branches:
       - master
   pull_request:
-
-name: Continuous Integration
 
 jobs:
   Test:
