@@ -1,0 +1,97 @@
+---
+# Cycle through all fuzz targets, running each for a static amount. The primary
+# goal of this job is to ensure targets are not broken by recent changes. The
+# secondary is to actually find fuzz crashes.
+#
+# ## Seed Corpus
+#
+# The job has a best effort seed corpus maintenance stored in a cache. After
+# succesful runs of all targets, the running corpus is mininized and written
+# to the cache.
+
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Daily at 00:00 UTC.
+  workflow_dispatch:     # Allow manual triggering.
+
+jobs:
+  cycle:
+    runs-on: heavy
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v6
+        with:
+          persist-credentials: false
+      - uses: https://git.rust-bitcoin.org/rust-bitcoin/rust-bitcoin-maintainer-tools/actions/setup-rbmt@0ce7152ca25bb7d7892b7d0128cc6b1be4630038
+      - name: Attempt to load seed corpus
+        uses: https://data.forgejo.org/actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus
+          # Load the most recent cache save.
+          restore-keys: fuzz-corpus-
+      - name: Fuzz targets and minimize corpus
+        id: fuzz
+        working-directory: fuzz
+        env:
+          # Cut generating Debug profile artifacts.
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          set -e
+          cargo rbmt tools
+
+          targets=$(cargo ,fuzz list)
+          for target in $targets; do
+            if ! cargo ,fuzz run "$target" -- -max_total_time=3600; then
+              # Differentiate a tooling crash (exit 1) vs. a fuzz crash.
+              if [ -n "$(find "artifacts/$target" -type f -print -quit)" ]; then
+                echo "crashed=true" >> "$FORGEJO_OUTPUT"
+              else
+                exit 1
+              fi
+            fi
+            # Minimize runtime corpus into a seed for next run.
+            cargo ,fuzz cmin "$target"
+          done
+      - name: Attempt to save updated fuzz seed corpus
+        uses: https://data.forgejo.org/actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        continue-on-error: true
+        with:
+          path: fuzz/corpus
+          # Unique key per run since cache does not allow key overwrites.
+          key: fuzz-corpus-${{ forgejo.run_id }}
+      - name: Open issue on fuzz crash found
+        if: steps.fuzz.outputs.crashed == 'true'
+        run: |
+          count=$(find fuzz/artifacts -type f | wc -l)
+          jq -n \
+            --arg title "Fuzzing found a crash" \
+            --arg body "$count fuzzing artifact(s) found.
+
+          See the full list in the run log: ${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
+            '{title: $title, body: $body}' | \
+          curl -sSf \
+            -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "User-Agent: curl/8.5.0" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "${FORGEJO_SERVER_URL}/api/v1/repos/${FORGEJO_REPOSITORY}/issues"
+      - name: Open issue on tooling failure
+        if: steps.fuzz.outcome == 'failure'
+        run: |
+          jq -n \
+            --arg title "Fuzzing failed" \
+            --arg body "The scheduled fuzz run failed.
+
+          See the run log: ${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
+            '{title: $title, body: $body}' | \
+          curl -sSf \
+            -X POST \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "User-Agent: curl/8.5.0" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "${FORGEJO_SERVER_URL}/api/v1/repos/${FORGEJO_REPOSITORY}/issues"
