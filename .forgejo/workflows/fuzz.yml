@@ -16,6 +16,10 @@ on:
     - cron: "0 0 * * *"  # Daily at 00:00 UTC.
   workflow_dispatch:     # Allow manual triggering.
 
+env:
+  # Keep rbmt's own tool output on stderr.
+  RBMT_LOG_LEVEL: "progress"
+
 jobs:
   cycle:
     runs-on: heavy
