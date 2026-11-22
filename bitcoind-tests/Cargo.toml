@@ -7,7 +7,7 @@ edition = "2021"
 publish = false
 
 [package.metadata]
-rbmt.toolchains = { nightly = "nightly-2026-11-14", stable = "1.100.0" }
+rbmt.toolchains = { nightly = "nightly-2026-11-21", stable = "1.100.0" }
 rbmt.lock.lockfiles = ["minimal"]
 
 [dependencies]
