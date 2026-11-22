@@ -8,7 +8,7 @@ rust-version = "1.74.0"
 [package.metadata]
 cargo-fuzz = true
 rbmt.tools.cargo-fuzz = "0.13.2"
-rbmt.toolchains.nightly = "nightly-2026-11-14"
+rbmt.toolchains.nightly = "nightly-2026-11-21"
 rbmt.lock.lockfiles = ["minimal"]
 
 [dependencies]
