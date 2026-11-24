@@ -426,6 +426,31 @@ impl Input {
             FinalScripts::Legacy { script_sig } => (Some(script_sig), None),
         };
 
+        self.with_cleared_signing_material(final_script_sig, final_script_witness)
+    }
+
+    /// Returns a copy of this input with cleared signing material.
+    ///
+    /// The BIP-174 Input Finalizer must clear every field except the UTXO and unknown (and
+    /// proprietary) fields from an input it has finalized. This applies the same clearing to an
+    /// input that already carries final scripts, e.g. one merged in by a Combiner.
+    #[cfg(feature = "miniscript")]
+    pub(crate) fn clear_signing_material(&self) -> Self {
+        debug_assert!(self.is_finalized(), "clear_signing_material requires a finalized input");
+        self.with_cleared_signing_material(
+            self.final_script_sig.clone(),
+            self.final_script_witness.clone(),
+        )
+    }
+
+    /// Builds a finalized input from the given final scripts, clearing signing material and
+    /// preserving the fields the Extractor needs to reconstruct the transaction.
+    #[cfg(feature = "miniscript")]
+    fn with_cleared_signing_material(
+        &self,
+        final_script_sig: Option<ScriptBuf>,
+        final_script_witness: Option<Witness>,
+    ) -> Self {
         Self {
             previous_txid: self.previous_txid,
             spent_output_index: self.spent_output_index,
@@ -684,10 +709,6 @@ impl Input {
     }
 
     /// Combines this [`Input`] with `other`.
-    ///
-    /// A finalized `self` is terminal: only unknown and proprietary fields merge into it.
-    /// Combining fails if `other` is finalized and `self` is not; see
-    /// [`CombineError::OtherFinalized`] for how to recover.
     pub fn combine(&mut self, other: Self) -> Result<(), CombineError> {
         if self.previous_txid != other.previous_txid {
             return Err(CombineError::PreviousTxidMismatch {
@@ -749,19 +770,6 @@ impl Input {
             }
         }
 
-        // Adopting foreign final scripts without validation is unsound: the finalizer must
-        // produce final scripts from the merged signing material instead.
-        if other.is_finalized() && !self.is_finalized() {
-            return Err(CombineError::OtherFinalized);
-        }
-
-        v2_combine_map!(proprietaries, self, other);
-        v2_combine_map!(unknowns, self, other);
-
-        if self.is_finalized() {
-            return Ok(());
-        }
-
         // BIP-370 says PSBT_IN_SEQUENCE defaults to Sequence::MAX (`0xFFFFFFFF`) when omitted. So
         // an unset PSBT_IN_SEQUENCE and Sequence::MAX can be seen as semantically the same. However
         // when combining, an explicit Sequence::MAX is viewed as a decision by the user, and
@@ -793,6 +801,8 @@ impl Input {
         v2_combine_map!(sp_ecdh_shares, self, other);
         #[cfg(feature = "silent-payments")]
         v2_combine_map!(sp_dleq_proofs, self, other);
+        v2_combine_map!(proprietaries, self, other);
+        v2_combine_map!(unknowns, self, other);
 
         Ok(())
     }
@@ -2366,14 +2376,6 @@ pub enum CombineError {
         /// The output at the spent output index of the `non_witness_utxo` transaction.
         non_witness: TxOut,
     },
-    /// `other` is finalized while `self` is not.
-    ///
-    /// Adopting foreign final scripts without validation is unsound. Validate `other`'s
-    /// finalized inputs with the Finalizer's interpreter check
-    /// (`Finalizer::check_finalized_inputs`), then retry the combine in the opposite
-    /// direction, where the finalized inputs are terminal and kept as-is. The offending
-    /// inputs can be found with [`Input::is_finalized`].
-    OtherFinalized,
 }
 impl fmt::Display for CombineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2398,8 +2400,6 @@ impl fmt::Display for CombineError {
                 "combine two PSBTs with conflicting witness and non-witness UTXOs: {:?} {:?}",
                 witness, non_witness
             ),
-            Self::OtherFinalized =>
-                write!(f, "cannot merge a finalized input into an unfinalized input"),
         }
     }
 }
@@ -2412,8 +2412,7 @@ impl std::error::Error for CombineError {
             | Self::SpentOutputIndexMismatch { .. }
             | Self::WitnessUtxoMismatch { .. }
             | Self::NonWitnessUtxoMismatch { .. }
-            | Self::UtxoMismatch { .. }
-            | Self::OtherFinalized => None,
+            | Self::UtxoMismatch { .. } => None,
         }
     }
 }
@@ -2630,7 +2629,7 @@ mod test {
     }
 
     #[test]
-    fn combine_keeps_finalized_input_terminal() {
+    fn combine_fills_from_other_when_self_finalized() {
         let mut a = Input::new(&out_point());
         a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
 
@@ -2640,37 +2639,43 @@ mod test {
         b.sequence = Some(Sequence::from_consensus(10));
         b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
 
-        a.combine(b).expect("combining into a finalized input keeps self");
+        a.combine(b).expect("combining into a finalized input fills missing fields");
 
         assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
-        assert!(a.final_script_sig.is_none(), "final scripts of self must be kept");
-        assert!(a.sequence.is_none(), "nothing but unknowns and proprietaries may merge");
+        assert_eq!(
+            a.final_script_sig,
+            Some(ScriptBuf::from_bytes(vec![0x51])),
+            "final_script_sig must be filled from other"
+        );
+        assert_eq!(a.sequence, Some(Sequence::from_consensus(10)));
         assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
     }
 
     #[test]
-    fn combine_rejects_finalized_other() {
+    fn combine_fills_from_other_when_other_finalized() {
         let mut a = Input::new(&out_point());
         a.sequence = Some(Sequence::from_consensus(10));
-        let before = a.clone();
 
         let mut b = Input::new(&out_point());
         b.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
         b.unknowns.insert(Key { type_value: 0xFC, key: vec![0xaa] }, vec![0xbb]);
 
-        assert!(matches!(a.combine(b), Err(CombineError::OtherFinalized)));
-        assert_eq!(a, before, "the error must leave self untouched");
+        a.combine(b).expect("finalized other merges into unfinalized self via fill-in");
+
+        assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
+        assert_eq!(a.sequence, Some(Sequence::from_consensus(10)));
+        assert!(a.unknowns.contains_key(&Key { type_value: 0xFC, key: vec![0xaa] }));
     }
 
     #[test]
-    fn combine_two_finalized_inputs_keeps_self() {
+    fn combine_keeps_self_when_both_finalized() {
         let mut a = Input::new(&out_point());
         a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
 
         let mut b = Input::new(&out_point());
         b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
 
-        a.combine(b).expect("both finalized: self is kept");
+        a.combine(b).expect("both finalized: self value is kept");
         assert_eq!(a.final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
     }
 
@@ -2859,6 +2864,26 @@ mod test {
         assert!(finalized.partial_sigs.is_empty());
         assert!(finalized.sighash_type.is_none());
         assert!(finalized.bip32_derivations.is_empty());
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn clear_signing_material_keeps_final_scripts() {
+        // An already-finalized input is canonicalized without disturbing its final scripts.
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        });
+        input.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        input.sighash_type = Some(PsbtSighashType::ALL);
+
+        let cleared = input.clear_signing_material();
+
+        assert_eq!(cleared.final_script_witness, input.final_script_witness);
+        assert!(cleared.sighash_type.is_none());
+        assert!(cleared.partial_sigs.is_empty());
+        assert!(cleared.bip32_derivations.is_empty());
     }
 
     #[cfg(feature = "miniscript")]

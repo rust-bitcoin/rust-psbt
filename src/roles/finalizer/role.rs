@@ -57,8 +57,9 @@ impl Finalizer {
 
     /// Finalizes the PSBT, returning the finalized [`FinalizedPsbt`].
     ///
-    /// Inputs not already finalized are satisfied non-malleably; already-finalized inputs pass
-    /// through unchanged, whatever their malleability.
+    /// Inputs not already finalized are satisfied non-malleably. Already-finalized inputs keep
+    /// their final scripts and have any dangling signing material cleared, whatever their
+    /// malleability.
     ///
     /// Use [`Finalizer::finalize_inputs`] to set malleability per input.
     ///
@@ -97,11 +98,12 @@ impl Finalizer {
 
     /// Finalizes the given inputs, each with its own malleability setting.
     ///
-    /// Inputs not present in `inputs` are passed through unchanged, as are already-finalized
-    /// inputs. If the same index appears twice the last entry wins.
+    /// Inputs not present in `inputs` are passed through unchanged. Already-finalized inputs keep
+    /// their final scripts but have dangling signing material cleared. If the same index appears
+    /// twice the last entry wins.
     ///
-    /// Newly finalized inputs are validated with the interpreter check; pass-through inputs are
-    /// not.
+    /// Newly finalized inputs are validated with the interpreter check; inputs that are passed
+    /// through or merely cleared are not.
     ///
     /// The PSBT may not be fully finalized after this call.
     ///
@@ -128,10 +130,16 @@ impl Finalizer {
         let mut inputs = vec![];
         let mut errors: Vec<FinalizeError> = vec![];
         for (input_index, input) in self.0.inputs.iter().enumerate() {
-            // Already-finalized and unselected inputs are passed through unchanged.
             let malleable = match (input.is_finalized(), selected.get(&input_index)) {
                 (false, Some(&malleable)) => malleable,
-                _ => {
+                // Already-finalized inputs keep their final scripts but have any dangling
+                // signing material cleared (BIP-174 Input Finalizer).
+                (true, _) => {
+                    inputs.push(input.clear_signing_material());
+                    continue;
+                }
+                // Unselected inputs that are not yet finalized pass through unchanged.
+                (false, None) => {
                     inputs.push(input.clone());
                     continue;
                 }
@@ -160,34 +168,6 @@ impl Finalizer {
         }
 
         Err(errors)
-    }
-
-    /// Validates every finalized input of this PSBT with the interpreter check.
-    ///
-    /// Unfinalized inputs are skipped, so this validates a PSBT that has only been partially
-    /// finalized, e.g. one assembled from finalized inputs contributed by several parties. Use
-    /// [`Finalizer::finalize`] to validate a PSBT where every input is expected to be finalized.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error for the first finalized input that fails to interpret.
-    pub fn check_finalized_inputs<C: Verification>(
-        &self,
-        secp: &Secp256k1<C>,
-    ) -> Result<(), FinalizeError> {
-        let unsigned_tx = self.0.unsigned_tx();
-        let utxos: Vec<&TxOut> = self
-            .0
-            .iter_funding_utxos()
-            .map(|res| res.expect("Finalizer guarantees funding utxos"))
-            .collect();
-        let utxos = &Prevouts::All(&utxos);
-        for (index, input) in self.0.inputs.iter().enumerate() {
-            if input.is_finalized() {
-                Self::interpreter_check_input(&unsigned_tx, utxos, index, input, secp)?;
-            }
-        }
-        Ok(())
     }
 
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
@@ -460,8 +440,8 @@ impl FinalizableInput<'_> {
     /// Consumes the `FinalizableInput`, producing the finalization it is set for.
     ///
     /// Does not run the interpreter check: the result is a single input, not a PSBT. Use
-    /// [`Finalizer::finalize_inputs`] for a validated result, or
-    /// [`Finalizer::check_finalized_inputs`] to validate the assembled PSBT afterwards.
+    /// [`Finalizer::finalize_inputs`] for a validated result, or [`Finalizer::finalize`] to
+    /// validate and canonicalize an assembled PSBT afterwards.
     pub fn finalize(self) -> Result<Input, FinalizeError> { self.finalizer.finalize_input(self) }
 }
 

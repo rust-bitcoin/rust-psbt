@@ -31,9 +31,8 @@ impl Extractor {
     ///
     /// Finalization here means the presence of final scripts only: no script or signature
     /// verification is performed. A PSBT assembled from finalized inputs contributed by other
-    /// parties should be validated with the Finalizer's interpreter check
-    /// ([`crate::Finalizer::check_finalized_inputs`] or [`crate::Finalizer::finalize`]) before
-    /// extraction.
+    /// parties should first be passed through [`crate::Finalizer::finalize`], which validates the
+    /// inputs and clears any dangling signing material, before extraction.
     ///
     /// # Silent payments
     ///
