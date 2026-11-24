@@ -323,3 +323,29 @@ fn check_finalized_inputs_validates_partially_finalized_psbt() {
     let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
     assert!(finalizer.check_finalized_inputs(&secp).is_err());
 }
+
+// finalize() canonicalizes already-finalized inputs: it keeps their final scripts but clears any
+// dangling signing material that a blind combine may have merged back in.
+#[test]
+fn finalize_clears_dangling_fields_on_already_finalized_input() {
+    let secp = Secp256k1::new();
+    let (keys, public_key) = user(1);
+
+    let psbt = unsigned_psbt(vec![tr_input(public_key)]);
+    let mut signer = Signer::new(psbt.try_resolve().unwrap());
+    let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
+    let signed = signer.apply(sigs).unwrap().psbt();
+
+    let finalized = Finalizer::new(signed.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
+    let witness = finalized.inputs[0].final_script_witness.clone().unwrap();
+
+    // A blind combine may merge signing material back onto the finalized input.
+    let mut psbt = finalized.psbt();
+    psbt.inputs[0].sighash_type = Some(psbt_v2::PsbtSighashType::ALL);
+
+    let re_finalized =
+        Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
+
+    assert_eq!(re_finalized.inputs[0].final_script_witness, Some(witness));
+    assert!(re_finalized.inputs[0].sighash_type.is_none());
+}

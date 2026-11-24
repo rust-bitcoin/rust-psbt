@@ -426,6 +426,31 @@ impl Input {
             FinalScripts::Legacy { script_sig } => (Some(script_sig), None),
         };
 
+        self.with_cleared_signing_material(final_script_sig, final_script_witness)
+    }
+
+    /// Returns a copy of this input with cleared signing material.
+    ///
+    /// The BIP-174 Input Finalizer must clear every field except the UTXO and unknown (and
+    /// proprietary) fields from an input it has finalized. This applies the same clearing to an
+    /// input that already carries final scripts, e.g. one merged in by a Combiner.
+    #[cfg(feature = "miniscript")]
+    pub(crate) fn clear_signing_material(&self) -> Self {
+        debug_assert!(self.is_finalized(), "clear_signing_material requires a finalized input");
+        self.with_cleared_signing_material(
+            self.final_script_sig.clone(),
+            self.final_script_witness.clone(),
+        )
+    }
+
+    /// Builds a finalized input from the given final scripts, clearing signing material and
+    /// preserving the fields the Extractor needs to reconstruct the transaction.
+    #[cfg(feature = "miniscript")]
+    fn with_cleared_signing_material(
+        &self,
+        final_script_sig: Option<ScriptBuf>,
+        final_script_witness: Option<Witness>,
+    ) -> Self {
         Self {
             previous_txid: self.previous_txid,
             spent_output_index: self.spent_output_index,
@@ -2839,6 +2864,26 @@ mod test {
         assert!(finalized.partial_sigs.is_empty());
         assert!(finalized.sighash_type.is_none());
         assert!(finalized.bip32_derivations.is_empty());
+    }
+
+    #[cfg(feature = "miniscript")]
+    #[test]
+    fn clear_signing_material_keeps_final_scripts() {
+        // An already-finalized input is canonicalized without disturbing its final scripts.
+        let mut input = Input::new(&out_point());
+        input.witness_utxo = Some(TxOut {
+            value: bitcoin::Amount::from_sat(1_000),
+            script_pubkey: ScriptBuf::new(),
+        });
+        input.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+        input.sighash_type = Some(PsbtSighashType::ALL);
+
+        let cleared = input.clear_signing_material();
+
+        assert_eq!(cleared.final_script_witness, input.final_script_witness);
+        assert!(cleared.sighash_type.is_none());
+        assert!(cleared.partial_sigs.is_empty());
+        assert!(cleared.bip32_derivations.is_empty());
     }
 
     #[cfg(feature = "miniscript")]
