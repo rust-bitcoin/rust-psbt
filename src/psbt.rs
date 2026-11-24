@@ -410,11 +410,7 @@ impl Psbt {
     ///
     /// Fields absent from `self` are filled in from `other`; when both sides carry a conflicting
     /// value that does not affect signatures, the one in `self` is kept, so the function is not
-    /// commutative on conflicting values. A finalized input of `self` is kept unchanged, absorbing
-    /// only unknown and proprietary fields. Combining fails if `other` carries a finalized input
-    /// that is unfinalized in `self` (`CombineError::OtherFinalized`): validate `other`'s
-    /// finalized inputs with the Finalizer's interpreter check, then retry in the opposite
-    /// direction, where the finalized inputs are kept as-is.
+    /// commutative on conflicting values.
     ///
     /// BIP-370 does not include any additional requirements for the Combiner role.
     ///
