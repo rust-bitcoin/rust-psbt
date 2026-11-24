@@ -170,34 +170,6 @@ impl Finalizer {
         Err(errors)
     }
 
-    /// Validates every finalized input of this PSBT with the interpreter check.
-    ///
-    /// Unfinalized inputs are skipped, so this validates a PSBT that has only been partially
-    /// finalized, e.g. one assembled from finalized inputs contributed by several parties. Use
-    /// [`Finalizer::finalize`] to validate a PSBT where every input is expected to be finalized.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error for the first finalized input that fails to interpret.
-    pub fn check_finalized_inputs<C: Verification>(
-        &self,
-        secp: &Secp256k1<C>,
-    ) -> Result<(), FinalizeError> {
-        let unsigned_tx = self.0.unsigned_tx();
-        let utxos: Vec<&TxOut> = self
-            .0
-            .iter_funding_utxos()
-            .map(|res| res.expect("Finalizer guarantees funding utxos"))
-            .collect();
-        let utxos = &Prevouts::All(&utxos);
-        for (index, input) in self.0.inputs.iter().enumerate() {
-            if input.is_finalized() {
-                Self::interpreter_check_input(&unsigned_tx, utxos, index, input, secp)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Interprets all PSBT inputs and checks whether the script is correctly interpreted according
     /// to the context.
     ///
@@ -468,8 +440,8 @@ impl FinalizableInput<'_> {
     /// Consumes the `FinalizableInput`, producing the finalization it is set for.
     ///
     /// Does not run the interpreter check: the result is a single input, not a PSBT. Use
-    /// [`Finalizer::finalize_inputs`] for a validated result, or
-    /// [`Finalizer::check_finalized_inputs`] to validate the assembled PSBT afterwards.
+    /// [`Finalizer::finalize_inputs`] for a validated result, or [`Finalizer::finalize`] to
+    /// validate and canonicalize an assembled PSBT afterwards.
     pub fn finalize(self) -> Result<Input, FinalizeError> { self.finalizer.finalize_input(self) }
 }
 

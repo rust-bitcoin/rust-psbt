@@ -292,36 +292,29 @@ fn finalize_inputs_rejects_witness_invalid_for_the_transaction() {
     ));
 }
 
-// A PSBT assembled from finalized inputs contributed by several parties can be validated
-// input-by-input before the remaining inputs are finalized.
+// Re-finalizing validates already-finalized inputs: a tampered final witness is caught by the
+// interpreter check when the PSBT is passed through `finalize` again.
 #[test]
-fn check_finalized_inputs_validates_partially_finalized_psbt() {
+fn finalize_validates_already_finalized_inputs() {
     let secp = Secp256k1::new();
     let (keys, public_key) = user(1);
 
-    let psbt = unsigned_psbt(vec![tr_input(public_key), wpkh_input(public_key, 1)]);
+    let psbt = unsigned_psbt(vec![tr_input(public_key)]);
     let mut signer = Signer::new(psbt.try_resolve().unwrap());
     let sigs = signer.session(sign_all(&keys, &secp)).unwrap();
     let signed = signer.apply(sigs).unwrap().psbt();
 
-    let finalizer = Finalizer::new(signed.clone().try_resolve().unwrap()).unwrap();
-    let inputs =
-        finalizer.finalize_inputs(vec![finalizer.finalizable_input(0).unwrap()], &secp).unwrap();
+    let finalized = Finalizer::new(signed.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap();
+    let mut psbt = finalized.psbt();
 
-    let mut psbt = signed;
-    psbt.inputs = inputs;
-
-    // Only input 0 carries final scripts: validating the finalized inputs passes.
-    Finalizer::new(psbt.clone().try_resolve().unwrap())
-        .unwrap()
-        .check_finalized_inputs(&secp)
-        .unwrap();
-
-    // A tampered final witness is caught. (Emptied entirely, the input would no longer count as
-    // finalized; garbage signature material is the tampering the check must catch.)
+    // Tamper the final witness: it no longer satisfies the funding script.
     psbt.inputs[0].final_script_witness = Some(Witness::from_slice(&[vec![0x01; 64]]));
-    let finalizer = Finalizer::new(psbt.try_resolve().unwrap()).unwrap();
-    assert!(finalizer.check_finalized_inputs(&secp).is_err());
+
+    let error = Finalizer::new(psbt.try_resolve().unwrap()).unwrap().finalize(&secp).unwrap_err();
+    assert!(matches!(
+        error.as_slice(),
+        [FinalizeError::InterpreterSatisfaction { input_index: 0, .. }]
+    ));
 }
 
 // finalize() canonicalizes already-finalized inputs: it keeps their final scripts but clears any
