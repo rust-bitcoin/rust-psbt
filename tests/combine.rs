@@ -696,3 +696,35 @@ fn combine_rejects_lock_time_switch_after_merge() {
         err
     );
 }
+
+// Combining two finalized inputs keeps `self`'s final scripts: the other side's conflicting final
+// scripts are not merged over them. Neither direction errors, but the result is
+// direction-dependent (non-commutative) — the fill-in rule applied to final scripts.
+#[test]
+fn combine_two_finalized_inputs_keeps_self_final_scripts() {
+    let op = outpoint(b"in");
+
+    let mut input_a = Input::new(&op);
+    input_a.final_script_witness = Some(Witness::from_slice(&[vec![0x01]]));
+    let mut input_b = Input::new(&op);
+    input_b.final_script_witness = Some(Witness::from_slice(&[vec![0x02]]));
+
+    let psbt = |input| Psbt {
+        global: {
+            let mut g = Global::default();
+            g.input_count = Count::from(1);
+            g.output_count = Count::from(1);
+            g
+        },
+        inputs: vec![input],
+        outputs: vec![dummy_output()],
+    };
+
+    let ab = psbt(input_a.clone()).combine_with(psbt(input_b.clone())).expect("A+B should succeed");
+    assert!(ab.inputs[0].is_finalized());
+    assert_eq!(ab.inputs[0].final_script_witness.as_ref().unwrap().nth(0), Some(&[0x01][..]));
+
+    let ba = psbt(input_b).combine_with(psbt(input_a)).expect("B+A should succeed");
+    assert!(ba.inputs[0].is_finalized());
+    assert_eq!(ba.inputs[0].final_script_witness.as_ref().unwrap().nth(0), Some(&[0x02][..]));
+}
