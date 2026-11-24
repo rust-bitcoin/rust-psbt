@@ -13,7 +13,7 @@ rust-version = "1.74.0"
 exclude = ["api", "tests"]
 
 [package.metadata]
-rbmt.version = "0.5.5"
+rbmt.version = "0.5.6"
 rbmt.toolchains = { nightly = "nightly-2026-11-21", stable = "1.100.0" }
 rbmt.tools = { cargo-mutants = "27.1.0" }
 rbmt.lock.lockfiles = [ "minimal", "maximum" ]
