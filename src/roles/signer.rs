@@ -966,7 +966,9 @@ impl<'id> SignableInput<'id> {
             Some(ty) => ty,
         };
 
-        // SIGHASH_SINGLE bounds: a missing output makes the legacy sighash sign the constant hash 1.
+        // SIGHASH_SINGLE without a matching output causes the legacy sighash
+        // to produce a constant digest. Signer refuses to create a replayable
+        // signature.
         if sighash_ty.is_single() && index >= psbt.outputs.len() {
             return Err(SignError::SighashSingleMissingOutput);
         }
