@@ -271,8 +271,7 @@ impl Finalizer {
     // transaction is the one the signatures committed to.
     fn final_scripts(&self, input: &Input, malleable: bool) -> Result<FinalScripts, InputError> {
         let output_type = input.output_type().map_err(|_| InputError::UnknownOutputType)?;
-        let lock_time =
-            self.0.determine_lock_time().expect("Finalizer guarantees lock time can be determined");
+        let lock_time = self.0.lock_time();
         let sat = InputSatisfier { input, lock_time };
 
         Ok(match output_type {
