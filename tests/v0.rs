@@ -102,8 +102,8 @@ fn deserialize_v0_preserves_unknown_fields() {
     assert_eq!(psbt.inputs.len(), 1);
     assert_eq!(psbt.inputs[0].unknowns.len(), 1);
     let (key, value) = psbt.inputs[0].unknowns.iter().next().unwrap();
-    assert_eq!(key.type_value, 0xf0);
-    assert_eq!(key.key.as_hex().to_string(), "010203040506070809");
+    assert_eq!(key.as_key().type_value, 0xf0);
+    assert_eq!(key.as_key().key.as_hex().to_string(), "010203040506070809");
     assert_eq!(value.as_hex().to_string(), "0102030405060708090a0b0c0d0e0f");
 }
 

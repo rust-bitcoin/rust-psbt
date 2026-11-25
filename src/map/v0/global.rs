@@ -19,22 +19,27 @@ use bitcoin_consensus_encoding::{
 use super::super::count::Count;
 #[cfg(feature = "silent-payments")]
 use super::super::global::{DleqKeyValueIter, EcdhKeyValueIter};
-use super::super::global::{VersionValueDecoder, XpubKeyValueIter};
+use super::super::global::{
+    GlobalKeyType, GlobalUnknownKey, VersionValueDecoder, XpubKeyValueIter,
+};
 use super::super::SeparatorEncoder;
 use super::unsigned_tx::{UnsignedTx, UnsignedTxEncoder};
+#[cfg(test)]
 use crate::consts::{
-    PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_UNSIGNED_TX, PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
-    PSBT_SEPARATOR,
+    PSBT_GLOBAL_FALLBACK_LOCKTIME, PSBT_GLOBAL_INPUT_COUNT, PSBT_GLOBAL_OUTPUT_COUNT,
+    PSBT_GLOBAL_PROPRIETARY, PSBT_GLOBAL_TX_MODIFIABLE, PSBT_GLOBAL_TX_VERSION,
+    PSBT_GLOBAL_VERSION, PSBT_GLOBAL_XPUB,
 };
-#[cfg(feature = "silent-payments")]
+// Re-exported for tests; from_key uses GlobalKeyType enum.
+#[cfg(all(test, feature = "silent-payments"))]
 use crate::consts::{PSBT_GLOBAL_SP_DLEQ, PSBT_GLOBAL_SP_ECDH_SHARE};
+use crate::consts::{PSBT_GLOBAL_UNSIGNED_TX, PSBT_SEPARATOR};
 use crate::encoding::codecs::key_source::KeySourceDecoder;
 use crate::map::error::{GlobalDecodeError, KeyDecodeError, XpubDecodeError};
 use crate::map::framing::{KeyValueEncoder, ValueDecoder, ValueDecoderError};
 use crate::map::{Key, KeyDecoder, ProprietaryKey, ProprietaryKeyValueIter};
 #[cfg(feature = "silent-payments")]
 use crate::silent_payments::DleqProof;
-use crate::tx_modifiable_flags::TxModifiableFlags;
 use crate::version::{Version, VersionDecoderError};
 use crate::{V0, V2};
 
@@ -47,7 +52,7 @@ enum State<'e> {
     UnsignedTx(KeyValueEncoder<CompactSizeEncoder, UnsignedTxEncoder<'e>>),
     Xpubs(IterEncoder<XpubKeyValueIter<'e>>),
     Proprietaries(IterEncoder<ProprietaryKeyValueIter<'e>>),
-    Unknowns(IterEncoder<crate::map::UnknownKeyValueIter<'e>>),
+    Unknowns(IterEncoder<crate::map::UnknownKeyValueIter<'e, GlobalUnknownKey>>),
     #[cfg(feature = "silent-payments")]
     Ecdh(IterEncoder<EcdhKeyValueIter<'e>>),
     #[cfg(feature = "silent-payments")]
@@ -105,8 +110,8 @@ impl<'e> GlobalMapEncoder<'e> {
         if self.psbt.global.unknowns.is_empty() {
             self.ecdh_or_next()
         } else {
-            State::Unknowns(IterEncoder::new(crate::map::UnknownKeyValueIter(
-                self.psbt.global.unknowns.iter(),
+            State::Unknowns(IterEncoder::new(crate::map::UnknownKeyValueIter::new(
+                &self.psbt.global.unknowns,
             )))
         }
     }
@@ -199,7 +204,7 @@ enum Stage {
         decoder: ByteVecDecoder,
     },
     DecodingUnknown {
-        key: Key,
+        key: GlobalUnknownKey,
         decoder: ByteVecDecoder,
     },
     #[cfg(feature = "silent-payments")]
@@ -218,30 +223,42 @@ enum Stage {
 
 impl Stage {
     fn from_key(key: Key) -> Result<Self, GlobalDecodeError> {
-        match key.type_value {
-            PSBT_GLOBAL_UNSIGNED_TX => {
+        match GlobalKeyType::from_u64(key.type_value) {
+            Some(GlobalKeyType::UnsignedTx) => {
                 if !key.key.is_empty() {
                     return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingUnsignedTx { key, decoder: ValueDecoder::default() })
             }
-            PSBT_GLOBAL_XPUB =>
+            Some(GlobalKeyType::Xpub) =>
                 Ok(Self::DecodingXpub { key, decoder: KeySourceDecoder::default() }),
-            PSBT_GLOBAL_VERSION => {
+            Some(GlobalKeyType::Version) => {
                 if !key.key.is_empty() {
                     return Err(GlobalDecodeError::KeyDecode(KeyDecodeError::InvalidKeyData(key)));
                 }
                 Ok(Self::DecodingVersion { key, decoder: VersionValueDecoder::default() })
             }
-            PSBT_GLOBAL_PROPRIETARY =>
+            Some(GlobalKeyType::Proprietary) =>
                 Ok(Self::DecodingProprietary { key, decoder: ByteVecDecoder::new() }),
             #[cfg(feature = "silent-payments")]
-            PSBT_GLOBAL_SP_ECDH_SHARE =>
+            Some(GlobalKeyType::SpEcdhShare) =>
                 Ok(Self::DecodingSpEcdhShare { key, decoder: ValueDecoder::default() }),
             #[cfg(feature = "silent-payments")]
-            PSBT_GLOBAL_SP_DLEQ =>
+            Some(GlobalKeyType::SpDleq) =>
                 Ok(Self::DecodingSpDleqProof { key, decoder: ValueDecoder::default() }),
-            _ => Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() }),
+            Some(GlobalKeyType::TxVersion)
+            | Some(GlobalKeyType::FallbackLocktime)
+            | Some(GlobalKeyType::InputCount)
+            | Some(GlobalKeyType::OutputCount)
+            | Some(GlobalKeyType::TxModifiable) =>
+                Err(GlobalDecodeError::KeyDecode(KeyDecodeError::ExcludedKey {
+                    key_type_value: key.type_value,
+                })),
+            None => {
+                let key =
+                    GlobalUnknownKey::new(key).map_err(GlobalDecodeError::InvalidUnknownKey)?;
+                Ok(Self::DecodingUnknown { key, decoder: ByteVecDecoder::new() })
+            }
         }
     }
 }
@@ -257,7 +274,7 @@ pub(crate) struct GlobalMapDecoder {
     #[cfg(feature = "silent-payments")]
     sp_dleq_proofs: BTreeMap<CompressedPublicKey, DleqProof>,
     proprietaries: BTreeMap<ProprietaryKey, Vec<u8>>,
-    unknowns: BTreeMap<Key, Vec<u8>>,
+    unknowns: BTreeMap<GlobalUnknownKey, Vec<u8>>,
     tx_inputs: Option<Vec<(Txid, u32, Sequence)>>,
     tx_outputs: Option<Vec<(Amount, ScriptBuf)>>,
     tx_lock_time: Option<absolute::LockTime>,
@@ -305,7 +322,6 @@ impl Decoder for GlobalMapDecoder {
                         global.tx_version = tx_version;
                         global.input_count = Count::from(tx_inputs.len());
                         global.output_count = Count::from(tx_outputs.len());
-                        global.tx_modifiable_flags = TxModifiableFlags::new();
                         global.xpubs = core::mem::take(&mut self.xpubs);
                         #[cfg(feature = "silent-payments")]
                         {
@@ -418,7 +434,7 @@ impl Decoder for GlobalMapDecoder {
                 Stage::DecodingUnknown { key, decoder } => {
                     let value = decoder.end().map_err(GlobalDecodeError::UnknownValue)?;
                     if self.unknowns.contains_key(&key) {
-                        return Err(GlobalDecodeError::DuplicateKey(key));
+                        return Err(GlobalDecodeError::DuplicateKey(key.into_key()));
                     }
                     self.unknowns.insert(key, value);
                     self.stage = Stage::DecodingSeparator;
@@ -625,6 +641,25 @@ mod tests {
             .push_bytes(&mut &*encode_kv(consts::PSBT_GLOBAL_XPUB, &xpub.encode(), &value))
             .unwrap_err();
         assert!(matches!(err, GlobalDecodeError::Xpub(_)));
+    }
+
+    #[test]
+    fn v0_rejects_v2_only_global_keys() {
+        let excluded: &[u64] = &[
+            PSBT_GLOBAL_TX_VERSION,
+            PSBT_GLOBAL_FALLBACK_LOCKTIME,
+            PSBT_GLOBAL_INPUT_COUNT,
+            PSBT_GLOBAL_OUTPUT_COUNT,
+            PSBT_GLOBAL_TX_MODIFIABLE,
+        ];
+        for &type_value in excluded {
+            let key = Key { type_value, key: alloc::vec![] };
+            let err = Stage::from_key(key).unwrap_err();
+            assert!(
+                matches!(err, GlobalDecodeError::KeyDecode(KeyDecodeError::ExcludedKey { .. })),
+                "type {type_value:#04x} should be rejected with ExcludedKey, got {err:?}"
+            );
+        }
     }
 
     #[test]

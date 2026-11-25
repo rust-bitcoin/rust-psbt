@@ -33,6 +33,20 @@ use crate::map::v0::unsigned_tx::UnsignedTxDecodeError;
 use crate::silent_payments::SpV0InfoDecodeError;
 use crate::tap_key_origin::TapKeyOriginDecodeError;
 
+/// Error returned when attempting to construct an unknown key from a [`Key`]
+/// whose `type_value` is a recognized PSBT type for that map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidUnknownKeyError(pub u64);
+
+impl fmt::Display for InvalidUnknownKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "recognized key type {:#x} cannot be placed in unknowns", self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for InvalidUnknownKeyError {}
+
 /// An error while decoding a global map.
 ///
 /// Shared by both v0 (BIP-174) and v2 (BIP-370) global map decoders.
@@ -85,6 +99,8 @@ pub enum GlobalDecodeError {
     /// ECDH shares and DLEQ proofs must both be present or both absent.
     #[cfg(feature = "silent-payments")]
     SpFieldMismatch,
+    /// A recognized key type was routed to the unknown-key path.
+    InvalidUnknownKey(InvalidUnknownKeyError),
 }
 
 impl fmt::Display for GlobalDecodeError {
@@ -120,6 +136,7 @@ impl fmt::Display for GlobalDecodeError {
             Self::SpEcdh(ref e) => write_err!(f, "error decoding SP ECDH share"; e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => write_err!(f, "error decoding SP DLEQ proof"; e),
+            Self::InvalidUnknownKey(ref e) => write!(f, "invalid unknown key: {}", e),
         }
     }
 }
@@ -151,6 +168,7 @@ impl std::error::Error for GlobalDecodeError {
             Self::SpEcdh(ref e) => Some(e),
             #[cfg(feature = "silent-payments")]
             Self::SpDleq(ref e) => Some(e),
+            Self::InvalidUnknownKey(ref e) => Some(e),
         }
     }
 }
@@ -234,6 +252,8 @@ pub enum OutputDecodeError {
     /// Error decoding a silent payments v0 label.
     #[cfg(feature = "silent-payments")]
     SpV0Label(ValueDecoderError<UnexpectedEofError>),
+    /// A recognized key type was routed to the unknown-key path.
+    InvalidUnknownKey(InvalidUnknownKeyError),
 }
 
 impl fmt::Display for OutputDecodeError {
@@ -263,6 +283,7 @@ impl fmt::Display for OutputDecodeError {
             Self::SpV0Info(ref e) => write_err!(f, "error decoding SP v0 info"; e),
             #[cfg(feature = "silent-payments")]
             Self::SpV0Label(ref e) => write_err!(f, "error decoding SP v0 label"; e),
+            Self::InvalidUnknownKey(ref e) => write!(f, "invalid unknown key: {}", e),
         }
     }
 }
@@ -293,6 +314,7 @@ impl std::error::Error for OutputDecodeError {
             | Self::MissingAmount
             | Self::MissingScriptPubkey => None,
             Self::Validation(ref e) => Some(e),
+            Self::InvalidUnknownKey(ref e) => Some(e),
         }
     }
 }
@@ -393,6 +415,8 @@ pub enum InputDecodeError {
     SpFieldMismatch,
     /// Error decoding the Proof of Reserves commitment (BIP-127).
     PorCommitment(crate::map::por_commitment::PorCommitmentDecodeError),
+    /// A recognized key type was routed to the unknown-key path.
+    InvalidUnknownKey(InvalidUnknownKeyError),
 }
 
 impl fmt::Display for InputDecodeError {
@@ -451,6 +475,7 @@ impl fmt::Display for InputDecodeError {
                 "non-witness utxo txid {} does not match previous txid {}",
                 non_witness_utxo_txid, previous_txid
             ),
+            Self::InvalidUnknownKey(ref e) => write!(f, "invalid unknown key: {}", e),
         }
     }
 }
@@ -501,6 +526,7 @@ impl std::error::Error for InputDecodeError {
             #[cfg(feature = "silent-payments")]
             Self::SpFieldMismatch => None,
             Self::PorCommitment(ref e) => Some(e),
+            Self::InvalidUnknownKey(ref e) => Some(e),
         }
     }
 }

@@ -13,8 +13,8 @@ use psbt_v2::bitcoin::locktime::absolute;
 use psbt_v2::bitcoin::taproot::TapNodeHash;
 use psbt_v2::bitcoin::{Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TxOut};
 use psbt_v2::{
-    Count, Global, InputBuilder, Key, Output, ProprietaryKey, Psbt, PsbtSighashType,
-    RequiredHeightLockTime,
+    Count, Global, GlobalUnknownKey, InputBuilder, InputUnknownKey, Key, Output, OutputUnknownKey,
+    ProprietaryKey, Psbt, PsbtSighashType, RequiredHeightLockTime,
 };
 
 /// A populated PSBT survives a JSON serialize-deserialize round-trip.
@@ -57,8 +57,10 @@ fn round_trip_json() {
         ProprietaryKey { prefix: b"test".to_vec(), subtype: 0x01u64, key: vec![0xaa; 2] },
         vec![0xbb; 4],
     )]);
-    input.unknowns =
-        BTreeMap::from([(Key { type_value: 0xfc, key: vec![0x01; 2] }, vec![0xcc; 4])]);
+    input.unknowns = BTreeMap::from([(
+        InputUnknownKey::new(Key { type_value: 0x7f, key: vec![0x01; 2] }).unwrap(),
+        vec![0xcc; 4],
+    )]);
 
     let mut output =
         Output::new(TxOut { value: Amount::from_sat(50_000), script_pubkey: script.clone() });
@@ -66,8 +68,10 @@ fn round_trip_json() {
     output.witness_script = Some(script);
     output.tap_internal_key = Some(xonly);
     output.bip32_derivations = BTreeMap::from([(pk, key_source)]);
-    output.unknowns =
-        BTreeMap::from([(Key { type_value: 0xfd, key: vec![0x02; 2] }, vec![0xee; 4])]);
+    output.unknowns = BTreeMap::from([(
+        OutputUnknownKey::new(Key { type_value: 0xfd, key: vec![0x02; 2] }).unwrap(),
+        vec![0xee; 4],
+    )]);
     output.proprietaries = BTreeMap::from([(
         ProprietaryKey { prefix: b"acme".to_vec(), subtype: 0x00u64, key: vec![0x03; 1] },
         vec![0xff; 3],
@@ -78,8 +82,10 @@ fn round_trip_json() {
         g.version = psbt_v2::V2;
         g.input_count = Count::from(1);
         g.output_count = Count::from(1);
-        g.unknowns =
-            BTreeMap::from([(Key { type_value: 0xfb, key: vec![0x03; 2] }, vec![0xaa; 4])]);
+        g.unknowns = BTreeMap::from([(
+            GlobalUnknownKey::new(Key { type_value: 0xfd, key: vec![0x03; 2] }).unwrap(),
+            vec![0xaa; 4],
+        )]);
         g.proprietaries = BTreeMap::from([(
             ProprietaryKey { prefix: b"rust".to_vec(), subtype: 0x02u64, key: vec![0x04; 1] },
             vec![0xbb; 3],

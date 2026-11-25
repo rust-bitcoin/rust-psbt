@@ -67,7 +67,7 @@ pub(crate) mod serde;
 pub mod v0;
 /// PSBT output index (`PSBT_IN_OUTPUT_INDEX`).
 pub mod vout;
-use alloc::collections::btree_map;
+use alloc::collections::{btree_map, BTreeMap};
 use alloc::vec::Vec;
 use core::convert::TryFrom;
 use core::fmt;
@@ -85,6 +85,7 @@ pub use vout::Vout;
 
 use crate::consts::{PSBT_GLOBAL_PROPRIETARY, PSBT_SEPARATOR};
 use crate::encoding::{PsbtDecode, PsbtEncode};
+pub use crate::map::error::InvalidUnknownKeyError;
 use crate::map::error::KeyDecodeError;
 use crate::map::framing::KeyValueEncoder;
 
@@ -314,18 +315,32 @@ impl<'e> KeyEncoder<'e> {
     }
 }
 
-/// Iterator yielding unknown key-value pair encoders.
-pub(crate) struct UnknownKeyValueIter<'e>(pub(crate) btree_map::Iter<'e, Key, Vec<u8>>);
+/// Accessors shared by the concrete unknown-key newtypes.
+pub(crate) trait UnknownKey {
+    /// The raw PSBT key type value (`keytype`).
+    fn type_value(&self) -> u64;
+    /// The raw key data (`keydata`), without the type value.
+    fn key_data(&self) -> &[u8];
+}
 
-impl<'e> Iterator for UnknownKeyValueIter<'e> {
+/// Iterator over unknown key-value entries, yielding encoders.
+pub(crate) struct UnknownKeyValueIter<'e, K: UnknownKey> {
+    iter: btree_map::Iter<'e, K, Vec<u8>>,
+}
+
+impl<'e, K: UnknownKey> UnknownKeyValueIter<'e, K> {
+    pub(crate) fn new(map: &'e BTreeMap<K, Vec<u8>>) -> Self { Self { iter: map.iter() } }
+}
+
+impl<'e, K: UnknownKey> Iterator for UnknownKeyValueIter<'e, K> {
     type Item = KeyValueEncoder<Encoder2<CompactSizeEncoder, BytesEncoder<'e>>, BytesEncoder<'e>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (key, value) = self.0.next()?;
+        let (key, value) = self.iter.next()?;
         Some(KeyValueEncoder::from_sized_kv(
             Encoder2::new(
-                CompactSizeEncoder::new_u64(key.type_value),
-                BytesEncoder::without_length_prefix(&key.key),
+                CompactSizeEncoder::new_u64(key.type_value()),
+                BytesEncoder::without_length_prefix(key.key_data()),
             ),
             BytesEncoder::without_length_prefix(value),
         ))
@@ -516,5 +531,24 @@ mod tests {
             core::convert::TryInto::<ProprietaryKey>::try_into(decoded_key).unwrap(),
             prop_key
         );
+    }
+
+    #[test]
+    fn unknown_key_trait_accessors() {
+        use crate::map::global::GlobalUnknownKey;
+        use crate::map::input::InputUnknownKey;
+        use crate::map::output::OutputUnknownKey;
+
+        let key = Key { type_value: 0xF00D, key: vec![0xde, 0xad, 0xbe, 0xef] };
+        let ik = InputUnknownKey::new(key.clone()).unwrap();
+        let ok = OutputUnknownKey::new(key.clone()).unwrap();
+        let gk = GlobalUnknownKey::new(key).unwrap();
+
+        for uk in &[ik.type_value(), ok.type_value(), gk.type_value()] {
+            assert_eq!(*uk, 0xF00D);
+        }
+        for uk in &[ik.key_data(), ok.key_data(), gk.key_data()] {
+            assert_eq!(*uk, &[0xde, 0xad, 0xbe, 0xef][..]);
+        }
     }
 }
