@@ -68,14 +68,27 @@ jobs:
           key: fuzz-corpus-${{ forgejo.run_id }}
       - name: Open issue on fuzz crash found
         if: steps.fuzz.outputs.crashed == 'true'
+        working-directory: fuzz
+        env:
+          # cargo-fuzz uses stderr for format, quiet rbmt so it doesn't mix in.
+          RBMT_LOG_LEVEL: quiet
         run: |
-          count=$(find fuzz/artifacts -type f | wc -l)
+          # Use cargo-fuzz fmt to get artifact inputs formatted with Arbitrary.
+          for artifact in artifacts/*/*; do
+            target=$(basename "$(dirname "$artifact")")
+            echo "### ${target}"
+            echo '```'
+            cargo ,fuzz fmt "$target" "$artifact" 2>&1
+            echo '```'
+            echo
+          done > fmt.txt
+
           jq -n \
             --arg title "Fuzzing found a crash" \
-            --arg body "$count fuzzing artifact(s) found.
-
-          See the full list in the run log: ${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
-            '{title: $title, body: $body}' | \
+            --arg count "$(find artifacts -type f | wc -l | tr -d ' ')" \
+            --arg url "${FORGEJO_SERVER_URL}/${FORGEJO_REPOSITORY}/actions/runs/${FORGEJO_RUN_NUMBER}" \
+            --rawfile fmt fmt.txt \
+            '{title: $title, body: ($fmt + "\n" + $count + " fuzzing artifact(s) found.\n\nFull run log: " + $url)}' | \
           curl -sSf \
             -X POST \
             -H "Authorization: token ${FORGEJO_TOKEN}" \
