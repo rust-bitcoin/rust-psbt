@@ -532,4 +532,23 @@ mod tests {
             prop_key
         );
     }
+
+    #[test]
+    fn unknown_key_trait_accessors() {
+        use crate::map::global::GlobalUnknownKey;
+        use crate::map::input::InputUnknownKey;
+        use crate::map::output::OutputUnknownKey;
+
+        let key = Key { type_value: 0xF00D, key: vec![0xde, 0xad, 0xbe, 0xef] };
+        let ik = InputUnknownKey::new(key.clone()).unwrap();
+        let ok = OutputUnknownKey::new(key.clone()).unwrap();
+        let gk = GlobalUnknownKey::new(key).unwrap();
+
+        for uk in &[ik.type_value(), ok.type_value(), gk.type_value()] {
+            assert_eq!(*uk, 0xF00D);
+        }
+        for uk in &[ik.key_data(), ok.key_data(), gk.key_data()] {
+            assert_eq!(*uk, &[0xde, 0xad, 0xbe, 0xef][..]);
+        }
+    }
 }
