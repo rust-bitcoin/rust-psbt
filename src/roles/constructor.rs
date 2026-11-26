@@ -23,20 +23,25 @@ pub enum InputsOnlyModifiable {}
 /// Marker for a `Constructor` with outputs modifiable.
 #[derive(Debug)]
 pub enum OutputsOnlyModifiable {}
+/// Marker for a `Constructor` that has closed both inputs and outputs.
+#[derive(Debug)]
+pub enum Closed {}
 
 mod sealed {
     pub trait Mod {}
     impl Mod for super::Modifiable {}
     impl Mod for super::InputsOnlyModifiable {}
     impl Mod for super::OutputsOnlyModifiable {}
+    impl Mod for super::Closed {}
 }
 
-/// Marker for if either inputs or outputs are modifiable, or both.
+/// Marker for the set of operations a [`Constructor`] supports.
 pub trait Mod: sealed::Mod + Sync + Send + Sized + Unpin {}
 
 impl Mod for Modifiable {}
 impl Mod for InputsOnlyModifiable {}
 impl Mod for OutputsOnlyModifiable {}
+impl Mod for Closed {}
 
 /// Error occurring in the [`Constructor`] role.
 #[derive(Debug)]
@@ -112,6 +117,7 @@ impl std::error::Error for ConstructError {
 /// * [`Modifiable`]: both inputs and outputs can be added.
 /// * [`InputsOnlyModifiable`]: only inputs can be added.
 /// * [`OutputsOnlyModifiable`]: only outputs can be added.
+/// * [`Closed`]: inputs and outputs have been closed.
 ///
 /// When finished, call [`psbt`](Self::psbt) to extract the PSBT, or
 /// [`updater`](Self::updater) to move to the next role.
@@ -143,25 +149,14 @@ impl<T: Mod> Constructor<T> {
         Ok((psbt, lock_time))
     }
 
-    /// Marks that the `Psbt` can not have any more inputs added to it.
-    pub fn no_more_inputs(mut self) -> Self {
-        self.0.global.tx_modifiable_flags.clear_inputs_modifiable();
-        self
-    }
-
-    /// Marks that the `Psbt` can not have any more outputs added to it.
-    pub fn no_more_outputs(mut self) -> Self {
-        self.0.global.tx_modifiable_flags.clear_outputs_modifiable();
-        self
-    }
-
     /// Consumes the `Constructor` and returns the built [`Psbt`].
     pub fn psbt(self) -> Psbt { self.0 }
 
-    /// Consumes the `Constructor` and returns an [`Updater`] ready for the next role.
-    pub fn updater(self) -> Updater {
-        let this = self.no_more_inputs().no_more_outputs();
-        Updater(ResolvedPsbt::from_parts(this.0, this.1))
+    /// Closes inputs and outputs, then returns an [`Updater`].
+    pub fn updater(mut self) -> Updater {
+        self.0.global.tx_modifiable_flags.clear_inputs_modifiable();
+        self.0.global.tx_modifiable_flags.clear_outputs_modifiable();
+        Updater(ResolvedPsbt::from_parts(self.0, self.1))
     }
 }
 
@@ -207,6 +202,18 @@ impl Constructor<Modifiable> {
         self.0.global.output_count = Count::from(self.0.outputs.len());
         Ok(self)
     }
+
+    /// Closes inputs and transitions to [`Constructor<OutputsOnlyModifiable>`].
+    pub fn no_more_inputs(mut self) -> Constructor<OutputsOnlyModifiable> {
+        self.0.global.tx_modifiable_flags.clear_inputs_modifiable();
+        Constructor(self.0, self.1, PhantomData)
+    }
+
+    /// Closes outputs and transitions to [`Constructor<InputsOnlyModifiable>`].
+    pub fn no_more_outputs(mut self) -> Constructor<InputsOnlyModifiable> {
+        self.0.global.tx_modifiable_flags.clear_outputs_modifiable();
+        Constructor(self.0, self.1, PhantomData)
+    }
 }
 // Useful if the Creator and Constructor are a single entity.
 impl Default for Constructor<Modifiable> {
@@ -239,6 +246,14 @@ impl Constructor<InputsOnlyModifiable> {
         self.1 = self.0.determine_lock_time().map_err(ConstructError::LockTime)?;
         Ok(self)
     }
+
+    /// Marks that the PSBT can not have any more inputs added to it.
+    ///
+    /// Closes inputs and transitions to [`Constructor<Closed>`].
+    pub fn no_more_inputs(mut self) -> Constructor<Closed> {
+        self.0.global.tx_modifiable_flags.clear_inputs_modifiable();
+        Constructor(self.0, self.1, PhantomData)
+    }
 }
 
 // Useful if the Creator and Constructor are a single entity.
@@ -270,6 +285,14 @@ impl Constructor<OutputsOnlyModifiable> {
         self.0.outputs.push(output);
         self.0.global.output_count = Count::from(self.0.outputs.len());
         Ok(self)
+    }
+
+    /// Marks that the PSBT can not have any more outputs added to it.
+    ///
+    /// Closes outputs and transitions to [`Constructor<Closed>`].
+    pub fn no_more_outputs(mut self) -> Constructor<Closed> {
+        self.0.global.tx_modifiable_flags.clear_outputs_modifiable();
+        Constructor(self.0, self.1, PhantomData)
     }
 }
 
@@ -373,5 +396,48 @@ mod tests {
         let result = constructor.input(dummy_input()).expect("lock time");
         assert_eq!(usize::from(result.0.global.input_count), 1);
         assert_eq!(result.0.inputs.len(), 1);
+    }
+
+    #[test]
+    fn no_more_inputs_on_modifiable_preserves_psbt_and_clears_flag() {
+        let constructor =
+            Constructor::<Modifiable>::default().input(dummy_input()).expect("lock time");
+        let outputs_only = constructor.no_more_inputs();
+
+        assert_eq!(outputs_only.0.inputs.len(), 1);
+        assert!(!outputs_only.0.global.tx_modifiable_flags.is_inputs_modifiable());
+        assert!(outputs_only.0.global.tx_modifiable_flags.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn no_more_outputs_on_modifiable_preserves_psbt_and_clears_flag() {
+        let constructor =
+            Constructor::<Modifiable>::default().output(Output::default()).expect("output");
+        let inputs_only = constructor.no_more_outputs();
+
+        assert_eq!(inputs_only.0.outputs.len(), 1);
+        assert!(!inputs_only.0.global.tx_modifiable_flags.is_outputs_modifiable());
+        assert!(inputs_only.0.global.tx_modifiable_flags.is_inputs_modifiable());
+    }
+
+    #[test]
+    fn no_more_inputs_on_inputs_only_clears_flag_and_closes() {
+        let constructor =
+            Constructor::<InputsOnlyModifiable>::default().input(dummy_input()).expect("lock time");
+        let closed = constructor.no_more_inputs();
+
+        assert!(!closed.0.global.tx_modifiable_flags.is_inputs_modifiable());
+        assert!(!closed.0.global.tx_modifiable_flags.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn no_more_outputs_on_outputs_only_clears_flag_and_closes() {
+        let constructor = Constructor::<OutputsOnlyModifiable>::default()
+            .output(Output::default())
+            .expect("output");
+        let closed = constructor.no_more_outputs();
+
+        assert!(!closed.0.global.tx_modifiable_flags.is_outputs_modifiable());
+        assert!(!closed.0.global.tx_modifiable_flags.is_inputs_modifiable());
     }
 }

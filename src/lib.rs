@@ -120,7 +120,7 @@ pub use crate::{
         SigningAlgorithm,
     },
     roles::{
-        sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs,
+        sign_all, sign_all_unchecked, sign_input, sign_input_unchecked, AllSignableInputs, Closed,
         ConstructError, Constructor, Creator, ExtractError, Extractor, GetKey, GetKeyError,
         InputPatch, InputSigs, InputsOnlyModifiable, KeyRequest, Mod, Modifiable, OutputPatch,
         OutputsOnlyModifiable, SignableInput, Signer, SigningErrors, SigningKeys, SigningSession,
