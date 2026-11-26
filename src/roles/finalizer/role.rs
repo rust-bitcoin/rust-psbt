@@ -47,6 +47,14 @@ impl Finalizer {
                     declared: input.sighash_type,
                 }));
             }
+            // SIGHASH_SINGLE without a matching output causes the legacy sighash
+            // to produce a constant digest. Finalizer refuses to *accept* a
+            // replayable signature, possibly from an external party.
+            if let Some(ty) = input.sighash_type {
+                if ty.is_single() && input_index >= psbt.outputs.len() {
+                    return Err(FinalizeError::SighashSingleMissingOutput { input_index });
+                }
+            }
         }
 
         Ok(Self(psbt))
@@ -452,6 +460,15 @@ pub enum FinalizeError {
     FundingUtxo(FundingUtxoError),
     /// An input has a signature whose sighash type differs from the required type.
     SignatureSighashType(SignatureSighashTypeError),
+    /// An input declares `SIGHASH_SINGLE` but has no matching output.
+    ///
+    /// The legacy sighash produces a constant digest in this case, making the
+    /// signature replayable across any transaction. The Finalizer refuses to
+    /// *accept* such a signature; the Signer independently refuses to *create* one.
+    SighashSingleMissingOutput {
+        /// The index of the input whose sighash type is `SIGHASH_SINGLE`.
+        input_index: usize,
+    },
     /// The input is already finalized.
     AlreadyFinalized {
         /// The index of the finalized input.
@@ -488,6 +505,11 @@ impl fmt::Display for FinalizeError {
             Self::FundingUtxo(ref e) => write_err!(f, "finalizer missing funding UTXO"; e),
             Self::OutOfBounds(ref e) => write_err!(f, "finalizer out of bounds access"; e),
             Self::SignatureSighashType(ref e) => write_err!(f, "finalizer sighash type error"; e),
+            Self::SighashSingleMissingOutput { input_index } => write!(
+                f,
+                "input {input_index} has SIGHASH_SINGLE but no corresponding output; \
+                 the legacy sighash would produce a replayable constant digest",
+            ),
             Self::AlreadyFinalized { input_index } =>
                 write!(f, "input {} is already finalized", input_index),
             Self::Input { input_index, ref error } =>
@@ -507,6 +529,7 @@ impl std::error::Error for FinalizeError {
             Self::FundingUtxo(ref e) => Some(e),
             Self::OutOfBounds(ref e) => Some(e),
             Self::SignatureSighashType(ref e) => Some(e),
+            Self::SighashSingleMissingOutput { .. } => None,
             Self::AlreadyFinalized { .. } => None,
             Self::Input { input_index: _, ref error } => Some(error),
             Self::InterpreterConstructor { input_index: _, ref error } => Some(error),
