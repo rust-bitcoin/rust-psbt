@@ -11,7 +11,8 @@ mod signer;
 mod updater;
 
 pub use constructor::{
-    ConstructError, Constructor, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,
+    Closed, ConstructError, Constructor, InputsOnlyModifiable, Mod, Modifiable,
+    OutputsOnlyModifiable,
 };
 pub use creator::Creator;
 pub use extractor::{ExtractError, Extractor};
